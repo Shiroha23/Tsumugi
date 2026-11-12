@@ -185,6 +185,14 @@ void main() {
     await expectLater(rt.load(_script), throwsStateError);
   });
 
+  test('dispose while the worker is still spawning', () async {
+    final rt = create();
+    final load = rt.load(_script);
+    scheduleMicrotask(rt.dispose);
+    await expectLater(load, throwsA(isA<Object>()));
+    await expectLater(rt.call('add', [1, 2]), throwsStateError);
+  });
+
   test('dispose fails a pending call', () async {
     final rt = create();
     await rt.load(_script);

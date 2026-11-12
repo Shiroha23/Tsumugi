@@ -12,7 +12,7 @@ import '../script_runtime.dart';
 /// AES 的 `key` / `iv` 默认按 UTF-8，可用 `keyEncoding` / `ivEncoding`（`utf8` | `hex` | `base64`）指定；
 /// 密文按 `encoding`（默认 `base64`）编码；明文按 UTF-8。CBC / ECB 使用 PKCS#7 填充，
 /// GCM 的认证标签（128 位）附在密文末尾。
-/// 参数非法 → 普通 JS 异常；解密失败（填充 / 标签校验 / 编码错误）→ `E_PARSE`。
+/// 参数非法 → 普通 JS 异常；解密失败（填充 / 标签校验 / 编码错误，含明文不是合法 UTF-8）→ `E_PARSE`。
 Map<String, HostFunction> cryptoHostFunctions() => {
   'crypto.md5': (a) => crypto.md5.convert(_utf8(a, 0)).toString(),
   'crypto.sha1': (a) => crypto.sha1.convert(_utf8(a, 0)).toString(),
@@ -22,10 +22,7 @@ Map<String, HostFunction> cryptoHostFunctions() => {
   'crypto.base64Encode': (a) => base64.encode(_utf8(a, 0)),
   'crypto.base64Decode': (a) {
     try {
-      return utf8.decode(
-        base64.decode(base64.normalize(_str(a, 0).trim())),
-        allowMalformed: true,
-      );
+      return utf8.decode(base64.decode(base64.normalize(_str(a, 0).trim())));
     } on FormatException catch (e) {
       throw ScriptException('base64Decode: ${e.message}', code: _parse);
     }
@@ -45,10 +42,15 @@ Map<String, HostFunction> cryptoHostFunctions() => {
     } on FormatException catch (e) {
       throw ScriptException('aesDecrypt: ${e.message}', code: _parse);
     }
-    return utf8.decode(
-      o.run(encrypt: false, input: input),
-      allowMalformed: true,
-    );
+    final plain = o.run(encrypt: false, input: input);
+    try {
+      return utf8.decode(plain);
+    } on FormatException {
+      throw const ScriptException(
+        'aesDecrypt: plaintext is not valid UTF-8.',
+        code: _parse,
+      );
+    }
   },
 };
 

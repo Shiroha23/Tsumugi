@@ -204,8 +204,10 @@ class _Worker {
   Future<void> start() async {
     final ready = _ready = Completer<void>();
     _inbox.listen(_onMessage);
+    // 握手 Future 可能在等待 spawn 时就因 shutdown 失败：先挂上处理，避免未处理的异步错误。
+    ready.future.ignore();
     try {
-      _isolate = await Isolate.spawn(
+      final isolate = await Isolate.spawn(
         _workerMain,
         _WorkerBoot(
           main: _inbox.sendPort,
@@ -223,6 +225,14 @@ class _Worker {
         onExit: _inbox.sendPort,
         onError: _inbox.sendPort,
       );
+      if (_dead) {
+        // spawn 期间已被 dispose / 放弃：新 isolate 没人管，直接结束它（此时它尚未进入 FFI）。
+        isolate.kill(priority: Isolate.immediate);
+        throw const ScriptException('Runtime disposed.');
+      }
+      _isolate = isolate;
+    } on ScriptException {
+      rethrow;
     } on Object catch (e) {
       shutdown(ScriptException('Failed to start script worker: $e'));
       rethrow;

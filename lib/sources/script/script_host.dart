@@ -24,7 +24,7 @@ class ScriptHostLimits {
   final int maxRequestsPerCall;
   final int maxStorageKeyLength;
 
-  /// 单个值 JSON 编码后的最大长度。
+  /// 单个值 JSON 编码后的最大长度（码点，下同）。
   final int maxStorageValueChars;
 
   /// 单个源全部键值的总长度上限。
@@ -106,12 +106,19 @@ class ScriptHost {
       final raw = await storage.read(_id, _key(a));
       return raw == null ? null : jsonDecode(raw);
     }),
-    'storage.set': (a) =>
-        _guard(() => _mutate(() => _storageSet(_key(a), _arg(a, 1)))),
+    'storage.set': (a) => _guard(() {
+      // 在收到请求时绑定调用：调用结束后才轮到的写操作被丢弃，不会落到下一次调用上。
+      final scope = _active();
+      return _storageSet(scope, _key(a), _arg(a, 1));
+    }),
     'storage.remove': (a) => _guard(() async {
-      _active();
-      final key = _key(a);
-      await _mutate(() => storage.delete(_id, key));
+      final scope = _active();
+      final done = await storage.delete(
+        _id,
+        _key(a),
+        isCancelled: () => scope.isClosed,
+      );
+      if (!done) throw _callEnded;
       return null;
     }),
     'cookies.get': (a) => _guard(() async {
@@ -272,7 +279,10 @@ class ScriptHost {
 
   String _key(List<Object?> a) {
     final key = _str(a, 0, 'key');
-    if (key.isEmpty || key.length > limits.maxStorageKeyLength) {
+    if (key.contains(' ')) {
+      throw const ScriptException('Storage key must not contain NUL.');
+    }
+    if (key.isEmpty || codePoints(key) > limits.maxStorageKeyLength) {
       throw ScriptException(
         'Storage key must be 1–${limits.maxStorageKeyLength} characters.',
       );
@@ -280,44 +290,42 @@ class ScriptHost {
     return key;
   }
 
-  Future<void> _storageTail = Future.value();
+  static const _callEnded = ScriptException(
+    'No active call for host function.',
+  );
 
-  /// 串行执行本源的存储写操作，使“读用量 → 检查配额 → 写入”不会与同一调用内
-  /// 并发的 `storage.set`（如 `Promise.all`）交错。
-  Future<T> _mutate<T>(Future<T> Function() body) {
-    final result = _storageTail.then((_) => body());
-    _storageTail = result.then<void>((_) {}, onError: (_) {});
-    return result;
-  }
-
-  Future<Object?> _storageSet(String key, Object? value) async {
-    _active();
+  Future<Object?> _storageSet(
+    ScriptCallScope scope,
+    String key,
+    Object? value,
+  ) async {
+    bool cancelled() => scope.isClosed;
     if (value == null) {
-      await storage.delete(_id, key);
+      if (!await storage.delete(_id, key, isCancelled: cancelled)) {
+        throw _callEnded;
+      }
       return null;
     }
     final json = jsonEncode(value);
-    if (json.length > limits.maxStorageValueChars) {
+    if (codePoints(json) > limits.maxStorageValueChars) {
       throw ScriptException(
         'Storage value too large (max ${limits.maxStorageValueChars} chars).',
         code: ScriptException.limit,
       );
     }
-    final old = await storage.read(_id, key);
-    final used = await storage.usage(_id);
-    final next =
-        used -
-        (old == null ? 0 : key.length + old.length) +
-        key.length +
-        json.length;
-    if (next > limits.maxStorageCharsPerSource) {
-      throw ScriptException(
-        'Storage quota exceeded (max ${limits.maxStorageCharsPerSource} chars per source).',
-        code: ScriptException.limit,
-      );
-    }
-    await storage.write(_id, key, json);
-    return null;
+    final written = await storage.write(
+      _id,
+      key,
+      json,
+      quota: limits.maxStorageCharsPerSource,
+      isCancelled: cancelled,
+    );
+    if (written) return null;
+    if (scope.isClosed) throw _callEnded;
+    throw ScriptException(
+      'Storage quota exceeded (max ${limits.maxStorageCharsPerSource} chars per source).',
+      code: ScriptException.limit,
+    );
   }
 
   // --- log --------------------------------------------------------------------

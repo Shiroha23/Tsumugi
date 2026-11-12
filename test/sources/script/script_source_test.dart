@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -59,6 +60,29 @@ class _SlowStorage extends MemorySourceStorage {
     final used = await super.usage(sourceId);
     await Future<void>.delayed(const Duration(milliseconds: 20));
     return used;
+  }
+}
+
+/// 写操作在 [gate] 打开前一直等待。
+class _GatedStorage extends MemorySourceStorage {
+  final gate = Completer<void>();
+
+  @override
+  Future<bool> write(
+    String sourceId,
+    String key,
+    String json, {
+    int? quota,
+    bool Function()? isCancelled,
+  }) async {
+    await gate.future;
+    return super.write(
+      sourceId,
+      key,
+      json,
+      quota: quota,
+      isCancelled: isCancelled,
+    );
   }
 }
 
@@ -222,6 +246,39 @@ void main() {
       await expectLater(
         open(_hostManifest().copyWith(script: 'source.js')),
         throwsA(_sourceError(SourceErrorCode.unsupported)),
+      );
+    });
+
+    test('load keeps engine / script error codes', () async {
+      await expectLater(
+        open(
+          _hostManifest().copyWith(
+            script: 'for (;;) {} export function f() {}',
+          ),
+          limits: const ScriptLimits(cpuTime: Duration(milliseconds: 200)),
+        ),
+        throwsA(_sourceError(SourceErrorCode.limit)),
+      );
+      await expectLater(
+        open(
+          _hostManifest().copyWith(
+            script: "throw { code: 'E_HTTP', status: 503, message: 'x' };",
+          ),
+        ),
+        throwsA(_sourceError(SourceErrorCode.http, status: 503)),
+      );
+    });
+
+    test('invalid content entries → E_PARSE', () async {
+      final source = await open(
+        _comicManifest().copyWith(
+          script:
+              'export async function content() { return { images: [123] }; }',
+        ),
+      );
+      await expectLater(
+        source.content('/x'),
+        throwsA(_sourceError(SourceErrorCode.parse)),
       );
     });
 
@@ -435,6 +492,57 @@ void main() {
         await store.usage('com.example.script.host'),
         lessThanOrEqualTo(40),
       );
+    });
+
+    test('quota holds across instances of the same source', () async {
+      final db = openTestDatabase();
+      addTearDown(db.close);
+      final store = DriftSourceStorage(db);
+      const limits = ScriptHostLimits(maxStorageCharsPerSource: 40);
+      final a = await open(_hostManifest(), store: store, hostLimits: limits);
+      final b = await open(_hostManifest(), store: store, hostLimits: limits);
+      final results = await Future.wait([
+        for (var i = 0; i < 3; i++) ...[
+          a
+              .debugCall('storageSetMany', [
+                [
+                  ['a$i', 'x' * 15],
+                ],
+              ])
+              .then((r) => (r as List).single),
+          b
+              .debugCall('storageSetMany', [
+                [
+                  ['b$i', 'x' * 15],
+                ],
+              ])
+              .then((r) => (r as List).single),
+        ],
+      ]);
+      expect(results.where((r) => r == 'ok'), hasLength(2));
+      expect(
+        await store.usage('com.example.script.host'),
+        lessThanOrEqualTo(40),
+      );
+    });
+
+    test('writes queued by a finished call are dropped', () async {
+      final store = _GatedStorage();
+      final source = await open(
+        _hostManifest(),
+        store: store,
+        limits: const ScriptLimits(wallTime: Duration(milliseconds: 300)),
+      );
+      await expectLater(
+        source.debugCall('storageSet', ['k', 'late']),
+        throwsA(_sourceError(SourceErrorCode.limit)),
+      );
+      // 下一次调用开始后才放行 A 的写操作。
+      final next = source.debugCall('storageGet', ['k']);
+      store.gate.complete();
+      expect(await next, isNull);
+      await pumpEventQueue();
+      expect(await store.read('com.example.script.host', 'k'), isNull);
     });
 
     test('is cleared when the source is uninstalled', () async {

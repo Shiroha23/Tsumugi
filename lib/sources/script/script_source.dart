@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import '../../core/engine/script/host/tsumugi_api.dart';
 import '../../core/engine/script/isolate_script_runtime.dart';
@@ -90,12 +91,18 @@ class ScriptSource implements Source {
     final source = ScriptSource._(manifest, host, runtime);
     try {
       await runtime.load(script, name: '${manifest.id}.js');
+    } on ScriptException catch (e) {
+      source.dispose();
+      // 保留引擎 / 脚本给出的错误码（如模块初始化超限 → E_LIMIT），其余为 E_PARSE。
+      final mapped = _toSourceException(e);
+      throw SourceException(
+        mapped.code,
+        '脚本加载失败: ${mapped.message}',
+        mapped.status,
+      );
     } on Object catch (e) {
       source.dispose();
-      throw SourceException(
-        SourceErrorCode.parse,
-        '脚本加载失败: ${e is ScriptException ? e.message : e}',
-      );
+      throw SourceException(SourceErrorCode.parse, '脚本加载失败: $e');
     }
     return source;
   }
@@ -236,14 +243,19 @@ class ScriptSource implements Source {
     Object? refs(Object? list, {bool headers = true}) => list is List
         ? [
             for (final r in list)
-              if (r is String)
-                {'url': _abs(r), if (headers) 'headers': _mergeHeaders(null)}
-              else if (r is Map)
-                {
+              switch (r) {
+                String() => {
+                  'url': _abs(r),
+                  if (headers) 'headers': _mergeHeaders(null),
+                },
+                Map() => {
                   ...r.cast<String, dynamic>(),
                   if (r['url'] case final String u) 'url': _abs(u),
                   if (headers) 'headers': _mergeHeaders(r['headers']),
                 },
+                // 非法元素不能被静默丢弃（source-spec §4.1：不符合结构 → E_PARSE）。
+                _ => throw FormatException('无效的条目: ${jsonEncode(r)}'),
+              },
           ]
         : list;
     switch (manifest.type) {

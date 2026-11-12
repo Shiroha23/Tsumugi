@@ -289,7 +289,9 @@ export async function content(unitId) { /* → ComicContent | NovelContent | Vid
 - 清单 `headers` 合并到 `coverHeaders` 与图片 / 流的 `headers`（结果中的同名项优先）。
 - `images` / `streams` 的元素可以直接写成 URL 字符串，等价于 `{ url }`。
 - `explore()` 返回的数字 `id` 转为字符串；`detail()` 省略 `units` 时视为空数组。
-- 返回值不符合 §2 结构 → `E_PARSE`；未捕获的普通 JS 异常（没有 `code`）以及未知的 `code` 同样报告为 `E_PARSE`。
+- 返回值不符合 §2 结构 → `E_PARSE`（`images` / `streams` / `subtitles` 中既不是字符串也不是对象的元素同样报错，不会被静默丢弃）；
+  未捕获的普通 JS 异常（没有 `code`）以及未知的 `code` 同样报告为 `E_PARSE`。
+- 模块求值（加载）失败时同样保留错误码：顶层超限 → `E_LIMIT`，顶层 `throw { code, status }` 原样上报，其余 → `E_PARSE`。
 - `script` 字段目前只支持内联源码（以相对路径引用的脚本返回 `E_UNSUPPORTED`）。
 
 ### 4.2 宿主 API（全局对象 `tsumugi`）
@@ -372,13 +374,16 @@ interface HtmlNode {
 - `http.get` / `http.getJson`：非 2xx 抛出 `E_HTTP`（带 `status`），`getJson` 解析失败 → `E_PARSE`。
 - 所有 `http.*` 的错误码见 §6：网络错误 / 超时 → `E_NETWORK`，白名单外（含重定向）→ `E_HOST_NOT_ALLOWED`，
   人机验证页 → `E_CHALLENGE`，响应体过大 → `E_LIMIT`。
-- `crypto`：字符串参数按 UTF-8 编码；摘要返回小写十六进制；`base64Decode` 的结果按 UTF-8 解码。
+- `crypto`：字符串参数按 UTF-8 编码；摘要返回小写十六进制；`base64Decode` 与 `aesDecrypt` 的结果按 UTF-8 **严格**解码，
+  不是合法 UTF-8 时 → `E_PARSE`。
   AES 的 `key` / `iv` 默认按 UTF-8，可用可选的 `keyEncoding` / `ivEncoding`（`"utf8"` | `"hex"` | `"base64"`）指定；
   `data` 的明文按 UTF-8、密文按 `encoding`（默认 `base64`）。key 必须为 16 / 24 / 32 字节；CBC 需要 16 字节 iv，
   CBC / ECB 使用 PKCS#7 填充；GCM 需要 iv（通常 12 字节），128 位认证标签附在密文末尾。
   参数非法抛出普通异常；解密失败（填充 / 标签 / 编码错误）→ `E_PARSE`。
-- `storage`：值以 JSON 保存，`set(key, null)` 等同于 `remove(key)`；键长 1–256 字符。
-  单个值 JSON 编码后最多 1 Mi 字符，单个源总计最多 10 Mi 字符，超出 → `E_LIMIT`。卸载源时一并删除。
+- `storage`：值以 JSON 保存，`set(key, null)` 等同于 `remove(key)`；键长 1–256 字符，不能包含 NUL。
+  长度单位为 Unicode 码点：单个值 JSON 编码后最多 1 Mi，单个源（键 + 值）总计最多 10 Mi，超出 → `E_LIMIT`。
+  配额检查与写入是原子的（并发的 `set`、同一源的多个实例都不能共同超额）。写操作绑定发起它的调用：
+  调用结束后才轮到的写入 / 删除被丢弃。卸载源时一并删除。
 - `cookies`：只操作本源的 Cookie 域（与 `http` 共用）；`url` 可为相对地址，必须在白名单内（否则 `E_HOST_NOT_ALLOWED`）。
 - `ui.openWebView`：`url` 必须在白名单内；`doneWhenUrlMatches` 为正则字符串。客户端尚未接入 WebView 时
   返回 `E_UNSUPPORTED`。WebView 的等待时间同样计入单次调用总时长（§4.4）。

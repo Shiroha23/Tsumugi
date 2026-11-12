@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:qjs/qjs.dart';
 
+import 'native_stack.dart';
 import 'script_runtime.dart';
 
 /// 基于 `package:qjs`（QuickJS-ng，经 Dart build hooks 编译）的 [ScriptRuntime]。
@@ -104,6 +105,7 @@ class QuickJsScriptRuntime implements ScriptRuntime {
 
   Future<Object?> _call(String export, List<Object?> args) async {
     _checkAlive();
+    updateStackTop(_rt);
     final ns = switch (_state) {
       _LoadState.loaded => _namespace!,
       _LoadState.failed => throw StateError(
@@ -184,6 +186,7 @@ class QuickJsScriptRuntime implements ScriptRuntime {
     _current?.fail(const ScriptException('Runtime disposed.'));
     _current = null;
     _namespace = null;
+    updateStackTop(_rt);
     _rt.release();
   }
 
@@ -197,6 +200,7 @@ class QuickJsScriptRuntime implements ScriptRuntime {
         maxStackSize: limits.maxStackBytes,
       ),
     );
+    updateStackTop(_rt);
     // 在脚本有机会篡改全局对象之前，先拿到要用的内建函数。
     final global = _rt.global;
     _stringify = global['JSON'].asObject['stringify'].asObject.asFunction;
@@ -247,6 +251,7 @@ class QuickJsScriptRuntime implements ScriptRuntime {
   void _replaceEngine() {
     final old = _rt;
     _initEngine();
+    updateStackTop(old);
     old.release();
   }
 
@@ -269,6 +274,8 @@ class QuickJsScriptRuntime implements ScriptRuntime {
   /// 可能是脚本代码，不能在 deadline 之外读取。
   T _enterJs<T>(_Call call, T Function() body) {
     if (call.cpu.isRunning) return body(); // 已在 JS 内（嵌套进入）。
+    // 本次同步段可能运行在与上次不同的 OS 线程上。
+    updateStackTop(_rt);
     final remaining = call.remaining;
     if (remaining <= Duration.zero) throw call.timeLimitError();
     _rt.setDeadline(remaining);

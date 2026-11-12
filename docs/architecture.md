@@ -113,6 +113,8 @@ docs/
   声明式 / 脚本引擎各自实现并注册（目前已注册脚本引擎的 `ScriptSourceFactory`）。
 - **脚本存储表** `source_storage_entries`：`tsumugi.storage` 的按源 KV（主键 `(sourceId, key)`，值为 JSON 文本），
   经 `core/storage/source_storage.dart` 的 `SourceStorage` 访问；`SourceRegistry.remove` 在同一事务中删除该源的数据。
+  用量按 Unicode 码点计（与 SQLite `length()` 一致）；`write(quota:)` 在一个 drift 事务中完成“算用量 → 查配额 → 写入”，
+  `isCancelled` 用于丢弃已结束调用排队中的写操作。
 
 ## 5. 关键流程
 
@@ -252,6 +254,12 @@ CPU 预算跨 await 累计、总时长上限、内存上限、栈上限、超限
 - **`QuickJsScriptRuntime` 在调用方 isolate 上同步执行 JS**。脚本源已通过 `IsolateScriptRuntime`
   把每个源的运行时放进独立 worker isolate（§5.5）；声明式引擎的 `js:` 片段仍在调用方 isolate 上执行
   （可改用 `IsolateScriptRuntime.create` 作为其 `ScriptRuntimeFactory`）。
+- **QuickJS 栈顶与线程迁移**（2026-11 实测）：QuickJS 只在创建 `JSRuntime` 时记录一次原生栈顶，
+  而 Dart isolate 在两个事件之间可能被调度到另一个 OS 线程。worker 中因此偶发误报
+  `Maximum call stack size exceeded`；反方向时栈检查会失效。`qjs` 未暴露 `JS_UpdateStackTop`，
+  `core/engine/script/native_stack.dart` 经 native asset 直接调用它（读取 `JSRuntime.ptr` 的第一个字段，
+  该成员在 qjs 中标为 `@internal`），在每次从 Dart 同步进入 JS（调用、resolve 宿主 Promise、建引擎、释放）前更新。
+  升级 qjs 时需复查结构布局；应向上游报告，修复后删除此文件。
 - **worker 无法被强制终止**：不能用 `Isolate.kill(priority: immediate)`——worker 往往正处于 QuickJS → Dart 的
   FFI 回调中，在那里被强制终止会让整个进程崩溃（已实测）。因此看门狗只做 `kill(beforeNextEvent)`：worker 回到事件循环时退出，
   一直卡住的 worker 只能放弃（占用一个线程直到进程退出）。
