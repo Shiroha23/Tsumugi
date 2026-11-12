@@ -7,6 +7,7 @@ import '../../shared/widgets/empty_state.dart';
 import '../../shared/widgets/source_error_view.dart';
 import '../../sources/model/common.dart';
 import '../comic/detail/comic_routes.dart';
+import '../novel/novel_routes.dart';
 import '../sources/labels.dart';
 import 'search_controller.dart';
 
@@ -197,7 +198,9 @@ class _ResultTile extends StatelessWidget {
     switch (type) {
       case MediaType.comic:
         context.push(ComicRoutes.detail(sourceId, item.id), extra: item);
-      case MediaType.novel || MediaType.video || MediaType.music:
+      case MediaType.novel:
+        context.push(NovelRoutes.detail(sourceId, item.id), extra: item);
+      case MediaType.video || MediaType.music:
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text('${type.label}详情页尚未实现')));
     }

@@ -6,6 +6,7 @@ import 'package:tsumugi/app/router.dart';
 import 'package:tsumugi/core/network/source_http_client.dart';
 import 'package:tsumugi/core/storage/app_database.dart';
 import 'package:tsumugi/features/comic/reader/reader_preferences.dart';
+import 'package:tsumugi/features/novel/reader/novel_reader_preferences.dart';
 import 'package:tsumugi/shared/image/image_cache.dart';
 import 'package:tsumugi/shared/image/image_providers.dart';
 import 'package:tsumugi/sources/registry/providers.dart';
@@ -15,9 +16,16 @@ import '../sources/runtime/runtime_support.dart';
 
 /// 用真实路由（[routerProvider]）、内存数据库与 [FakeFactory] 启动整个应用。
 class AppHarness {
-  AppHarness(this.factory);
+  AppHarness(
+    this.factory, {
+    MemoryNovelReaderPreferencesStore? novelPreferences,
+  }) : novelPreferences =
+           novelPreferences ?? MemoryNovelReaderPreferencesStore();
 
   final FakeFactory factory;
+
+  /// 小说阅读器偏好（内存）。
+  final MemoryNovelReaderPreferencesStore novelPreferences;
   final AppDatabase db = openTestDatabase();
   late final SourceRegistry registry = SourceRegistry(db);
   late final ProviderContainer container = ProviderContainer(
@@ -31,6 +39,7 @@ class AppHarness {
       readerPreferencesStoreProvider.overrideWithValue(
         MemoryReaderPreferencesStore(),
       ),
+      novelReaderPreferencesStoreProvider.overrideWithValue(novelPreferences),
     ],
   );
 

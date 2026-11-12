@@ -14,6 +14,7 @@
 /// | `GET /novel/search?q=` | 小说搜索 |
 /// | `GET /novel/book/1` | 小说详情 |
 /// | `GET /novel/book/1/chapter/1?p=1\|2` | 小说章节（章节内分页） |
+/// | `GET /novel/book/1/chapter/2` | 小说章节（无分页） |
 /// | `GET /api/search?q=&page=` | JSON 搜索 API（分页） |
 /// | `GET /api/book/b101` | JSON 详情 API |
 /// | `GET /static/*`、`GET /covers/*`、`GET /pages/*` | 1×1 PNG |
@@ -136,6 +137,8 @@ class MockServer {
               ? 'novel/chapter_1_1_p2.html'
               : 'novel/chapter_1_1_p1.html',
         );
+      case '/novel/book/1/chapter/2':
+        return _html(res, 'novel/chapter_1_2.html');
       case '/api/search':
         final page = int.tryParse(q['page'] ?? '1') ?? 1;
         if (page > 2) {

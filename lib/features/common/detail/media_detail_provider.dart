@@ -3,11 +3,11 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../../../sources/model/common.dart';
 import '../../../sources/runtime/source_runtime.dart';
 
-part 'comic_detail_provider.g.dart';
+part 'media_detail_provider.g.dart';
 
 /// 详情页数据：[detail] 与加载封面时要带的 headers。
-final class ComicDetailData {
-  const ComicDetailData({required this.detail, required this.sourceHeaders});
+final class MediaDetailData {
+  const MediaDetailData({required this.detail, required this.sourceHeaders});
 
   final Detail detail;
 
@@ -17,14 +17,14 @@ final class ComicDetailData {
 }
 
 @riverpod
-Future<ComicDetailData> comicDetail(
+Future<MediaDetailData> mediaDetail(
   Ref ref,
   String sourceId,
   String itemId,
 ) async {
   final source = await ref.watch(sourceInstanceProvider(sourceId).future);
   final detail = await source.detail(itemId);
-  return ComicDetailData(
+  return MediaDetailData(
     detail: detail,
     sourceHeaders: source.manifest.headers,
   );
