@@ -14,8 +14,52 @@ env:
   FLUTTER_VERSION: "3.47.7"
 
 jobs:
+  # 只改了文档时跳过下面 4 项检查。被跳过的必需检查在分支保护中视为通过，
+  # 所以文档 PR 不必等完整构建；任何其他文件（含本 workflow）都会触发完整检查。
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+        run: |
+          set -u
+          full() { echo "code=true" >> "$GITHUB_OUTPUT"; echo "→ full checks ($1)"; exit 0; }
+          case "$EVENT" in
+            pull_request) range="$PR_BASE...$PR_HEAD" ;;
+            push)
+              [ "$PUSH_BEFORE" = "0000000000000000000000000000000000000000" ] && full "new branch"
+              range="$PUSH_BEFORE..$PUSH_AFTER" ;;
+            *) full "event $EVENT" ;;
+          esac
+          # --no-renames：重命名按“删除旧路径 + 新增新路径”列出，
+          # 否则把代码文件改名进 docs/ 时只看得到新路径，会被误判为只改了文档。
+          files=$(git diff --name-only --no-renames "$range") || full "diff failed"
+          [ -z "$files" ] && full "no file list"
+          echo "$files"
+          while IFS= read -r f; do
+            case "$f" in
+              docs/*|*.md|LICENSE) ;;
+              *) full "$f" ;;
+            esac
+          done <<< "$files"
+          echo "code=false" >> "$GITHUB_OUTPUT"
+          echo "→ docs only, skipping checks"
+
   check:
     name: Analyze & Test
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,7 +76,8 @@ jobs:
 
   android:
     name: Build Android
-    needs: check
+    needs: [changes, check]
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,7 +100,8 @@ jobs:
 
   windows:
     name: Build Windows
-    needs: check
+    needs: [changes, check]
+    if: needs.changes.outputs.code == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -74,7 +120,8 @@ jobs:
 
   ios:
     name: Build iOS (unsigned)
-    needs: check
+    needs: [changes, check]
+    if: needs.changes.outputs.code == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
