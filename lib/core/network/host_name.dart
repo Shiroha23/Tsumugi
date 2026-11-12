@@ -18,7 +18,9 @@ String? normalizeHost(String raw) {
     try {
       host = Uri.decodeComponent(host);
     } on ArgumentError {
-      return null;
+      return null; // 非法的百分号转义，如 `%zz`
+    } on FormatException {
+      return null; // 转义合法但不是有效 UTF-8，如 `%FF`
     }
   }
   host = host.toLowerCase();

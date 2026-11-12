@@ -23,5 +23,6 @@ void main() {
     expect(normalizeHost('.'), isNull);
     expect(normalizeHost('a..b'), isNull);
     expect(normalizeHost('%zz'), isNull);
+    expect(normalizeHost('%FF.example.com'), isNull);
   });
 }

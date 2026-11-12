@@ -86,4 +86,13 @@ void main() {
   test('非法主机名一律拒绝', () {
     expect(allowed('https://a..example.com/'), isFalse);
   });
+
+  test('白名单中无法解析的条目被忽略，不影响其余条目', () {
+    final p = HostPolicy(
+      baseUrl: Uri.parse('https://example.com'),
+      allowedHosts: ['%FF.example.com', '*.%FF', '%zz', 'img.example.org'],
+    );
+    expect(p.isAllowed(Uri.parse('https://example.com/')), isTrue);
+    expect(p.isAllowed(Uri.parse('https://img.example.org/')), isTrue);
+  });
 }
