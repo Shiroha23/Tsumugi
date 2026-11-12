@@ -228,7 +228,8 @@ interface MusicContent {
 
 ### 4.1 入口
 
-脚本是一个 ES2020 模块，导出以下异步函数（未实现的视为不支持该能力）：
+脚本是一个 ES2020 模块，导出以下异步函数（未实现的视为不支持该能力）。
+模块不能 `import` 其他模块，也不支持顶层 `await`；`eval` 与 `Function` 构造器不可用。
 
 ```js
 export async function search(keyword, page) { /* → PageResult<SearchItem> */ }
