@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 
 /// 源的安装来源。
@@ -64,4 +66,121 @@ class SourceStorageEntries extends Table {
 
   @override
   Set<Column<Object>> get primaryKey => {sourceId, key};
+}
+
+/// 字符串到字符串的映射（如封面请求头）以 JSON 对象文本保存。
+class StringMapConverter extends TypeConverter<Map<String, String>, String> {
+  const StringMapConverter();
+
+  @override
+  Map<String, String> fromSql(String fromDb) {
+    final decoded = jsonDecode(fromDb);
+    if (decoded is! Map) return const {};
+    return {
+      for (final e in decoded.entries)
+        if (e.value is String) '${e.key}': e.value as String,
+    };
+  }
+
+  @override
+  String toSql(Map<String, String> value) => jsonEncode(value);
+}
+
+/// 书架条目（v3）。同一 (sourceId, itemId) 只有一条。
+///
+/// 标题、封面等是加入书架时从 `SearchItem` / `Detail` 拷贝的快照，源失效后书架仍可展示。
+@DataClassName('LibraryEntryRow')
+class LibraryEntries extends Table {
+  /// 清单 `id`。
+  TextColumn get sourceId => text()();
+
+  /// `SearchItem.id`。
+  TextColumn get itemId => text()();
+
+  TextColumn get title => text()();
+
+  TextColumn get cover => text().nullable()();
+
+  /// 加载封面时需要的请求头。
+  TextColumn get coverHeaders =>
+      text().map(const StringMapConverter()).nullable()();
+
+  /// `MediaType.name`。
+  TextColumn get mediaType => text()();
+
+  /// 用户自定义分类；null 为默认分类。
+  TextColumn get category => text().nullable()();
+
+  /// 手动排序值，越小越靠前；相同时按 [updatedAt] 倒序。
+  IntColumn get sortOrder => integer().withDefault(const Constant(0))();
+
+  DateTimeColumn get addedAt => dateTime()();
+
+  /// 条目元数据最后一次刷新时间（加入、更新标题封面等）。
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {sourceId, itemId};
+}
+
+/// 每个条目的最新阅读进度（v3），同时充当“历史”：历史即按 [updatedAt] 倒序的本表。
+///
+/// 存一份标题 / 封面快照，使历史不依赖书架（未加入书架的条目也有历史）。
+@DataClassName('ItemProgressRow')
+@TableIndex(name: 'item_progress_updated_at', columns: {#updatedAt})
+class ItemProgressEntries extends Table {
+  TextColumn get sourceId => text()();
+
+  TextColumn get itemId => text()();
+
+  TextColumn get title => text()();
+
+  TextColumn get cover => text().nullable()();
+
+  TextColumn get coverHeaders =>
+      text().map(const StringMapConverter()).nullable()();
+
+  TextColumn get mediaType => text()();
+
+  /// 最近阅读的 `Unit.id`。
+  TextColumn get unitId => text()();
+
+  TextColumn get unitTitle => text()();
+
+  /// 漫画页码（从 0 开始）。
+  IntColumn get page => integer().nullable()();
+
+  /// 该 unit 的总页数（已知时）。
+  IntColumn get pageCount => integer().nullable()();
+
+  /// 小说 / 视频 / 音乐的位置（字符偏移或毫秒），由对应阅读器 / 播放器定义。
+  IntColumn get position => integer().nullable()();
+
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {sourceId, itemId};
+}
+
+/// 按 unit 的进度与已读标记（v3）。
+@DataClassName('UnitProgressRow')
+class UnitProgressEntries extends Table {
+  TextColumn get sourceId => text()();
+
+  TextColumn get itemId => text()();
+
+  TextColumn get unitId => text()();
+
+  IntColumn get page => integer().nullable()();
+
+  IntColumn get pageCount => integer().nullable()();
+
+  IntColumn get position => integer().nullable()();
+
+  BoolColumn get read => boolean().withDefault(const Constant(false))();
+
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {sourceId, itemId, unitId};
 }

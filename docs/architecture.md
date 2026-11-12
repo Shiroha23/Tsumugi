@@ -75,6 +75,7 @@ lib/
     declarative/          # engine=declarative 的 Source
     script/               # engine=script 的 Source、主 isolate 宿主 API、工厂
     registry/             # 已安装源管理、启用/禁用、排序
+    runtime/              # 按 sourceId 缓存可运行的 Source 实例；错误码 → 中文提示
     repository/           # 规则仓库订阅、更新、校验
   shared/
     library/              # 书架
@@ -97,7 +98,7 @@ docs/
 - **数据库**：`core/storage/app_database.dart` 中的 `AppDatabase`（drift），文件为应用支持目录下的
   `tsumugi.sqlite`（`getApplicationSupportDirectory`，不放在用户“文档”目录），SQL 在后台 isolate 执行。
   通过 `appDatabaseProvider` 获取，测试中用内存 SQLite 覆盖。
-- **迁移策略**：当前 `schemaVersion = 2`（v2 新增 `source_storage_entries`）。每次改表结构：`schemaVersion` 加一 →
+- **迁移策略**：当前 `schemaVersion = 3`（v2 新增 `source_storage_entries`；v3 新增书架与进度三张表，见 §4.2）。每次改表结构：`schemaVersion` 加一 →
   `dart run drift_dev make-migrations`（把新 schema 导出到 `drift_schemas/`，生成 steps 文件与
   `test/core/storage/migrations/` 下的迁移测试）→ 在 `onUpgrade` 中用 `stepByStep` 写每一步。
   已发布的 `drift_schemas/*.json` 不可修改。数据库版本高于客户端时拒绝打开（不支持降级）。
@@ -110,11 +111,35 @@ docs/
   导入分两步：`prepareImport` 生成预览（含将访问的主机 = baseUrl 主机 + allowedHosts、未知字段警告），
   用户确认后 `install`。
 - 注册表只管理清单。可运行的 `Source` 由按引擎注册的 `SourceFactory`（`sourceFactoriesProvider`）构造，
-  声明式 / 脚本引擎各自实现并注册（目前已注册脚本引擎的 `ScriptSourceFactory`）。
+  声明式 / 脚本引擎各自实现并注册（`DeclarativeSourceFactory` 用 `SourceHttpFetcher` 把按源的
+  `SourceHttpClient` 适配为引擎的 `Fetcher`；`ScriptSourceFactory`）。
+- **源运行时** `sources/runtime/`：`SourceRuntime`（`sourceRuntimeProvider`）按 sourceId 缓存实例，自行订阅注册表；
+  源被禁用 / 删除 / 升级（清单 sha256 变化）时移出缓存并释放（脚本源的 worker、HTTP 客户端），下次 `get` 时重建；
+  创建失败不缓存。`sourceInstanceProvider(id)` 在实例被移除时自动失效，依赖它的 provider（如详情）随之重建。
+  不直接用 stream provider 的 `.future`：Riverpod 3 会暂停没有监听者的 provider，`ref.read` 读取可能永远等不到值。
 - **脚本存储表** `source_storage_entries`：`tsumugi.storage` 的按源 KV（主键 `(sourceId, key)`，值为 JSON 文本），
   经 `core/storage/source_storage.dart` 的 `SourceStorage` 访问；`SourceRegistry.remove` 在同一事务中删除该源的数据。
   用量按 Unicode 码点计（与 SQLite `length()` 一致）；`write(quota:)` 在一个 drift 事务中完成“算用量 → 查配额 → 写入”，
   `isCancelled` 用于丢弃已结束调用排队中的写操作。
+
+### 4.2 书架、进度与历史（M2）
+
+- **书架表** `library_entries`：主键 `(sourceId, itemId)`（`itemId` 即 `SearchItem.id`）；保存加入时的
+  标题 / 封面 / 封面请求头（JSON 文本）/ `mediaType` 快照，以及加入时间、元数据更新时间、可选分类与手动排序值。
+  源被删除或失效后书架仍可展示。列表顺序：`sortOrder` 升序，再按 `updatedAt` 倒序。
+- **条目进度表** `item_progress_entries`：主键 `(sourceId, itemId)`，每个条目只保留**最新**一条进度
+  （unit id / 标题、漫画页码（从 0 开始）与总页数、预留给小说 / 视频 / 音乐的 `position`、更新时间），
+  并带一份标题 / 封面快照。
+- **历史由条目进度表派生，不单独建表**：历史 = 按 `updatedAt` 倒序的条目进度（有索引）。理由：M2 只需要
+  “最近读过什么、读到哪”，与“最新进度”是同一份数据；单独的历史表会带来两处写入与一致性问题。
+  未来若需要逐次阅读日志（阅读时长统计等）再另加追加写的日志表。删除历史 = 删除条目进度
+  （默认连同 unit 进度一起删，可选保留）。历史与书架相互独立：未加入书架的条目也有历史，移出书架不删进度。
+- **unit 进度表** `unit_progress_entries`：主键 `(sourceId, itemId, unitId)`，记录每个 unit 自己的位置与已读标记。
+  到达最后一页（`page >= pageCount - 1`）或调用方显式标记时置为已读，之后的进度不会清除已读，取消须显式调用。
+- 访问层在 `shared/library/`（`LibraryRepository`）与 `shared/history/`（`HistoryRepository`），
+  Riverpod provider 见各目录的 `providers.dart`。书架页点击条目通过可覆盖的 `openItemProvider`
+  （`features/library/open_item.dart`）跳转，书架不直接依赖详情页路由。
+- 数据库中 `mediaType` 为未知值（更高版本客户端写入）的行在读取时被跳过。
 
 ## 5. 关键流程
 
@@ -124,6 +149,16 @@ docs/
 UI(search) → SourceRegistry.enabled(type?) → 并发调用 source.search()
           → 结果按源分组流式返回（Stream），单源超时/失败不影响其他源
 ```
+
+实现（M2）：`features/search/search_controller.dart` 的 `SourceSearchController` 对每个源独立发起
+`SourceRuntime.get(id)` + `search()`（整体受 `searchTimeoutProvider` 限时，默认 30 s），各自回写所在分组；
+新搜索递增代号，过时的结果被丢弃。分组保存已加载页、`hasMore` 与最近一次错误，「加载更多」/「重试」都请求下一页。
+错误按 §6 错误码显示中文提示（`sources/runtime/source_error_text.dart`）；`E_CHALLENGE` 显示「需要验证」与
+「去验证」入口（WebView 尚未接入，见 §5.3）。
+
+漫画详情路由 `/comic/:sourceId/:itemId`，阅读器 `/comic/:sourceId/:itemId/read/:unitId`；`itemId` / `unitId`
+通常本身是路径，作为单个路径段时经 `Uri.encodeComponent`（`ComicRoutes`）。`Detail` 没有 `coverHeaders`：
+从搜索结果进入且封面相同则沿用该条目的 `coverHeaders`，否则使用源清单的默认 `headers`。
 
 ### 5.2 打开内容
 
@@ -143,7 +178,7 @@ detail(id) → 章节/剧集/曲目列表 → content(itemId)
 不直接使用 `Image.network`。已知限制：网络层只在响应读完后返回，下载进度目前为不确定进度。
 
 **漫画阅读器（M2，`features/comic/reader/`）**：路由 `/comic/:sourceId/:itemId/read/:unitId?page=N`
-（各段 URL 编码，`page` 从 0 开始）；纵向滚动 / 左→右 / 右→左三种模式（偏好存于应用支持目录
+（详情路由的子路由；各段 URL 编码，用 `ComicRoutes.reader` / `comicReaderLocation` 生成，`page` 从 0 开始）；纵向滚动 / 左→右 / 右→左三种模式（偏好存于应用支持目录
 `comic_reader.json`）；章节列表取自 `detail(itemId)`。阅读进度不直接写库，经
 `comicReaderProgressSinkProvider` 回调交给书架 / 历史层。
 

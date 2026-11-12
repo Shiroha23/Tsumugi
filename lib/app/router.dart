@@ -1,11 +1,14 @@
 import 'package:go_router/go_router.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import '../features/comic/detail/comic_detail_page.dart';
+import '../features/comic/detail/comic_routes.dart';
 import '../features/comic/reader/reader_route.dart';
 import '../features/library/library_page.dart';
 import '../features/search/search_page.dart';
 import '../features/settings/settings_page.dart';
 import '../features/sources/sources_page.dart';
+import '../sources/model/common.dart';
 import 'shell.dart';
 
 part 'router.g.dart';
@@ -62,9 +65,23 @@ GoRouter router(Ref ref) {
           ),
         ],
       ),
+      // M2 漫画：详情（搜索 / 详情会话）。itemId、unitId 经 URL 编码，见 ComicRoutes。
       GoRoute(
-        path: Routes.comicReader,
-        builder: (_, state) => comicReaderPageFromState(state),
+        path: ComicRoutes.detailPattern,
+        builder: (_, state) => ComicDetailPage(
+          sourceId: state.pathParameters['sourceId']!,
+          itemId: state.pathParameters['itemId']!,
+          preview: state.extra is SearchItem
+              ? state.extra! as SearchItem
+              : null,
+        ),
+        routes: [
+          // 漫画阅读器：完整路径即 Routes.comicReader（`?page=N` 为初始页，从 0 开始）。
+          GoRoute(
+            path: ComicRoutes.readerPattern,
+            builder: (_, state) => comicReaderPageFromState(state),
+          ),
+        ],
       ),
     ],
   );

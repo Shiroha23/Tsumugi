@@ -25,8 +25,8 @@ void main() {
   setUp(() => db = openTestDatabase());
   tearDown(() => db.close());
 
-  test('schemaVersion 为 2，建表后可读写', () async {
-    expect(db.schemaVersion, 2);
+  test('schemaVersion 为 3，建表后可读写', () async {
+    expect(db.schemaVersion, 3);
     await db.into(db.installedSources).insert(_row('com.example.a'));
 
     final rows = await db.select(db.installedSources).get();
@@ -49,7 +49,8 @@ void main() {
 
   test('数据库版本高于客户端时拒绝打开', () async {
     final newer = openTestDatabase(
-      setup: (raw) => raw.execute('PRAGMA user_version = 3'),
+      setup: (raw) =>
+          raw.execute('PRAGMA user_version = ${db.schemaVersion + 1}'),
     );
     addTearDown(newer.close);
     await expectLater(
@@ -61,7 +62,7 @@ void main() {
   test('首次打开写入 user_version', () async {
     await db.select(db.installedSources).get();
     final v = await db.customSelect('PRAGMA user_version').getSingle();
-    expect(v.data.values.single, 2);
+    expect(v.data.values.single, db.schemaVersion);
   });
 
   test('source_storage_entries 以 (sourceId, key) 为主键', () async {
