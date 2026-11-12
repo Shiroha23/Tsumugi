@@ -345,6 +345,16 @@ export async function search(keyword, page) {
 
 - 每个源有独立的 Cookie 域、限速队列与默认 headers。
 - 请求目标主机不在 `baseUrl` 主机或 `allowedHosts` 中时，拒绝请求并返回 `E_HOST_NOT_ALLOWED`。
+  **重定向的每一跳**同样检查；`followRedirects: false` 时直接返回 3xx 响应，由源自行处理。
+  跨主机重定向时不转发源显式设置的 `Authorization` / `Cookie` 头（Cookie 域中的 Cookie 照常按主机附加）。
+- `timeoutMs` 是单次尝试（连接 + 等待响应 + 读取响应体）的上限，不含限速排队；超时 → `E_NETWORK`。
+- `rateLimit` 按令牌桶执行：允许突发 `requests` 个，之后每 `perSeconds / requests` 秒放行一个；
+  重试与重定向的每一跳都计入。
+- 幂等请求（GET / HEAD / PUT / DELETE / OPTIONS）在连接错误或 5xx 时最多自动重试 2 次（指数退避），
+  超时与非幂等请求（POST / PATCH）不重试。
+- 检测到人机验证页面（403 / 429 / 503 且带有验证页特征）时返回 `E_CHALLENGE`，不重试、不尝试绕过；
+  UI 引导用户在 WebView 中手动完成后再重试（见 architecture §5.3）。
+- 单个响应体超过 20 MB → `E_LIMIT`。
 - 图片、音视频流的 headers 由内容结构中的 `headers` 字段携带给加载器/播放器。
 
 ## 6. 错误码

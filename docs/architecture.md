@@ -112,6 +112,26 @@ detail(id) → 章节/剧集/曲目列表 → content(itemId)
 网络层检测到挑战（如 403/503 + 特征）或源脚本主动请求时，弹出 WebView 让**用户手动**完成，
 完成后将 Cookie 回写到该源的 Cookie 域并重试请求。客户端不自动破解验证码。
 
+### 5.4 网络层（M1）
+
+`lib/core/network/` 提供按源隔离的 HTTP 客户端，声明式引擎与脚本宿主 API（`tsumugi.http` /
+`tsumugi.cookies`）共用同一抽象：
+
+- `SourceHttpClient`（接口）/ `DioSourceHttpClient`（dio + cookie_jar 实现）：每个源一个实例，
+  持有独立的 Cookie Jar、默认 headers、超时、令牌桶限速（`TokenBucket`）与 `HostPolicy`。
+  重定向由客户端逐跳处理以便对每一跳做白名单检查；行为细则见 source-spec §5。
+- `SourceNetworkConfig`：纯 core 类型；由清单生成的函数 `networkConfigFromManifest` 位于
+  `lib/sources/network_error_mapping.dart`（core 不依赖 sources）。
+- 错误统一为 `NetworkException(kind)`，`NetworkErrorKind` 与 source-spec §6 错误码一一映射
+  （`NetworkException.toSourceException()`，同样在 sources 一侧）。
+- `ChallengeDetector` 只做检测（状态码 + 响应头 / 页面特征），命中时上报 `E_CHALLENGE`。
+- 测试与规则调试使用 `tool/mock_server/`（纯 Dart，页面在 `test/fixtures/mock_site/`）。
+  测试中通过自定义 `HttpClientAdapter` 把 `comic.example.com` 等虚构主机名的连接接到本地随机端口，
+  白名单仍按真实主机名检查；手动调试：`dart run tool/mock_server/main.dart --port 8080`。
+
+已知限制：响应文本只识别 utf-8 / latin1 / ascii 字符集（其余按 utf-8 宽松解码），GBK 等需后续补充；
+Cookie Jar 默认在内存中，持久化（按源目录的 `PersistCookieJar`）由源管理在创建客户端时注入。
+
 ## 6. 风险与待验证项
 
 1. **QuickJS 绑定的跨平台可用性** —— M0 已完成验证，结论见 §6.1。
