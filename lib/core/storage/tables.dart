@@ -50,3 +50,18 @@ class InstalledSources extends Table {
   @override
   Set<Column<Object>> get primaryKey => {id};
 }
+
+/// 脚本源的 `tsumugi.storage`（docs/source-spec.md §4.2）：按源隔离的 KV，值为 JSON 文本。
+@DataClassName('SourceStorageRow')
+class SourceStorageEntries extends Table {
+  /// 清单 `id`。
+  TextColumn get sourceId => text()();
+
+  TextColumn get key => text()();
+
+  /// JSON 编码后的值。
+  TextColumn get value => text()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {sourceId, key};
+}

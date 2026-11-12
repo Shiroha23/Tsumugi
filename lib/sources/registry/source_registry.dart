@@ -210,9 +210,13 @@ class SourceRegistry {
     );
   }
 
-  /// 删除；返回是否确有删除。
-  Future<bool> remove(String id) async =>
-      await (_db.delete(_t)..where((t) => t.id.equals(id))).go() > 0;
+  /// 删除，同时清除该源的脚本存储（`tsumugi.storage`）；返回是否确有删除。
+  Future<bool> remove(String id) => _db.transaction(() async {
+    await (_db.delete(
+      _db.sourceStorageEntries,
+    )..where((t) => t.sourceId.equals(id))).go();
+    return await (_db.delete(_t)..where((t) => t.id.equals(id))).go() > 0;
+  });
 
   /// 按 [ids] 的顺序重排这些源。
   ///

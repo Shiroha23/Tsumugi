@@ -1,6 +1,7 @@
 import 'package:drift/drift.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import 'app_database.steps.dart';
 import 'connection.dart';
 import 'tables.dart';
 
@@ -17,12 +18,12 @@ part 'app_database.g.dart';
 ///   然后在 [migration] 的 `onUpgrade` 中用 `stepByStep` 写出 from→to 的每一步。
 /// - 已发布的 `drift_schemas/*.json` 不可修改。
 /// - 不支持降级：数据库版本高于 [schemaVersion]（用户装回旧版客户端）时拒绝打开，避免损坏数据。
-@DriftDatabase(tables: [InstalledSources])
+@DriftDatabase(tables: [InstalledSources, SourceStorageEntries])
 class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -31,8 +32,12 @@ class AppDatabase extends _$AppDatabase {
       if (from > to) {
         throw StateError('数据库版本 $from 高于客户端支持的 $to，请更新客户端');
       }
-      // schemaVersion 1 之后的迁移在这里按 stepByStep 追加。
-      throw UnsupportedError('未知的数据库迁移：$from → $to');
+      await stepByStep(
+        // v2：脚本源的按源 KV 存储（tsumugi.storage）。
+        from1To2: (m, schema) async {
+          await m.createTable(schema.sourceStorageEntries);
+        },
+      )(m, from, to);
     },
     beforeOpen: (details) async {
       await customStatement('PRAGMA foreign_keys = ON');

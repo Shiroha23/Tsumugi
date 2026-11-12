@@ -23,6 +23,7 @@ dependencies:
   json_annotation: ^4.12.0
   json_path: 0.9.0
   path_provider: ^2.1.6
+  pointycastle: ^4.0.0
   qjs: ^0.2.3
   riverpod_annotation: ^4.0.8
   xml: 7.1.0

@@ -1,7 +1,11 @@
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import '../../core/storage/app_database.dart';
+import '../../core/storage/source_storage.dart';
 import '../model/common.dart';
 import '../model/manifest.dart';
+import '../script/script_source_factory.dart';
+import '../script/script_ui.dart';
 import '../source.dart';
 
 part 'source_factory.g.dart';
@@ -39,6 +43,15 @@ final class SourceFactories {
   }
 }
 
-/// 引擎实现在此注册各自的 [SourceFactory]（M1 声明式 / 脚本源会话负责）。
+/// 已注册的引擎工厂。声明式引擎的工厂尚未注册（需要把 `SourceHttpClient` 适配为 `Fetcher`）。
 @Riverpod(keepAlive: true)
-SourceFactories sourceFactories(Ref ref) => SourceFactories(const []);
+SourceFactories sourceFactories(Ref ref) => SourceFactories([
+  ScriptSourceFactory(
+    storage: DriftSourceStorage(ref.watch(appDatabaseProvider)),
+    ui: ref.watch(scriptUiProvider),
+  ),
+]);
+
+/// 脚本宿主 API `tsumugi.ui` 的界面实现；界面层接入 WebView 后覆盖此 provider。
+@Riverpod(keepAlive: true)
+ScriptUi scriptUi(Ref ref) => const UnavailableScriptUi();

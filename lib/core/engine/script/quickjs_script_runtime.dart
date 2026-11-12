@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:qjs/qjs.dart';
 
+import 'native_stack.dart';
 import 'script_runtime.dart';
 
 /// 基于 `package:qjs`（QuickJS-ng，经 Dart build hooks 编译）的 [ScriptRuntime]。
@@ -23,13 +24,19 @@ import 'script_runtime.dart';
 /// - 不设置 module loader，脚本内 `import` 一律失败；关闭 `eval` / `Function`。
 ///
 /// 已知限制（见 docs/architecture.md §6.1）：
-/// - JS 执行期间会阻塞所在 isolate。正式接入时应把运行时放进 worker isolate。
+/// - JS 执行期间会阻塞所在 isolate；脚本源经 `IsolateScriptRuntime` 放在 worker isolate 中运行。
 /// - QuickJS 部分原生内建函数内部的循环不检查中断，极端输入可能长时间无法返回。
 /// - 内存 / 栈超限表现为分配失败的异常，脚本可以 catch；但超限的分配本身不会成功。
 class QuickJsScriptRuntime implements ScriptRuntime {
+  ///
+  /// [prelude] 为可选的受信任 JS（一个函数表达式，如 `(raw) => api`）：宿主函数先挂到
+  /// 冻结的 `raw` 对象上，prelude 以它为参数被调用一次，返回值（冻结后）成为全局
+  /// `tsumugi`。用于在 JS 侧包装宿主函数（如 `HtmlNode` 句柄对象），
+  /// 未在返回值中暴露的宿主函数对脚本不可见。为 null 时全局 `tsumugi` 即 `raw`。
   QuickJsScriptRuntime({
     required Map<String, HostFunction> host,
     this.limits = const ScriptLimits(),
+    this.prelude,
   }) : _host = Map.unmodifiable(host) {
     _initEngine();
   }
@@ -41,6 +48,7 @@ class QuickJsScriptRuntime implements ScriptRuntime {
   }) => QuickJsScriptRuntime(host: host, limits: limits);
 
   final ScriptLimits limits;
+  final String? prelude;
   final Map<String, HostFunction> _host;
 
   late JSRuntime _rt;
@@ -97,6 +105,7 @@ class QuickJsScriptRuntime implements ScriptRuntime {
 
   Future<Object?> _call(String export, List<Object?> args) async {
     _checkAlive();
+    updateStackTop(_rt);
     final ns = switch (_state) {
       _LoadState.loaded => _namespace!,
       _LoadState.failed => throw StateError(
@@ -177,6 +186,7 @@ class QuickJsScriptRuntime implements ScriptRuntime {
     _current?.fail(const ScriptException('Runtime disposed.'));
     _current = null;
     _namespace = null;
+    updateStackTop(_rt);
     _rt.release();
   }
 
@@ -190,6 +200,7 @@ class QuickJsScriptRuntime implements ScriptRuntime {
         maxStackSize: limits.maxStackBytes,
       ),
     );
+    updateStackTop(_rt);
     // 在脚本有机会篡改全局对象之前，先拿到要用的内建函数。
     final global = _rt.global;
     _stringify = global['JSON'].asObject['stringify'].asObject.asFunction;
@@ -240,6 +251,7 @@ class QuickJsScriptRuntime implements ScriptRuntime {
   void _replaceEngine() {
     final old = _rt;
     _initEngine();
+    updateStackTop(old);
     old.release();
   }
 
@@ -262,6 +274,8 @@ class QuickJsScriptRuntime implements ScriptRuntime {
   /// 可能是脚本代码，不能在 deadline 之外读取。
   T _enterJs<T>(_Call call, T Function() body) {
     if (call.cpu.isRunning) return body(); // 已在 JS 内（嵌套进入）。
+    // 本次同步段可能运行在与上次不同的 OS 线程上。
+    updateStackTop(_rt);
     final remaining = call.remaining;
     if (remaining <= Duration.zero) throw call.timeLimitError();
     _rt.setDeadline(remaining);
@@ -322,7 +336,20 @@ class QuickJsScriptRuntime implements ScriptRuntime {
     for (final ns in namespaces.values) {
       ns.freeze();
     }
-    _rt.global['tsumugi'] = root.asValue;
+    final prelude = this.prelude;
+    if (prelude == null) {
+      _rt.global['tsumugi'] = root.asValue;
+      return;
+    }
+    // prelude 是受信任代码，在脚本求值之前执行；异常直接抛给调用方（属于编程错误）。
+    final fn = _rt.evaluateJavascript(prelude, sourceUrl: 'tsumugi-prelude.js');
+    if (!fn.isObject || !fn.asObject.isFunction) {
+      throw StateError('prelude must evaluate to a function');
+    }
+    final api = fn.asObject.asFunction([root.asValue]);
+    if (!api.isObject) throw StateError('prelude must return an object');
+    api.asObject.freeze();
+    _rt.global['tsumugi'] = api;
   }
 
   JSValue _invokeHost(HostFunction fn, List<JSValue> args) {

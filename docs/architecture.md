@@ -28,6 +28,7 @@
 | HTML 解析 | `html`（CSS 选择器） + [`xml`](https://pub.dev/packages/xml)（XPath，MIT） | M1 选定，见 §6 风险 4 |
 | JSON 路径 | [`json_path`](https://pub.dev/packages/json_path)（RFC 9535，MIT） | M1 选定，见 §6 风险 4 |
 | JS 运行时 | [`qjs`](https://pub.dev/packages/qjs)（QuickJS-ng，MIT） | M0 已验证，三平台同一引擎；封装在 `core/engine/script`，见 §6.1 |
+| 加密 | [`crypto`](https://pub.dev/packages/crypto)（BSD-3）+ [`pointycastle`](https://pub.dev/packages/pointycastle)（MIT） | 纯 Dart；`tsumugi.crypto` 的摘要 / HMAC 与 AES（CBC / ECB / GCM） |
 | 数据库 | drift（SQLite） | |
 | 音视频 | media_kit（libmpv） | 视频与音乐共用 |
 | WebView | flutter_inappwebview | 用于登录 / 人机验证兜底 |
@@ -62,7 +63,8 @@ lib/
   core/
     engine/
       declarative/        # 声明式规则解析与执行
-      script/             # JS 运行时、宿主 API 绑定、沙箱
+      script/             # JS 运行时（QuickJS、worker isolate）、沙箱
+        host/             # worker 内的宿主 API（crypto、HTML 句柄）与 tsumugi prelude
       expression/         # 选择器表达式（css/xpath/json/regex）
     network/              # HttpClient、Cookie、限速、重试、日志
     storage/              # drift 数据库、KV 存储
@@ -70,6 +72,8 @@ lib/
   sources/
     model/                # Source 清单、SearchItem、Detail、Content…
     source.dart           # 统一 Source 抽象接口
+    declarative/          # engine=declarative 的 Source
+    script/               # engine=script 的 Source、主 isolate 宿主 API、工厂
     registry/             # 已安装源管理、启用/禁用、排序
     repository/           # 规则仓库订阅、更新、校验
   shared/
@@ -93,7 +97,7 @@ docs/
 - **数据库**：`core/storage/app_database.dart` 中的 `AppDatabase`（drift），文件为应用支持目录下的
   `tsumugi.sqlite`（`getApplicationSupportDirectory`，不放在用户“文档”目录），SQL 在后台 isolate 执行。
   通过 `appDatabaseProvider` 获取，测试中用内存 SQLite 覆盖。
-- **迁移策略**：当前 `schemaVersion = 1`。每次改表结构：`schemaVersion` 加一 →
+- **迁移策略**：当前 `schemaVersion = 2`（v2 新增 `source_storage_entries`）。每次改表结构：`schemaVersion` 加一 →
   `dart run drift_dev make-migrations`（把新 schema 导出到 `drift_schemas/`，生成 steps 文件与
   `test/core/storage/migrations/` 下的迁移测试）→ 在 `onUpgrade` 中用 `stepByStep` 写每一步。
   已发布的 `drift_schemas/*.json` 不可修改。数据库版本高于客户端时拒绝打开（不支持降级）。
@@ -106,7 +110,11 @@ docs/
   导入分两步：`prepareImport` 生成预览（含将访问的主机 = baseUrl 主机 + allowedHosts、未知字段警告），
   用户确认后 `install`。
 - 注册表只管理清单。可运行的 `Source` 由按引擎注册的 `SourceFactory`（`sourceFactoriesProvider`）构造，
-  声明式 / 脚本引擎各自实现并注册。
+  声明式 / 脚本引擎各自实现并注册（目前已注册脚本引擎的 `ScriptSourceFactory`）。
+- **脚本存储表** `source_storage_entries`：`tsumugi.storage` 的按源 KV（主键 `(sourceId, key)`，值为 JSON 文本），
+  经 `core/storage/source_storage.dart` 的 `SourceStorage` 访问；`SourceRegistry.remove` 在同一事务中删除该源的数据。
+  用量按 Unicode 码点计（与 SQLite `length()` 一致）；`write(quota:)` 在一个 drift 事务中完成“算用量 → 查配额 → 写入”，
+  `isCancelled` 用于丢弃已结束调用排队中的写操作。
 
 ## 5. 关键流程
 
@@ -151,6 +159,35 @@ detail(id) → 章节/剧集/曲目列表 → content(itemId)
 
 已知限制：响应文本只识别 utf-8 / latin1 / ascii 字符集（其余按 utf-8 宽松解码），GBK 等需后续补充；
 Cookie Jar 默认在内存中，持久化（按源目录的 `PersistCookieJar`）由源管理在创建客户端时注入。
+
+### 5.5 脚本源（M1）
+
+`lib/sources/script/` 的 `ScriptSource`（`engine: "script"`）执行模型：
+
+```
+主 isolate                                          worker isolate（每个源一个）
+ScriptSource ─ 串行入口调用 ─▶ IsolateScriptRuntime ═ load/call ═▶ QuickJsScriptRuntime
+  │ ScriptCallScope（请求计数 / 取消）   │ 看门狗                     │ prelude 组装 tsumugi
+  ▼                                    │                          │ crypto.* / html.*（同步）
+ScriptHost：http / storage / cookies ◀═ host 请求（脚本侧 Promise）═┤
+            ui.openWebView                                          │
+            log.* / ui.toast ◀════════ notify（发出即忘）═════════════┘
+```
+
+- `IsolateScriptRuntime`（`core/engine/script/`）实现不变的 `ScriptRuntime` 接口。宿主函数分三类：
+  主 isolate 异步执行的（脚本侧为 Promise）、发出即忘的通知（同步返回），以及由 `WorkerHostFactory`
+  在 worker 内构造、可同步返回的（`crypto`、HTML 句柄）。主 isolate 只接受当前进行中的调用发来的宿主请求。
+- **prelude**：`QuickJsScriptRuntime` 可接受一段受信任 JS（`(raw) => api`），把冻结的原始宿主对象包装成公开的
+  `tsumugi`；`HtmlNode` 由此用句柄实现（source-spec §4.2.1），原始句柄函数对脚本不可见。`tsumugi.source` 作为常量嵌入 prelude。
+- **看门狗与重建**：每次加载 / 调用在 `wallTime + hangGrace`（默认 5 s）内无回应即判定 worker 卡死，调用以 `E_LIMIT`
+  失败，worker 被丢弃，下一次调用新建 worker 并重新加载脚本；worker 意外退出（未捕获异常等）同样以 `E_LIMIT` 失败并在下次重建。
+  JS 层面的超限（CPU、总时长、内存）仍由 worker 内的 `QuickJsScriptRuntime` 自行中断与重建，worker 本身保留。
+- **每次调用的作用域**：`ScriptHost.begin()` 为每次入口调用建立 `ScriptCallScope`，`tsumugi.http.*` 据此计数（上限 50）
+  并共享一个 `NetCancellation`；调用结束即取消未完成的请求。
+- `tsumugi.ui` 通过可注入的 `ScriptUi`（`scriptUiProvider`）实现，默认 `UnavailableScriptUi`（WebView → `E_UNSUPPORTED`）。
+  WebView 完成后由 UI 实现经 `WebViewRequest.cookies`（本源的 `SourceHttpClient`）回写 Cookie。
+- `ScriptSourceFactory` 默认为每个源创建内存 Cookie Jar 的 `DioSourceHttpClient`，存储用 `DriftSourceStorage`。
+  创建出的 `ScriptSource` 由调用方 `dispose`（同时关闭其 HTTP 客户端与 worker）。
 
 ## 6. 风险与待验证项
 
@@ -214,15 +251,27 @@ CPU 预算跨 await 累计、总时长上限、内存上限、栈上限、超限
 
 已知限制与后续工作：
 
-- **JS 在调用方 isolate 上同步执行**，长计算会卡住该 isolate。M1 接入时把每个源的运行时放进
-  worker isolate（`qjs` 提供可跨 isolate 发送的中断句柄）；`ScriptRuntime` 接口已全部异步，无需改动调用方。
+- **`QuickJsScriptRuntime` 在调用方 isolate 上同步执行 JS**。脚本源已通过 `IsolateScriptRuntime`
+  把每个源的运行时放进独立 worker isolate（§5.5）；声明式引擎的 `js:` 片段仍在调用方 isolate 上执行
+  （可改用 `IsolateScriptRuntime.create` 作为其 `ScriptRuntimeFactory`）。
+- **QuickJS 栈顶与线程迁移**（2026-11 实测）：QuickJS 只在创建 `JSRuntime` 时记录一次原生栈顶，
+  而 Dart isolate 在两个事件之间可能被调度到另一个 OS 线程。worker 中因此偶发误报
+  `Maximum call stack size exceeded`；反方向时栈检查会失效。`qjs` 未暴露 `JS_UpdateStackTop`，
+  `core/engine/script/native_stack.dart` 经 native asset 直接调用它（读取 `JSRuntime.ptr` 的第一个字段，
+  该成员在 qjs 中标为 `@internal`），在每次从 Dart 同步进入 JS（调用、resolve 宿主 Promise、建引擎、释放）前更新。
+  升级 qjs 时需复查结构布局；应向上游报告，修复后删除此文件。
+- **worker 无法被强制终止**：不能用 `Isolate.kill(priority: immediate)`——worker 往往正处于 QuickJS → Dart 的
+  FFI 回调中，在那里被强制终止会让整个进程崩溃（已实测）。因此看门狗只做 `kill(beforeNextEvent)`：worker 回到事件循环时退出，
+  一直卡住的 worker 只能放弃（占用一个线程直到进程退出）。
 - **部分原生内建函数不检查中断**：QuickJS-ng 某些内建函数（如 `Array.prototype.flat` 作用于
   `length` 极大的类数组对象）在 C 循环中不检查中断，CPU / 总时长限制对其无效，可能长时间无法返回
   （未实测，依据引擎源码判断）。放进 worker isolate 也不够：isolate 卡在原生代码中时 Dart 无法终止它。
   根治需要给引擎打补丁（在这些循环中加入中断检查）或把脚本放进可被强制结束的独立进程；
   在此之前，恶意源最坏能卡死其所在的 worker。
-- **单次调用 HTTP 请求数上限（50）尚未强制**：应由脚本宿主 HTTP API 按调用计数，随“脚本源接入”实现。
 - 同一运行时上的调用**串行执行**（宿主 Promise 需要归属到具体调用）。如需单源并发，可按调用开多个运行时。
+- `ui.openWebView` 的等待时间计入单次调用的 30 s 总时长，用户登录可能来不及完成；接入 WebView 时需要
+  为这类等待单独计时（或让脚本抛出 `E_LOGIN_REQUIRED` 后由 UI 引导再重试）。
+- HTML 句柄的 DOM 不在 JS 堆内，只能靠句柄数与解析文本量的上限间接约束（source-spec §4.2.1）。
 - 源脚本**不支持顶层 await**（模块同步求值）；已写入 source-spec §4.1。
 - 移动端只验证到“能编译打包”，真机 / 模拟器上的运行时加载尚未自动化验证，M1 加 integration test。
 - `qjs` 的 build hook 默认从其 GitHub Release 下载预编译库（sha256 写死在包内并校验），失败时回落到

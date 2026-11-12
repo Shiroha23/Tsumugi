@@ -1,0 +1,16 @@
+{
+  "apiVersion": 1,
+  "id": "com.example.script.comic",
+  "name": "示例脚本漫画",
+  "type": "comic",
+  "version": "1.0.0",
+  "lang": "zh",
+  "baseUrl": "http://comic.example.com",
+  "allowedHosts": ["img.example.com"],
+  "headers": { "Referer": "http://comic.example.com/" },
+  "settings": [
+    { "key": "quality", "label": "画质", "type": "select", "options": ["high", "low"], "default": "high" }
+  ],
+  "engine": "script",
+  "script": "source.js"
+}
