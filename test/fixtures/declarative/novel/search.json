@@ -1,0 +1,10 @@
+{
+  "code": 0,
+  "data": {
+    "hasMore": false,
+    "books": [
+      { "path": "/book/7/", "name": "雾港往事", "author": "作者乙", "cover": "/cover/7.jpg", "tags": ["悬疑", "都市"] },
+      { "path": "/book/8/", "name": "雾港往事·续", "author": "作者乙", "cover": null, "tags": [] }
+    ]
+  }
+}

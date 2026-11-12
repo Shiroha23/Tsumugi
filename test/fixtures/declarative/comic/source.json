@@ -1,0 +1,58 @@
+{
+  "apiVersion": 1,
+  "id": "com.example.comic.demo",
+  "name": "示例漫画站",
+  "type": "comic",
+  "version": "1.0.0",
+  "lang": "zh",
+  "baseUrl": "https://comic.example.com",
+  "allowedHosts": ["img.example.com"],
+  "headers": { "Referer": "https://comic.example.com/" },
+  "settings": [
+    { "key": "quality", "label": "画质", "type": "select", "options": ["high", "low"], "default": "high" }
+  ],
+  "engine": "declarative",
+  "rules": {
+    "search": {
+      "request": { "url": "/search?q={{keyword}}&page={{page}}" },
+      "list": "css:.result-item",
+      "fields": {
+        "id": "css:a.link@href",
+        "title": "css:.title@text",
+        "cover": "css:img@data-src || css:img@src",
+        "subtitle": "css:.author@text",
+        "tags": "css:.tags span@text[]"
+      },
+      "hasMore": "css:.pagination .next"
+    },
+    "explore": [
+      {
+        "name": "最新",
+        "request": { "url": "/latest?page={{page}}" },
+        "list": "xpath://ul[@id='latest']/li",
+        "fields": { "id": "xpath:./a/@href", "title": "xpath:./a/text()" }
+      }
+    ],
+    "detail": {
+      "request": { "url": "{{id}}" },
+      "fields": {
+        "title": "css:h1@text",
+        "cover": "css:.cover img@src",
+        "author": "css:.info .author@text",
+        "description": "css:.intro@text",
+        "tags": "css:.tags a@text[]",
+        "status": "css:.status@data-status",
+        "updatedAt": "css:.info time@datetime"
+      },
+      "units": {
+        "list": "css:.chapter-list li",
+        "fields": { "id": "css:a@href", "title": "css:a@text", "updatedAt": "css:time@datetime" },
+        "reverse": true
+      }
+    },
+    "content": {
+      "request": { "url": "{{unitId}}?quality={{setting.quality}}" },
+      "images": "css:.page img@data-src[]"
+    }
+  }
+}

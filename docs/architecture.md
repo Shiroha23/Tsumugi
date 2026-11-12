@@ -25,8 +25,8 @@
 | 状态管理 | Riverpod（含代码生成） | |
 | 路由 | go_router | |
 | 网络 | dio + cookie_jar | 每个源独立 Cookie 域与拦截器 |
-| HTML 解析 | `html`（CSS 选择器） + XPath 库 | XPath 库选型待验证 |
-| JSON 路径 | JSONPath 实现库 | 选型待验证 |
+| HTML 解析 | `html`（CSS 选择器） + [`xml`](https://pub.dev/packages/xml)（XPath，MIT） | M1 选定，见 §6 风险 4 |
+| JSON 路径 | [`json_path`](https://pub.dev/packages/json_path)（RFC 9535，MIT） | M1 选定，见 §6 风险 4 |
 | JS 运行时 | [`qjs`](https://pub.dev/packages/qjs)（QuickJS-ng，MIT） | M0 已验证，三平台同一引擎；封装在 `core/engine/script`，见 §6.1 |
 | 数据库 | drift（SQLite） | |
 | 音视频 | media_kit（libmpv） | 视频与音乐共用 |
@@ -132,12 +132,32 @@ detail(id) → 章节/剧集/曲目列表 → content(itemId)
 网络层检测到挑战（如 403/503 + 特征）或源脚本主动请求时，弹出 WebView 让**用户手动**完成，
 完成后将 Cookie 回写到该源的 Cookie 域并重试请求。客户端不自动破解验证码。
 
+### 5.4 网络层（M1）
+
+`lib/core/network/` 提供按源隔离的 HTTP 客户端，声明式引擎与脚本宿主 API（`tsumugi.http` /
+`tsumugi.cookies`）共用同一抽象：
+
+- `SourceHttpClient`（接口）/ `DioSourceHttpClient`（dio + cookie_jar 实现）：每个源一个实例，
+  持有独立的 Cookie Jar、默认 headers、超时、令牌桶限速（`TokenBucket`）与 `HostPolicy`。
+  重定向由客户端逐跳处理以便对每一跳做白名单检查；行为细则见 source-spec §5。
+- `SourceNetworkConfig`：纯 core 类型；由清单生成的函数 `networkConfigFromManifest` 位于
+  `lib/sources/network_error_mapping.dart`（core 不依赖 sources）。
+- 错误统一为 `NetworkException(kind)`，`NetworkErrorKind` 与 source-spec §6 错误码一一映射
+  （`NetworkException.toSourceException()`，同样在 sources 一侧）。
+- `ChallengeDetector` 只做检测（状态码 + 响应头 / 页面特征），命中时上报 `E_CHALLENGE`。
+- 测试与规则调试使用 `tool/mock_server/`（纯 Dart，页面在 `test/fixtures/mock_site/`）。
+  测试中通过自定义 `HttpClientAdapter` 把 `comic.example.com` 等虚构主机名的连接接到本地随机端口，
+  白名单仍按真实主机名检查；手动调试：`dart run tool/mock_server/main.dart --port 8080`。
+
+已知限制：响应文本只识别 utf-8 / latin1 / ascii 字符集（其余按 utf-8 宽松解码），GBK 等需后续补充；
+Cookie Jar 默认在内存中，持久化（按源目录的 `PersistCookieJar`）由源管理在创建客户端时注入。
+
 ## 6. 风险与待验证项
 
 1. **QuickJS 绑定的跨平台可用性** —— M0 已完成验证，结论见 §6.1。
 2. **iOS 分发**：无法上架 App Store，CI 产出未签名 IPA，用户自签。
 3. **音乐后台播放**：需要各平台的媒体会话适配（Android 前台服务、iOS AVAudioSession、Windows SMTC）。
-4. **XPath / JSONPath 库质量**：需用 fixtures 做兼容性测试。
+4. **XPath / JSONPath 库质量** —— M1 已选型，结论见 §6.2。
 
 ### 6.1 JS 运行时选型结论（M0，2026-11）
 
@@ -191,6 +211,30 @@ CPU 预算跨 await 累计、总时长上限、内存上限、栈上限、超限
   本地用 `native_toolchain_c` 编译源码。需要可复现构建时可在 M1 评估改为强制源码编译。
 - `qjs` 为单人维护的新库（风险：维护中断）。缓解：引擎细节全部隔离在 `QuickJsScriptRuntime` 一个文件内，
   其 C 桥接层很薄，必要时可 fork；fjs 作为第二候选。
+
+### 6.2 XPath / JSONPath 选型结论（M1，2026-11）
+
+两者都只在 `lib/core/engine/expression/` 内使用，规则引擎的其他部分不直接依赖。
+
+**XPath：[`xml`](https://pub.dev/packages/xml) 7.1（MIT，纯 Dart）。** `package:html` 的 DOM 本身不支持 XPath，
+`HtmlXPath`（`expression/html_xpath.dart`）为每棵 HTML 树建一个不带命名空间的 XML 镜像（按树根缓存），
+求值后把结果元素映射回原 HTML 节点，因此 `@html` / `@outerHtml` 与后续 css 步骤仍作用于原节点。
+
+| 包 | XPath 版本 | 许可证 | 维护 | 结论 |
+|---|---|---|---|---|
+| **xml** ✅ | XPath 3.1（XPath 1.0 的超集），W3C 函数库 | MIT | 2026-09 仍在发版，pub.dev 449 likes，Dart 生态最常用的 XML 库 | 选用 |
+| xpath_selector + xpath_selector_html_parser | 自研子集（轴、谓词、函数不全） | BSD-3 | 最后发版 2023-01 | 能直接作用于 `html` DOM，但功能与维护都不足 |
+| html_xpath | 子集 | Apache-2.0 | 已 discontinued | 否 |
+
+取舍：镜像需要一次 O(n) 的树复制，只在规则真正用到 xpath 时发生，每份文档一次；
+换来完整的 XPath 语义与活跃的上游。规范仍只承诺 XPath 1.0（§3.3），3.1 的额外函数不保证跨版本可用。
+
+**JSONPath：[`json_path`](https://pub.dev/packages/json_path) 0.9（MIT，纯 Dart）。** 实现 RFC 9535，
+声明通过官方 Compliance Test Suite；依赖只有 petitparser 等纯 Dart 包。
+RFC 9535 是目前唯一的 JSONPath 标准，选它可避免各实现间过滤器语法的差异。
+
+两者都支持 Windows / Android / iOS（纯 Dart，无原生库）。兼容性测试见
+`test/core/engine/expression/expression_engine_test.dart`。
 
 ## 7. 里程碑
 
