@@ -162,6 +162,30 @@ void main() {
     expect(server.hits('/comic/search'), before);
   });
 
+  test('新搜索读取注册表期间，旧分组不能发起分页请求', () async {
+    await registry.importText(mockSourceJson('declarative'));
+    makeContainer();
+    final (search, _) = controller();
+    await search.search('星');
+    expect(group(_declarative).hasMore, isTrue);
+
+    final pending = search.search('雨');
+    // 新搜索还在等注册表，旧分组仍然显示着「加载更多」。
+    await search.loadMore(_declarative);
+    await pending;
+
+    final g = group(_declarative);
+    expect(container.read(sourceSearchControllerProvider).keyword, '雨');
+    expect(g.page, 1);
+    expect(g.items, hasLength(2));
+    expect(
+      server.requests
+          .where((r) => r.path == '/comic/search')
+          .map((r) => r.query['q']),
+      ['星', '雨'],
+    );
+  });
+
   test('单源超时只在该分组显示错误', () async {
     await registry.importText(mockSourceJson('declarative'));
     await registry.importText(

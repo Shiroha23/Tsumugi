@@ -90,6 +90,10 @@ class SourceSearchController extends _$SourceSearchController {
   /// 每次新搜索递增；过时的结果按它丢弃。
   int _generation = 0;
 
+  /// 当前 [state] 中分组所属的搜索代号。新搜索在读取注册表期间旧分组仍在显示，
+  /// 此时两者不相等，旧分组不能再发起分页请求。
+  int _shownGeneration = 0;
+
   @override
   SearchState build() => const SearchState();
 
@@ -107,6 +111,7 @@ class SourceSearchController extends _$SourceSearchController {
     final type = state.type;
     final sources = await ref.read(sourceRegistryProvider).enabled(type: type);
     if (!ref.mounted || gen != _generation) return;
+    _shownGeneration = gen;
     state = SearchState(
       keyword: kw,
       type: type,
@@ -121,6 +126,8 @@ class SourceSearchController extends _$SourceSearchController {
 
   /// 加载 [sourceId] 的下一页（也用于失败后的重试）。
   Future<void> loadMore(String sourceId) async {
+    // 新搜索尚未替换旧分组：旧关键词的分页请求不能混进新结果。
+    if (_shownGeneration != _generation) return;
     final group = _group(sourceId);
     if (group == null || group.loading) return;
     if (group.page > 0 && !group.hasMore && group.error == null) return;
