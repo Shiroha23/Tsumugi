@@ -141,6 +141,23 @@ export async function htmlApi() {
   };
 }
 
+export async function staleAfterReparse() {
+  // 新调用中先分配新句柄，旧节点仍不能读到新文档的内容。
+  tsumugi.html.parse('<p>fresh</p>');
+  try {
+    return stash.text();
+  } catch (e) {
+    return 'stale: ' + e.message;
+  }
+}
+
+export async function storageSetMany(entries) {
+  const results = await Promise.allSettled(
+    entries.map(([k, v]) => tsumugi.storage.set(k, v)),
+  );
+  return results.map((r) => (r.status === 'fulfilled' ? 'ok' : r.reason.code));
+}
+
 export async function staleNode() {
   try {
     return stash.text();

@@ -21,6 +21,8 @@ class HtmlHandles {
   final _ids = Map<dom.Node, int>.identity();
   final _bases = Expando<Uri>('html-base');
   final _xpath = HtmlXPath();
+
+  /// 跨调用单调递增：旧调用留下的句柄永远不会指向新文档。
   var _next = 1;
   var _parsedChars = 0;
 
@@ -30,7 +32,6 @@ class HtmlHandles {
   void reset() {
     _nodes.clear();
     _ids.clear();
-    _next = 1;
     _parsedChars = 0;
   }
 

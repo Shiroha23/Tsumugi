@@ -106,10 +106,12 @@ class ScriptHost {
       final raw = await storage.read(_id, _key(a));
       return raw == null ? null : jsonDecode(raw);
     }),
-    'storage.set': (a) => _guard(() => _storageSet(_key(a), _arg(a, 1))),
+    'storage.set': (a) =>
+        _guard(() => _mutate(() => _storageSet(_key(a), _arg(a, 1)))),
     'storage.remove': (a) => _guard(() async {
       _active();
-      await storage.delete(_id, _key(a));
+      final key = _key(a);
+      await _mutate(() => storage.delete(_id, key));
       return null;
     }),
     'cookies.get': (a) => _guard(() async {
@@ -276,6 +278,16 @@ class ScriptHost {
       );
     }
     return key;
+  }
+
+  Future<void> _storageTail = Future.value();
+
+  /// 串行执行本源的存储写操作，使“读用量 → 检查配额 → 写入”不会与同一调用内
+  /// 并发的 `storage.set`（如 `Promise.all`）交错。
+  Future<T> _mutate<T>(Future<T> Function() body) {
+    final result = _storageTail.then((_) => body());
+    _storageTail = result.then<void>((_) {}, onError: (_) {});
+    return result;
   }
 
   Future<Object?> _storageSet(String key, Object? value) async {

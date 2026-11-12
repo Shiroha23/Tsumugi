@@ -53,6 +53,15 @@ class _FakeUi implements ScriptUi {
       toasts.add('$sourceId:$message');
 }
 
+class _SlowStorage extends MemorySourceStorage {
+  @override
+  Future<int> usage(String sourceId) async {
+    final used = await super.usage(sourceId);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    return used;
+  }
+}
+
 Matcher _sourceError(SourceErrorCode code, {int? status}) =>
     isA<SourceException>()
         .having((e) => e.code, 'code', code)
@@ -407,6 +416,27 @@ void main() {
       );
     });
 
+    test('quota holds for concurrent writes in one call', () async {
+      // 让“读用量”变慢，使并发的 set 必然交错。
+      final store = _SlowStorage();
+      final source = await open(
+        _hostManifest(),
+        store: store,
+        hostLimits: const ScriptHostLimits(maxStorageCharsPerSource: 40),
+      );
+      final results = await source.debugCall('storageSetMany', [
+        [
+          for (var i = 0; i < 5; i++) ['k$i', 'x' * 15],
+        ],
+      ]) as List;
+      expect(results.where((r) => r == 'ok'), hasLength(2));
+      expect(results.where((r) => r == 'E_LIMIT'), hasLength(3));
+      expect(
+        await store.usage('com.example.script.host'),
+        lessThanOrEqualTo(40),
+      );
+    });
+
     test('is cleared when the source is uninstalled', () async {
       final db = openTestDatabase();
       addTearDown(db.close);
@@ -496,6 +526,11 @@ void main() {
     // 句柄只在一次调用内有效。
     expect(
       await source.debugCall('staleNode'),
+      startsWith('stale: HtmlNode is no longer valid'),
+    );
+    await source.debugCall('htmlApi');
+    expect(
+      await source.debugCall('staleAfterReparse'),
       startsWith('stale: HtmlNode is no longer valid'),
     );
   });
