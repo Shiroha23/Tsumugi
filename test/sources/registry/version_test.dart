@@ -24,5 +24,8 @@ void main() {
     expect(sign('1.0.0-alpha', '1.0.0-beta'), -1);
     expect(sign('1.0.0-beta.2', '1.0.0-beta.10'), -1);
     expect(sign('1.0.0-1', '1.0.0-alpha'), -1);
+    expect(sign('1.0.0-beta', '1.0.0-beta.0'), -1);
+    expect(sign('1.0.0-beta.0', '1.0.0-beta'), 1);
+    expect(sign('1.0.0-alpha.1', '1.0.0-alpha.beta'), -1);
   });
 }
