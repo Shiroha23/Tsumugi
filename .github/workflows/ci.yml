@@ -42,7 +42,9 @@ jobs:
               range="$PUSH_BEFORE..$PUSH_AFTER" ;;
             *) full "event $EVENT" ;;
           esac
-          files=$(git diff --name-only "$range") || full "diff failed"
+          # --no-renames：重命名按“删除旧路径 + 新增新路径”列出，
+          # 否则把代码文件改名进 docs/ 时只看得到新路径，会被误判为只改了文档。
+          files=$(git diff --name-only --no-renames "$range") || full "diff failed"
           [ -z "$files" ] && full "no file list"
           echo "$files"
           while IFS= read -r f; do
