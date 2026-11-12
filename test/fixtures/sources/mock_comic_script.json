@@ -1,0 +1,31 @@
+{
+  "apiVersion": 1,
+  "id": "com.example.mock.comic.script",
+  "name": "Mock 漫画（脚本）",
+  "type": "comic",
+  "version": "1.0.0",
+  "author": "tsumugi",
+  "lang": "zh",
+  "description": "虚构源（脚本内联自 test/fixtures/script/comic/source.js），配合 tool/mock_server 使用。",
+  "baseUrl": "http://127.0.0.1:8080",
+  "allowedHosts": [
+    "img.example.com"
+  ],
+  "headers": {
+    "Referer": "http://127.0.0.1:8080/"
+  },
+  "settings": [
+    {
+      "key": "quality",
+      "label": "画质",
+      "type": "select",
+      "options": [
+        "high",
+        "low"
+      ],
+      "default": "high"
+    }
+  ],
+  "engine": "script",
+  "script": "// 虚构脚本漫画源：页面来自 tool/mock_server（test/fixtures/mock_site/comic）。\n// 测试中 \"script\" 字段会被替换为本文件内容。\n\nexport async function search(keyword, page) {\n  const doc = tsumugi.html.parse(\n    await tsumugi.http.get(\n      `/comic/search?q=${encodeURIComponent(keyword)}&page=${page}`,\n    ),\n  );\n  return {\n    items: doc.select('.result-item').map((n) => ({\n      id: n.selectFirst('a').attr('href'),\n      title: n.selectFirst('.title').text(),\n      cover: n.selectFirst('img')?.absUrl('data-src'),\n      subtitle: n.selectFirst('.author')?.text(),\n    })),\n    hasMore: doc.selectFirst('.pagination .next') != null,\n  };\n}\n\nexport async function explore() {\n  return [{ name: '全部', id: 'all' }];\n}\n\nexport async function exploreList(categoryId, page) {\n  return search('', page);\n}\n\nexport async function detail(id) {\n  const doc = tsumugi.html.parse(await tsumugi.http.get(id));\n  const status = doc.selectFirst('.status')?.text();\n  // 站点倒序列出章节。\n  const units = doc\n    .xpath(\"//ul[@class='chapter-list']/li/a\")\n    .map((a) => ({ id: a.attr('href'), title: a.text() }))\n    .reverse()\n    .map((u, i) => ({ ...u, index: i }));\n  return {\n    id,\n    title: doc.selectFirst('h1').text(),\n    cover: doc.selectFirst('.cover img').attr('src'),\n    author: doc.selectFirst('.author').text(),\n    description: doc.selectFirst('.intro').text(),\n    tags: doc.select('.tags a').map((a) => a.text()),\n    status: status === '连载中' ? 'ongoing' : 'unknown',\n    units,\n  };\n}\n\nexport async function content(unitId) {\n  const doc = tsumugi.html.parse(await tsumugi.http.get(unitId));\n  const quality = tsumugi.source.settings.quality;\n  return {\n    images: doc.select('.page img').map((img) => ({\n      url: img.absUrl('data-src'),\n      headers: { 'X-Quality': quality },\n    })),\n  };\n}\n"
+}

@@ -3,6 +3,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../../core/storage/app_database.dart';
 import '../../core/storage/source_storage.dart';
 import '../model/common.dart';
+import '../declarative/declarative_source_factory.dart';
 import '../model/manifest.dart';
 import '../script/script_source_factory.dart';
 import '../script/script_ui.dart';
@@ -43,9 +44,10 @@ final class SourceFactories {
   }
 }
 
-/// 已注册的引擎工厂。声明式引擎的工厂尚未注册（需要把 `SourceHttpClient` 适配为 `Fetcher`）。
+/// 已注册的引擎工厂。创建出的源由调用方释放（见 `lib/sources/runtime/`）。
 @Riverpod(keepAlive: true)
 SourceFactories sourceFactories(Ref ref) => SourceFactories([
+  DeclarativeSourceFactory(),
   ScriptSourceFactory(
     storage: DriftSourceStorage(ref.watch(appDatabaseProvider)),
     ui: ref.watch(scriptUiProvider),

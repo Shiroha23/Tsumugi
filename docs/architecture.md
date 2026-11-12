@@ -75,6 +75,7 @@ lib/
     declarative/          # engine=declarative 的 Source
     script/               # engine=script 的 Source、主 isolate 宿主 API、工厂
     registry/             # 已安装源管理、启用/禁用、排序
+    runtime/              # 按 sourceId 缓存可运行的 Source 实例；错误码 → 中文提示
     repository/           # 规则仓库订阅、更新、校验
   shared/
     library/              # 书架
@@ -110,7 +111,12 @@ docs/
   导入分两步：`prepareImport` 生成预览（含将访问的主机 = baseUrl 主机 + allowedHosts、未知字段警告），
   用户确认后 `install`。
 - 注册表只管理清单。可运行的 `Source` 由按引擎注册的 `SourceFactory`（`sourceFactoriesProvider`）构造，
-  声明式 / 脚本引擎各自实现并注册（目前已注册脚本引擎的 `ScriptSourceFactory`）。
+  声明式 / 脚本引擎各自实现并注册（`DeclarativeSourceFactory` 用 `SourceHttpFetcher` 把按源的
+  `SourceHttpClient` 适配为引擎的 `Fetcher`；`ScriptSourceFactory`）。
+- **源运行时** `sources/runtime/`：`SourceRuntime`（`sourceRuntimeProvider`）按 sourceId 缓存实例，自行订阅注册表；
+  源被禁用 / 删除 / 升级（清单 sha256 变化）时移出缓存并释放（脚本源的 worker、HTTP 客户端），下次 `get` 时重建；
+  创建失败不缓存。`sourceInstanceProvider(id)` 在实例被移除时自动失效，依赖它的 provider（如详情）随之重建。
+  不直接用 stream provider 的 `.future`：Riverpod 3 会暂停没有监听者的 provider，`ref.read` 读取可能永远等不到值。
 - **脚本存储表** `source_storage_entries`：`tsumugi.storage` 的按源 KV（主键 `(sourceId, key)`，值为 JSON 文本），
   经 `core/storage/source_storage.dart` 的 `SourceStorage` 访问；`SourceRegistry.remove` 在同一事务中删除该源的数据。
   用量按 Unicode 码点计（与 SQLite `length()` 一致）；`write(quota:)` 在一个 drift 事务中完成“算用量 → 查配额 → 写入”，
@@ -143,6 +149,16 @@ docs/
 UI(search) → SourceRegistry.enabled(type?) → 并发调用 source.search()
           → 结果按源分组流式返回（Stream），单源超时/失败不影响其他源
 ```
+
+实现（M2）：`features/search/search_controller.dart` 的 `SourceSearchController` 对每个源独立发起
+`SourceRuntime.get(id)` + `search()`（整体受 `searchTimeoutProvider` 限时，默认 30 s），各自回写所在分组；
+新搜索递增代号，过时的结果被丢弃。分组保存已加载页、`hasMore` 与最近一次错误，「加载更多」/「重试」都请求下一页。
+错误按 §6 错误码显示中文提示（`sources/runtime/source_error_text.dart`）；`E_CHALLENGE` 显示「需要验证」与
+「去验证」入口（WebView 尚未接入，见 §5.3）。
+
+漫画详情路由 `/comic/:sourceId/:itemId`，阅读器 `/comic/:sourceId/:itemId/read/:unitId`；`itemId` / `unitId`
+通常本身是路径，作为单个路径段时经 `Uri.encodeComponent`（`ComicRoutes`）。`Detail` 没有 `coverHeaders`：
+从搜索结果进入且封面相同则沿用该条目的 `coverHeaders`，否则使用源清单的默认 `headers`。
 
 ### 5.2 打开内容
 
