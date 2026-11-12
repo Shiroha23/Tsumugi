@@ -242,6 +242,19 @@ void main() {
     await _dispose(tester, r.app);
   });
 
+  testWidgets('滚动模式：窗口宽度变化后按字符偏移恢复位置', (tester) async {
+    final target = _offsetOf(30);
+    final r = await _open(tester, position: target);
+    expect(r.last.position, target);
+    tester.view.physicalSize = const Size(360, 800);
+    await tester.pumpAndSettle();
+    expect(r.last.position, target);
+    final top = tester.getTopLeft(_text('第30段')).dy;
+    expect(top, lessThan(100));
+    expect(top, greaterThan(-200));
+    await _dispose(tester, r.app);
+  });
+
   testWidgets('改字号后重新分页，保持当前位置', (tester) async {
     final target = _offsetOf(25);
     final r = await _open(
@@ -316,6 +329,10 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('服务器返回错误（HTTP 500）'), findsOneWidget);
+    // 正文失败时工具栏常驻：可以返回、换章、打开目录。
+    expect(find.byTooltip('返回'), findsOneWidget);
+    expect(find.byTooltip('目录'), findsOneWidget);
+    expect(find.byTooltip('下一章'), findsOneWidget);
     fail = false;
     await tester.tap(find.text('重试'));
     await tester.pumpAndSettle();

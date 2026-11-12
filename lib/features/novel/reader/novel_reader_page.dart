@@ -75,6 +75,9 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
   PageController? _pageController;
   List<NovelPage>? _pages;
   Object? _pagesKey;
+
+  /// 滚动模式上次排版时的宽度与文字缩放；变化后（改窗口大小、旋转）按字符偏移恢复位置。
+  (double, TextScaler)? _scrollLayout;
   Size _pageArea = Size.zero;
   int _pageIndex = 0;
   bool _onTrailer = false;
@@ -156,6 +159,7 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
     _scrollController = null;
     _pages = null;
     _pagesKey = null;
+    _scrollLayout = null;
     _pageIndex = 0;
   }
 
@@ -588,6 +592,14 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
     }
 
     final chapter = chapterAsync.value;
+    // 正文无法显示（加载中 / 失败 / 空章节）时没有点击区域可以呼出工具栏，
+    // 始终显示工具栏，保证能返回、换章或打开目录。
+    final readable =
+        settings is AsyncData &&
+        chapter != null &&
+        chapter.blocks.isNotEmpty &&
+        chapterAsync is AsyncData;
+    final showToolbar = _showToolbar || !readable;
     return Theme(
       data: ThemeData(
         brightness: theme.brightness,
@@ -602,7 +614,7 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
           child: Stack(
             children: [
               Positioned.fill(child: SafeArea(child: body)),
-              if (_showToolbar) ...[
+              if (showToolbar) ...[
                 Positioned(
                   left: 0,
                   right: 0,
@@ -719,8 +731,26 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
           GlobalKey(debugLabel: 'novel-block-$i'),
       ];
     }
-    _applyScrollPending(chapter);
     final gap = styles.paragraphGap;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final layout = (constraints.maxWidth, styles.textScaler);
+        if (_scrollLayout != null && _scrollLayout != layout) {
+          _pendingPosition ??= _position;
+        }
+        _scrollLayout = layout;
+        _applyScrollPending(chapter);
+        return _scrollView(styles, chapter, unit, gap);
+      },
+    );
+  }
+
+  Widget _scrollView(
+    NovelTextStyles styles,
+    NovelChapter chapter,
+    Unit? unit,
+    double gap,
+  ) {
     return NotificationListener<ScrollNotification>(
       onNotification: (n) => _onScroll(n, chapter),
       child: SingleChildScrollView(
