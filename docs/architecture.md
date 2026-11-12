@@ -234,7 +234,7 @@ tsumugi.ui.openWebView ────────┘   （单飞 / 节流） └�
   平台没给出的属性按收紧方向补全：Path 取读取时的地址路径，经 https 读到的视为 Secure
   （Android 缺少 `GET_COOKIE_INFO` 时只返回 name / value）。`SourceSession` 的 Jar 包装为 `SecureCookieJar`，
   修正 `cookie_jar` 会把 Secure Cookie 发往 http 的问题（每一跳重定向同样生效）。
-  因为 WebView 的 Cookie 存储是全局的，**打开前与结束后都清空 WebView 的 Cookie**（插件报告清空失败时不打开验证页），
+  因为 WebView 的 Cookie 存储是全局的，**打开前与结束后都清空 WebView 的 Cookie**（Windows 上插件报告清空失败时不打开验证页；Android 的返回值只表示是否删掉了 Cookie，不作判断），
   所以一个源的验证页看不到、也同步不到其他源留下的 Cookie。代价：每次打开验证页都从空白状态开始
   （源 Cookie Jar 中已有的 Cookie 不会预先放进 WebView）；localStorage 等其他站点数据不清空。
 - **User-Agent**：清单 `headers` 设置了 `User-Agent` 时，WebView 使用同一个 UA；否则完成时读取 WebView 的

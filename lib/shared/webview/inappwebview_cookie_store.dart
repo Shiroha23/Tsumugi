@@ -68,9 +68,11 @@ class InAppWebCookieStore implements WebCookieStore {
   @override
   Future<void> clearAll() async {
     final manager = await _manager();
-    // 插件在原生清空失败时返回 false（如 Windows 的 CDP 调用失败）：必须视为失败，
-    // 否则验证页可能带着其他源的 Cookie 打开。
-    if (!await manager.deleteAllCookies()) {
+    final ok = await manager.deleteAllCookies();
+    // 返回值的含义因平台而异：Windows 上 false 表示 CDP 调用失败，必须视为失败，
+    // 否则验证页可能带着其他源的 Cookie 打开；Android 的 removeAllCookies 回调值只表示
+    // “是否删掉了 Cookie”，存储本来为空时也是 false，不能当作失败。
+    if (!ok && Platform.isWindows) {
       throw StateError('deleteAllCookies returned false');
     }
   }
