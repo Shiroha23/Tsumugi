@@ -1,0 +1,54 @@
+# 在 issue / PR 中 @claude 时，由 Claude GitHub App（claude[bot]）在 Actions 中响应。
+# 前置条件（仓库所有者手动完成）：
+#   1. 安装 https://github.com/apps/claude 到本仓库
+#   2. 仓库 Secrets 添加 CLAUDE_CODE_OAUTH_TOKEN（本地运行 `claude setup-token` 生成）
+# 只有对仓库有写权限的用户能触发（claude-code-action 默认检查）。
+name: Claude
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+  issues:
+    types: [opened, assigned]
+
+env:
+  FLUTTER_VERSION: "3.47.7"
+
+jobs:
+  claude:
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read # 读取 PR 上的 CI 结果
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # 让 Claude 能按 CLAUDE.md 的要求跑 analyze / test。
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get
+      - run: dart run build_runner build
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: |
+            --allowedTools "Bash(flutter analyze:*),Bash(flutter test:*),Bash(flutter pub get),Bash(dart format:*),Bash(dart run build_runner:*)"
