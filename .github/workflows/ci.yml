@@ -97,6 +97,8 @@ jobs:
         with:
           name: tsumugi-android
           path: build/app/outputs/flutter-apk/*.apk
+          # PR 的构建只用于确认能编译，短期保留；main 的构建保留较久，便于下载最新版试用。
+          retention-days: ${{ github.event_name == 'pull_request' && 3 || 30 }}
 
   windows:
     name: Build Windows
@@ -117,6 +119,8 @@ jobs:
         with:
           name: tsumugi-windows
           path: build/windows/x64/runner/Release/
+          # PR 的构建只用于确认能编译，短期保留；main 的构建保留较久，便于下载最新版试用。
+          retention-days: ${{ github.event_name == 'pull_request' && 3 || 30 }}
 
   ios:
     name: Build iOS (unsigned)
@@ -142,3 +146,5 @@ jobs:
         with:
           name: tsumugi-ios-unsigned
           path: tsumugi-unsigned.ipa
+          # PR 的构建只用于确认能编译，短期保留；main 的构建保留较久，便于下载最新版试用。
+          retention-days: ${{ github.event_name == 'pull_request' && 3 || 30 }}
