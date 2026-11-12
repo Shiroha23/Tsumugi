@@ -56,19 +56,9 @@ void main() {
     expect(find.text('奇幻'), findsOneWidget);
     expect(find.text('日常'), findsOneWidget);
     expect(find.text('一个关于在星星上搭建小屋的虚构故事。'), findsOneWidget);
-    // 书架相关按钮在集成阶段接入，现在禁用。
-    expect(
-      tester
-          .widget<OutlinedButton>(find.widgetWithText(OutlinedButton, '加入书架'))
-          .onPressed,
-      isNull,
-    );
-    expect(
-      tester
-          .widget<FilledButton>(find.widgetWithText(FilledButton, '继续阅读'))
-          .onPressed,
-      isNull,
-    );
+    // 没有阅读进度：显示“开始阅读”。
+    expect(find.widgetWithText(FilledButton, '开始阅读'), findsOneWidget);
+    expect(find.textContaining('上次读到'), findsNothing);
 
     expect(find.text('章节（3）'), findsOneWidget);
     expect(_y(tester, '第 1 话'), lessThan(_y(tester, '第 3 话')));

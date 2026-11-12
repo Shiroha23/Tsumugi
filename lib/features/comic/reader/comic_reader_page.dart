@@ -114,7 +114,7 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
 
   List<Unit> get _chapters =>
       switch (ref.read(comicReaderDetailProvider(_sourceId, widget.itemId))) {
-        AsyncData(:final value) => readingOrder(value),
+        AsyncData(:final value) => readingOrder(value, _unitId),
         _ => const [],
       };
 
@@ -559,7 +559,7 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
     });
 
     final chapters = switch (detail) {
-      AsyncData(:final value) => readingOrder(value),
+      AsyncData(:final value) => readingOrder(value, _unitId),
       _ => const <Unit>[],
     };
     final unit = chapters.where((u) => u.id == _unitId).firstOrNull;
