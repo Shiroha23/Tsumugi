@@ -186,6 +186,29 @@ interface MusicContent {
 }
 ```
 
+**补充说明**
+
+- `detail.request` 可省略，默认 `{ "url": "{{id}}" }`；`content.request` 可省略，默认 `{ "url": "{{unitId}}" }`。
+- `list` 表达式总是取全部匹配（无需 `[]`），且不做默认提取：每个匹配节点（HTML 元素或 JSON 值）
+  作为 `fields` 中各表达式的输入。
+- 列表条目缺少 `id` 或 `title` 时跳过该条目；unit 缺少 `id` 时跳过。unit 的 `index` 为（反转后的）序号，从 0 开始。
+- `hasMore`：结果非空即为 true（匹配到的节点即使没有文本也算），但单个值 `false` / `0` 视为 false（便于 JSON 接口）。省略时为 false。
+- `explore` 分类的 id 为其在数组中的下标（`"0"`、`"1"`…）。
+- `POST` 且规则未给出 `Content-Type` 时：`body` 以 `{` 或 `[` 开头按 `application/json`，否则按
+  `application/x-www-form-urlencoded`。
+- 清单 `headers` 会合并到每个请求，并附在封面（`coverHeaders`）、图片与流的 `headers` 上（§5）。
+
+**`content` 的键（按清单 `type`）**
+
+| type | 键 | 说明 |
+|---|---|---|
+| comic | `images` | 多值，图片 URL |
+| novel | `text`、`nextPageId` | `text` 为多值时以 `\n` 连接；`nextPageId` 作为下一次 `content` 的 `unitId` |
+| video | `streams` | 多值，流 URL；`type` 按扩展名推断（`.m3u8`→hls，`.mpd`→dash，`.mp4`→mp4，其余 auto） |
+| music | `streams`、`lyrics` | `lyrics` 含 `[mm:ss` 时间标签时 `format` 为 `lrc`，否则为 `text` |
+
+其他键忽略并在调试日志中警告。
+
 ### 3.2 模板变量
 
 | 变量 | 可用位置 | 说明 |
@@ -197,7 +220,10 @@ interface MusicContent {
 | `{{baseUrl}}` | 全部 | 清单中的 baseUrl |
 | `{{setting.<key>}}` | 全部 | 用户设置值 |
 
-相对 URL 一律基于 `baseUrl` 解析。
+相对 URL 一律基于 `baseUrl` 解析：请求地址，以及结果中的 `cover` / 图片 / 流地址都会解析为绝对 URL；
+`id`、unit `id`、`nextPageId` 保持原样，在下一次请求时再解析。
+
+未定义的变量替换为空字符串并记录调试日志。请求主机必须在白名单内（§5），否则返回 `E_HOST_NOT_ALLOWED`。
 
 ### 3.3 选择器表达式
 
@@ -221,6 +247,24 @@ interface MusicContent {
 - `A |> B`：A 的结果作为 B 的输入（管道），例如 `css:script@text |> regex:var url='(.+?)'@1`。
 
 表达式求值失败时返回空值，并在调试日志中记录，不抛出到 UI。
+
+**细则**
+
+- 默认提取：css / xpath 取文本（去首尾空白）；regex 取整个匹配（组 0）；json 取匹配值本身
+  （字符串原样，数字 / 布尔转字符串，对象 / 数组序列化为 JSON）。`null` 视为空。
+- `json` 不支持 `@提取`：JSONPath（RFC 9535）在过滤器中用 `@` 表示当前节点，如 `json:$.list[?@.score > 8].name[]`。
+- `xpath` 的 `@提取` 只在 `@` 紧跟名称、`]`、`)`、`*` 或引号之后时识别，因此 `xpath://a/@href`
+  是 XPath 属性轴，`xpath://a@href` 是提取，两者结果相同。XPath 结果可以是元素、属性、文本节点或原子值
+  （如 `count(//li)`）。
+- `||` / `|>` 只在其后紧跟 `<引擎>:` 时才是运算符，因此 JS 代码或正则中的 `||` 不会被切分。`|>` 优先级高于 `||`。
+- 管道：中间步骤没有 `@提取` 时把原始节点传给下一步（如 `css:#intro |> css:b`）；上一步为多值时，
+  css / xpath / json / regex 步骤对每个值分别求值后拼接。只要任一步骤带 `[]`，结果即为多值。
+  css / xpath 的输入为字符串时按 HTML 解析，json 的输入为字符串时按 JSON 解析，regex 作用于元素时匹配其 outerHtml。
+- 任一步骤为空（包括提取出的空字符串）或失败，整条管道为空，进而触发 `||` 回退。
+- `js:` 之后是一个 **JS 表达式**（不是语句），其值即结果；`result` 为上一步的值（多值时为数组，
+  作为首个步骤时：对整份响应为原始文本，对列表条目为其文本或 JSON 值），只能是 JSON 兼容值。返回数组即为多值，返回 `null` / `undefined` 即为空。
+  同一个源的所有 `js:` 片段在同一个沙箱中执行（限制同 §4.4），沙箱中不提供 `tsumugi` 宿主 API，
+  `eval` / `Function` 不可用。片段在加载源时统一编译，单个片段的语法错误只影响它自己。
 
 ---
 

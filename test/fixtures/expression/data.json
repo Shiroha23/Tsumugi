@@ -1,0 +1,13 @@
+{
+  "code": 0,
+  "hasMore": false,
+  "data": {
+    "total": 3,
+    "list": [
+      { "id": "n1", "name": " Novel One ", "author": "A", "score": 9.5, "tags": ["x", "y"] },
+      { "id": "n2", "name": "Novel Two", "author": "B", "score": 7, "tags": [] },
+      { "id": "n3", "name": "Novel Three", "author": null, "score": 8, "tags": ["z"] }
+    ],
+    "html": "<p class=\"t\">inner</p>"
+  }
+}

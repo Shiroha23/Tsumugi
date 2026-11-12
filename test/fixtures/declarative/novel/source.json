@@ -1,0 +1,46 @@
+{
+  "apiVersion": 1,
+  "id": "com.example.novel.demo",
+  "name": "示例小说站",
+  "type": "novel",
+  "version": "1.0.0",
+  "lang": "zh",
+  "baseUrl": "https://novel.example.com",
+  "headers": { "User-Agent": "Tsumugi-Test" },
+  "engine": "declarative",
+  "rules": {
+    "search": {
+      "request": {
+        "url": "/api/search",
+        "method": "POST",
+        "body": "q={{keyword}}&p={{page}}"
+      },
+      "list": "json:$.data.books[*]",
+      "fields": {
+        "id": "json:$.path",
+        "title": "json:$.name",
+        "cover": "json:$.cover",
+        "subtitle": "json:$.author",
+        "tags": "json:$.tags[*][]"
+      },
+      "hasMore": "json:$.data.hasMore"
+    },
+    "detail": {
+      "fields": {
+        "title": "xpath://div[@class='book']/h1/text()",
+        "author": "xpath://p[@class='author']/span",
+        "description": "css:.desc p@text[] |> js:result.join('\\n')",
+        "status": "css:.state@text |> js:({ '连载中': 'ongoing', '已完结': 'completed' })[result] || 'unknown'",
+        "tags": "xpath://div[@class='tags']/a@text[]"
+      },
+      "units": {
+        "list": "css:#chapters dd",
+        "fields": { "id": "css:a@href", "title": "css:a@text" }
+      }
+    },
+    "content": {
+      "text": "css:#content p@text[]",
+      "nextPageId": "css:a#next@href"
+    }
+  }
+}
