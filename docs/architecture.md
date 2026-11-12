@@ -31,7 +31,7 @@
 | 加密 | [`crypto`](https://pub.dev/packages/crypto)（BSD-3）+ [`pointycastle`](https://pub.dev/packages/pointycastle)（MIT） | 纯 Dart；`tsumugi.crypto` 的摘要 / HMAC 与 AES（CBC / ECB / GCM） |
 | 数据库 | drift（SQLite） | |
 | 音视频 | media_kit（libmpv） | 视频与音乐共用 |
-| WebView | [`flutter_inappwebview`](https://pub.dev/packages/flutter_inappwebview) 6.1（Apache-2.0） | M3 选定：登录 / 人机验证（用户手动完成），见 §5.3 |
+| WebView | [`flutter_inappwebview`](https://pub.dev/packages/flutter_inappwebview) 6.2.0-beta.3（Apache-2.0） | M3 选定：登录 / 人机验证（用户手动完成），见 §5.3 |
 | 序列化 | freezed + json_serializable | |
 
 依赖版本在引入时以 pub.dev 最新稳定版为准，并锁定在 `pubspec.lock`。
@@ -188,7 +188,12 @@ detail(id) → 章节/剧集/曲目列表 → content(itemId)
 完成后将 Cookie 回写到该源的 Cookie 域并重试请求。客户端不自动破解验证码，也不在 WebView 中
 自动填写、点击或注入任何脚本（唯一的脚本调用是读取 `navigator.userAgent`）。
 
-**WebView 选型（2026-11）：[`flutter_inappwebview`](https://pub.dev/packages/flutter_inappwebview) 6.1.5（Apache-2.0）。**
+**WebView 选型（2026-11）：[`flutter_inappwebview`](https://pub.dev/packages/flutter_inappwebview) 6.2.0-beta.3（Apache-2.0）。**
+
+使用 beta 的原因：最新稳定版 6.1.5（2024-10）在当前工具链上无法构建——Android 插件使用了新版 AGP 已拒绝的
+`proguard-android.txt`，6.2.0-beta.3（2026-02）已改为 `proguard-android-optimize.txt`。Windows 上插件经 C++/WinRT
+引入 `<experimental/coroutine>`，VS 2026 默认报错 STL1011，`windows/CMakeLists.txt` 按 MSVC 提示定义了
+`_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS`。上游发布含这些修复的稳定版后应切换回去。
 
 | 包 | Win / Android / iOS | 读取 HttpOnly Cookie | 拦截主框架导航 | 自定义 UA | 许可证 | 结论 |
 |---|---|---|---|---|---|---|
