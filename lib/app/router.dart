@@ -5,6 +5,8 @@ import '../features/comic/detail/comic_detail_page.dart';
 import '../features/comic/detail/comic_routes.dart';
 import '../features/comic/reader/reader_route.dart';
 import '../features/library/library_page.dart';
+import '../features/novel/detail/novel_detail_page.dart';
+import '../features/novel/novel_routes.dart';
 import '../features/search/search_page.dart';
 import '../features/settings/settings_page.dart';
 import '../features/sources/sources_page.dart';
@@ -21,6 +23,9 @@ abstract final class Routes {
 
   /// 漫画阅读器；地址用 `comicReaderLocation(...)` 生成。
   static const comicReader = comicReaderRoutePath;
+
+  /// 小说阅读器；地址用 `NovelRoutes.reader(...)` 生成。
+  static const novelReader = NovelRoutes.readerPath;
 }
 
 @Riverpod(keepAlive: true)
@@ -80,6 +85,23 @@ GoRouter router(Ref ref) {
           GoRoute(
             path: ComicRoutes.readerPattern,
             builder: (_, state) => comicReaderPageFromState(state),
+          ),
+        ],
+      ),
+      // M3 小说：详情与阅读器（`?pos=N` 为章节内字符偏移）。
+      GoRoute(
+        path: NovelRoutes.detailPattern,
+        builder: (_, state) => NovelDetailPage(
+          sourceId: state.pathParameters['sourceId']!,
+          itemId: state.pathParameters['itemId']!,
+          preview: state.extra is SearchItem
+              ? state.extra! as SearchItem
+              : null,
+        ),
+        routes: [
+          GoRoute(
+            path: NovelRoutes.readerPattern,
+            builder: (_, state) => novelReaderPageFromState(state),
           ),
         ],
       ),
