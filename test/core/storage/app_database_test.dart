@@ -1,3 +1,4 @@
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tsumugi/core/storage/app_database.dart';
 
@@ -24,8 +25,8 @@ void main() {
   setUp(() => db = openTestDatabase());
   tearDown(() => db.close());
 
-  test('schemaVersion 为 1，建表后可读写', () async {
-    expect(db.schemaVersion, 1);
+  test('schemaVersion 为 2，建表后可读写', () async {
+    expect(db.schemaVersion, 2);
     await db.into(db.installedSources).insert(_row('com.example.a'));
 
     final rows = await db.select(db.installedSources).get();
@@ -48,7 +49,7 @@ void main() {
 
   test('数据库版本高于客户端时拒绝打开', () async {
     final newer = openTestDatabase(
-      setup: (raw) => raw.execute('PRAGMA user_version = 2'),
+      setup: (raw) => raw.execute('PRAGMA user_version = 3'),
     );
     addTearDown(newer.close);
     await expectLater(
@@ -60,7 +61,23 @@ void main() {
   test('首次打开写入 user_version', () async {
     await db.select(db.installedSources).get();
     final v = await db.customSelect('PRAGMA user_version').getSingle();
-    expect(v.data.values.single, 1);
+    expect(v.data.values.single, 2);
+  });
+
+  test('source_storage_entries 以 (sourceId, key) 为主键', () async {
+    final row = SourceStorageEntriesCompanion.insert(
+      sourceId: 'com.example.a',
+      key: 'k',
+      value: '1',
+    );
+    await db.into(db.sourceStorageEntries).insert(row);
+    await db
+        .into(db.sourceStorageEntries)
+        .insert(row.copyWith(sourceId: const Value('com.example.b')));
+    expect(
+      () => db.into(db.sourceStorageEntries).insert(row),
+      throwsA(isA<Exception>()),
+    );
   });
 
   test('watch 在写入后推送', () async {

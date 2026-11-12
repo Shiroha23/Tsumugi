@@ -283,6 +283,15 @@ export async function detail(id) { /* → Detail */ }
 export async function content(unitId) { /* → ComicContent | NovelContent | VideoContent | MusicContent */ }
 ```
 
+**返回值规范化**（客户端在解析为 §2 模型之前进行）：
+
+- `cover`、图片 / 流 / 字幕的 `url` 为相对地址时基于 `baseUrl` 解析为绝对地址；`id`、unit `id`、`nextPageId` 保持原样。
+- 清单 `headers` 合并到 `coverHeaders` 与图片 / 流的 `headers`（结果中的同名项优先）。
+- `images` / `streams` 的元素可以直接写成 URL 字符串，等价于 `{ url }`。
+- `explore()` 返回的数字 `id` 转为字符串；`detail()` 省略 `units` 时视为空数组。
+- 返回值不符合 §2 结构 → `E_PARSE`；未捕获的普通 JS 异常（没有 `code`）以及未知的 `code` 同样报告为 `E_PARSE`。
+- `script` 字段目前只支持内联源码（以相对路径引用的脚本返回 `E_UNSUPPORTED`）。
+
 ### 4.2 宿主 API（全局对象 `tsumugi`）
 
 所有 I/O 均为异步。**除此之外不存在任何宿主能力**（无 `fetch`、无文件系统、无定时器以外的原生 API）。
@@ -353,6 +362,46 @@ interface HtmlNode {
 }
 ```
 
+**细则**
+
+- `tsumugi` 及其各命名空间、`tsumugi.source`（含 `settings`）均被冻结。`settings` 为用户设置值，未设置的键取清单默认值。
+- `http.request`：`method` 不区分大小写，只允许上面列出的五种；`body` 为字符串时按 `text/plain` 发送，
+  为对象 / 数组时按 JSON 发送；`body` 与 `form` 不能同时给出。非 2xx 响应**不抛出**，由脚本检查 `status`；
+  `headers` 的名称为小写。`responseType: "json"` 时 `body` 为解析后的值（空响应体为 `null`，解析失败 → `E_PARSE`），
+  `"bytes"` 时为 **base64 字符串**。
+- `http.get` / `http.getJson`：非 2xx 抛出 `E_HTTP`（带 `status`），`getJson` 解析失败 → `E_PARSE`。
+- 所有 `http.*` 的错误码见 §6：网络错误 / 超时 → `E_NETWORK`，白名单外（含重定向）→ `E_HOST_NOT_ALLOWED`，
+  人机验证页 → `E_CHALLENGE`，响应体过大 → `E_LIMIT`。
+- `crypto`：字符串参数按 UTF-8 编码；摘要返回小写十六进制；`base64Decode` 的结果按 UTF-8 解码。
+  AES 的 `key` / `iv` 默认按 UTF-8，可用可选的 `keyEncoding` / `ivEncoding`（`"utf8"` | `"hex"` | `"base64"`）指定；
+  `data` 的明文按 UTF-8、密文按 `encoding`（默认 `base64`）。key 必须为 16 / 24 / 32 字节；CBC 需要 16 字节 iv，
+  CBC / ECB 使用 PKCS#7 填充；GCM 需要 iv（通常 12 字节），128 位认证标签附在密文末尾。
+  参数非法抛出普通异常；解密失败（填充 / 标签 / 编码错误）→ `E_PARSE`。
+- `storage`：值以 JSON 保存，`set(key, null)` 等同于 `remove(key)`；键长 1–256 字符。
+  单个值 JSON 编码后最多 1 Mi 字符，单个源总计最多 10 Mi 字符，超出 → `E_LIMIT`。卸载源时一并删除。
+- `cookies`：只操作本源的 Cookie 域（与 `http` 共用）；`url` 可为相对地址，必须在白名单内（否则 `E_HOST_NOT_ALLOWED`）。
+- `ui.openWebView`：`url` 必须在白名单内；`doneWhenUrlMatches` 为正则字符串。客户端尚未接入 WebView 时
+  返回 `E_UNSUPPORTED`。WebView 的等待时间同样计入单次调用总时长（§4.4）。
+- `ui.toast` 与 `log.*` 为发出即忘，同步返回（返回值无意义）；参数中的非字符串值按 JSON 序列化，单条最长 4000 字符（超出截断）。
+
+#### 4.2.1 `HtmlNode` 的跨边界表示
+
+脚本运行在 worker isolate 中的 QuickJS 里，解析得到的 DOM 留在同一 worker 的宿主（Dart）侧，
+脚本只持有**句柄**：
+
+- 宿主侧维护“句柄（正整数）→ DOM 节点”表；`html.parse` 返回文档节点的句柄，`select` / `xpath`
+  返回句柄数组，`text()` / `attr()` 等返回字符串。同一节点在一次调用内总是同一个句柄。
+- 客户端在脚本之前执行的受信任 prelude 把句柄包装成 `HtmlNode` 对象（句柄存放在私有字段中）；
+  原始的句柄函数不出现在 `tsumugi` 上，脚本也不能自行构造 `HtmlNode`。
+- 这些方法都是**同步**的（与 `crypto` 一样在 worker 内执行，不经过主 isolate）。
+- **句柄只在本次入口调用内有效**：调用结束后宿主释放全部 DOM，之后再使用旧的 `HtmlNode` 抛出异常。
+  需要跨调用保存的数据请提取成字符串。
+- 单次调用内最多 200 000 个句柄、累计解析 64 Mi 字符的文本，超出 → `E_LIMIT`（DOM 不在 JS 堆中，需单独限制）。
+- `text()` 返回去除首尾空白的文本内容；`html()` 为内部 HTML，`outerHtml()` 含节点自身；
+  文档节点的 `html()` / `outerHtml()` 均为整份文档。`absUrl(name)` 基于 `parse` 的 `baseUrl`（缺省为源的 `baseUrl`）解析属性值。
+- `xpath()` 结果中的属性 / 文本 / 原子值被包装成文本节点，可用 `text()` 读取。
+- `JSON.stringify(node)` 得到其 `outerHtml()`。
+
 ### 4.3 示例
 
 ```js
@@ -389,7 +438,10 @@ export async function search(keyword, page) {
 - 触发 `E_LIMIT` 后，客户端会丢弃该源的 JS 运行时并重新求值模块，**模块级变量会被重置**。
   需要跨调用保存的数据请使用 `tsumugi.storage`。
 - 宿主函数只能在入口调用进行期间使用；调用结束后才执行到的宿主调用会被拒绝。
-- 单次调用的 HTTP 请求数由宿主 HTTP API 计数（待接入）；响应体大小由网络层强制（§5）。
+- 单次调用的 HTTP 请求数由宿主 `tsumugi.http.*` 计数（每次 `request` / `get` / `getJson` 计一次，
+  自动重试与重定向不另计）；第 51 次请求以 `E_LIMIT` 拒绝（脚本可以 catch，但本次调用不能再发请求）。
+  计数按入口调用重置。响应体大小由网络层强制（§5）。
+- 一次入口调用结束（含超限）时，其进行中的网络请求被取消。
 
 ---
 
