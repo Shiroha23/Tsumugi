@@ -27,7 +27,7 @@
 | 网络 | dio + cookie_jar | 每个源独立 Cookie 域与拦截器 |
 | HTML 解析 | `html`（CSS 选择器） + XPath 库 | XPath 库选型待验证 |
 | JSON 路径 | JSONPath 实现库 | 选型待验证 |
-| JS 运行时 | QuickJS 绑定 | 需验证三平台可用性，见 §6 风险 |
+| JS 运行时 | [`qjs`](https://pub.dev/packages/qjs)（QuickJS-ng，MIT） | M0 已验证，三平台同一引擎；封装在 `core/engine/script`，见 §6.1 |
 | 数据库 | drift（SQLite） | |
 | 音视频 | media_kit（libmpv） | 视频与音乐共用 |
 | WebView | flutter_inappwebview | 用于登录 / 人机验证兜底 |
@@ -114,11 +114,63 @@ detail(id) → 章节/剧集/曲目列表 → content(itemId)
 
 ## 6. 风险与待验证项
 
-1. **QuickJS 绑定的跨平台可用性**（Windows / iOS 尤其）。MVP 前先做技术验证；备选方案：
-   iOS 用 JavaScriptCore，其他平台用 QuickJS，在 `core/engine/script` 抽象出统一接口。
+1. **QuickJS 绑定的跨平台可用性** —— M0 已完成验证，结论见 §6.1。
 2. **iOS 分发**：无法上架 App Store，CI 产出未签名 IPA，用户自签。
 3. **音乐后台播放**：需要各平台的媒体会话适配（Android 前台服务、iOS AVAudioSession、Windows SMTC）。
 4. **XPath / JSONPath 库质量**：需用 fixtures 做兼容性测试。
+
+### 6.1 JS 运行时选型结论（M0，2026-11）
+
+**结论：三平台统一使用 [`qjs`](https://pub.dev/packages/qjs) 0.2.x（QuickJS-ng 0.17），暂不需要 iOS 的
+JavaScriptCore 备选。** 规则引擎只依赖 `lib/core/engine/script/script_runtime.dart` 中的 `ScriptRuntime`
+接口，实现为 `QuickJsScriptRuntime`；将来若需更换引擎只替换实现。
+
+候选对比（2026-11 调研 pub.dev / GitHub）：
+
+| 包 | 引擎 | Win / Android / iOS | 许可证 | Promise ⇄ Future | 内存上限 | 执行中断 | `flutter test` 可直接跑 | 活跃度 |
+|---|---|---|---|---|---|---|---|---|
+| **qjs** ✅ | QuickJS-ng 0.17（C，FFI） | ✓ / ✓ / ✓ | MIT | ✓ 双向 | ✓ | ✓ deadline + 跨 isolate 中断句柄 | ✓（Dart build hooks） | 2026-11 仍在发版；单人维护 |
+| fjs | rquickjs（Rust，FRB） | ✓ / ✓ / ✓ | MIT | ✓ | ✓ | 有，较间接 | ✗ 需 Rust 工具链 / 预编译产物 | 活跃，114★；README 声明不面向不可信脚本 |
+| flutter_js | Android/Win QuickJS，iOS **JSC** | ✓ / ✓ / ✓ | MIT | ✓ | iOS 不支持 | ✗ | ✗ 需手动构建 dll 并设 PATH | 2026-01 后未发版，80 个未结 issue |
+| flutter_qjs_next | QuickJS（FFI 插件） | ✓ / ✓ / ✓ | MIT | ✓ | ✓ | ✓ 墙钟超时 | ✗ 需先构建插件 | 活跃，单人维护 |
+| jsf | QuickJS（FFI 插件） | ✓ / ✓ / ✓ | MIT | ✓ | ✓ | 仅同步执行超时 | ✗ 需先构建插件 | 活跃 |
+| flutter_qjs | QuickJS（旧版） | ✓ / ✓ / ✓ | MIT | ✓ | ✗ | ✗ | ✗ | pub 上自 2022 未发版 |
+| quickjs_runtime | QuickJS 2024-01 | ✓ / ✓ / ✓ | MIT | ✗ 仅同步宿主回调 | — | ✗ 无超时 | ✓ | 活跃 |
+
+选 `qjs` 的理由：
+
+- 唯一同时满足“宿主异步函数返回 Promise”“内存上限”“不可被脚本 catch 的执行中断”的候选，
+  且三平台是**同一个引擎**，脚本行为一致，避免 JSC/QuickJS 双实现的差异与双倍测试。
+- 原生库经 Dart build hooks（native assets）构建，`flutter test` / `dart test` 在任何开发机与
+  CI 上直接可用，无需额外的插件构建步骤；Windows release 包会自动带上 `qjs_dart.dll`。
+- 支持 ES 模块求值且默认禁用 `import`、可关闭 `eval` / `Function`，适合沙箱。
+- MIT，与 GPL-3.0 兼容；QuickJS-ng 本身为 MIT。
+
+验证范围（`test/core/engine/script/quickjs_script_runtime_test.dart`）：调用 ES 模块导出的 async 函数、
+宿主异步函数往返（含错误码透传）、同步宿主函数、死循环超时中断（含脚本内 try/catch、await 之后）、
+CPU 预算跨 await 累计、总时长上限、内存上限、栈上限、超限后运行时可继续使用、沙箱全局对象检查。
+本机（Windows）`flutter test` 与 `flutter build windows --release` 通过；Android / iOS 由 CI 构建验证。
+
+实现要点：
+
+- **CPU 时间**：每次进入 JS（调用导出、resolve 宿主 Promise）前按本次调用的剩余 CPU 预算设置
+  QuickJS 中断 deadline，退出时累计耗时；等待宿主 Future 的时间不计入。超限 → `E_LIMIT`。
+- **总时长**：Dart 侧计时器，超时即让本次调用失败（`E_LIMIT`），之后到达的宿主结果被丢弃。
+- **内存 / 栈**：`JSRuntimeConfig.memoryLimit` / `maxStackSize`，超限 → `E_LIMIT`。
+- **值传递**：跨边界只传 JSON 兼容值（JS 侧用初始化时缓存的 `JSON.stringify`）。
+- 宿主对象 `tsumugi` 在注入后冻结。
+
+已知限制与后续工作：
+
+- **JS 在调用方 isolate 上同步执行**，长计算会卡住该 isolate。M1 接入时把每个源的运行时放进
+  worker isolate（`qjs` 提供可跨 isolate 发送的中断句柄）；`ScriptRuntime` 接口已全部异步，无需改动调用方。
+- 同一运行时上的调用**串行执行**（宿主 Promise 需要归属到具体调用）。如需单源并发，可按调用开多个运行时。
+- 源脚本**不支持顶层 await**（模块同步求值）；已写入 source-spec §4.1。
+- 移动端只验证到“能编译打包”，真机 / 模拟器上的运行时加载尚未自动化验证，M1 加 integration test。
+- `qjs` 的 build hook 默认从其 GitHub Release 下载预编译库（sha256 写死在包内并校验），失败时回落到
+  本地用 `native_toolchain_c` 编译源码。需要可复现构建时可在 M1 评估改为强制源码编译。
+- `qjs` 为单人维护的新库（风险：维护中断）。缓解：引擎细节全部隔离在 `QuickJsScriptRuntime` 一个文件内，
+  其 C 桥接层很薄，必要时可 fork；fjs 作为第二候选。
 
 ## 7. 里程碑
 

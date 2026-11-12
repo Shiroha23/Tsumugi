@@ -661,6 +661,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.7.0"
+  qjs:
+    dependency: "direct main"
+    description:
+      name: qjs
+      sha256: "763b9ed226c6741dbe07c2c54257bb1440dce6b48ca36248f4ee8476d14265a2"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.2.3"
   recase:
     dependency: transitive
     description:
