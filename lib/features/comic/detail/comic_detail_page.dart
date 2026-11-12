@@ -2,12 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../../shared/widgets/cover_image.dart';
+import '../../../shared/history/providers.dart';
+import '../../../shared/image/source_image.dart';
+import '../../../shared/library/providers.dart';
 import '../../../shared/widgets/source_error_view.dart';
 import '../../../sources/model/common.dart';
 import '../../../sources/runtime/source_runtime.dart';
 import 'comic_detail_provider.dart';
-import 'comic_routes.dart';
+import '../reader/reader_providers.dart' show readingOrder;
+import '../reader/reader_route.dart';
 
 /// 漫画详情：封面、标题、作者、简介、标签、状态、章节列表（多线路、正序 / 倒序）。
 class ComicDetailPage extends ConsumerStatefulWidget {
@@ -65,6 +68,12 @@ class _ComicDetailPageState extends ConsumerState<ComicDetailPage> {
     final index = _group.clamp(0, groups.length - 1);
     final units = groups.isEmpty ? const <Unit>[] : groups[index].units;
     final ordered = _descending ? units.reversed.toList() : units;
+    final readUnits =
+        ref.watch(readUnitIdsProvider(widget.sourceId, widget.itemId)).value ??
+        const <String>{};
+    final progress = ref
+        .watch(itemProgressProvider(widget.sourceId, widget.itemId))
+        .value;
     final preview = widget.preview;
     final coverHeaders =
         preview != null &&
@@ -77,7 +86,12 @@ class _ComicDetailPageState extends ConsumerState<ComicDetailPage> {
       slivers: [
         SliverAppBar(pinned: true, title: Text(detail.title)),
         SliverToBoxAdapter(
-          child: _Header(detail: detail, coverHeaders: coverHeaders),
+          child: _Header(
+            sourceId: widget.sourceId,
+            itemId: widget.itemId,
+            detail: detail,
+            coverHeaders: coverHeaders,
+          ),
         ),
         SliverToBoxAdapter(
           child: Padding(
@@ -125,11 +139,28 @@ class _ComicDetailPageState extends ConsumerState<ComicDetailPage> {
             itemCount: ordered.length,
             itemBuilder: (context, i) {
               final unit = ordered[i];
+              final read = readUnits.contains(unit.id);
+              final current = progress?.unitId == unit.id;
+              final muted = Theme.of(context).colorScheme.onSurfaceVariant;
               return ListTile(
-                title: Text(unit.title),
+                title: Text(
+                  unit.title,
+                  style: read && !current ? TextStyle(color: muted) : null,
+                ),
                 subtitle: unit.updatedAt == null ? null : Text(unit.updatedAt!),
+                trailing: current
+                    ? const Icon(Icons.bookmark, semanticLabel: '上次读到')
+                    : read
+                    ? Icon(Icons.check, color: muted, semanticLabel: '已读')
+                    : null,
+                // 打开上次读到的章节时从记录的页码继续。
                 onTap: () => context.push(
-                  ComicRoutes.reader(widget.sourceId, widget.itemId, unit.id),
+                  comicReaderLocation(
+                    widget.sourceId,
+                    widget.itemId,
+                    unit.id,
+                    page: current ? progress?.page : null,
+                  ),
                 ),
               );
             },
@@ -164,8 +195,15 @@ class _Bare extends StatelessWidget {
 }
 
 class _Header extends StatefulWidget {
-  const _Header({required this.detail, required this.coverHeaders});
+  const _Header({
+    required this.sourceId,
+    required this.itemId,
+    required this.detail,
+    required this.coverHeaders,
+  });
 
+  final String sourceId;
+  final String itemId;
   final Detail detail;
   final Headers? coverHeaders;
 
@@ -197,10 +235,11 @@ class _HeaderState extends State<_Header> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               CoverImage(
+                sourceId: widget.sourceId,
                 url: detail.cover,
                 headers: widget.coverHeaders,
                 width: 112,
-                height: 156,
+                aspectRatio: 112 / 156,
               ),
               const SizedBox(width: 16),
               Expanded(
@@ -254,18 +293,104 @@ class _HeaderState extends State<_Header> {
             ),
           ],
           const SizedBox(height: 12),
-          const Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              // TODO(m2-integration): 接入书架会话的仓库后启用：加入 / 移出书架。
-              OutlinedButton(onPressed: null, child: Text('加入书架')),
-              // TODO(m2-integration): 按阅读进度跳到上次阅读的章节。
-              FilledButton(onPressed: null, child: Text('继续阅读')),
-            ],
+          _Actions(
+            sourceId: widget.sourceId,
+            itemId: widget.itemId,
+            detail: detail,
+            coverHeaders: widget.coverHeaders,
           ),
         ],
       ),
+    );
+  }
+}
+
+/// 书架与阅读入口：加入 / 移出书架；有进度时“继续阅读”，否则从第一章“开始阅读”。
+class _Actions extends ConsumerWidget {
+  const _Actions({
+    required this.sourceId,
+    required this.itemId,
+    required this.detail,
+    required this.coverHeaders,
+  });
+
+  final String sourceId;
+  final String itemId;
+  final Detail detail;
+  final Headers? coverHeaders;
+
+  LibraryItem get _item => LibraryItem(
+    sourceId: sourceId,
+    itemId: itemId,
+    title: detail.title,
+    mediaType: MediaType.comic,
+    cover: detail.cover,
+    coverHeaders: coverHeaders,
+  );
+
+  Future<void> _toggleLibrary(WidgetRef ref, bool inLibrary) async {
+    final repo = ref.read(libraryRepositoryProvider);
+    if (inLibrary) {
+      await repo.remove(sourceId, itemId);
+    } else {
+      await repo.add(_item);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final inLibraryAsync = ref.watch(isInLibraryProvider(sourceId, itemId));
+    final inLibrary = inLibraryAsync.value ?? false;
+    final progress = ref.watch(itemProgressProvider(sourceId, itemId)).value;
+    final first = readingOrder(detail).firstOrNull;
+    final muted = TextStyle(
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+    );
+
+    final VoidCallback? read = switch ((progress, first)) {
+      (final p?, _) => () => context.push(
+        comicReaderLocation(sourceId, itemId, p.unitId, page: p.page),
+      ),
+      (null, final u?) => () => context.push(
+        comicReaderLocation(sourceId, itemId, u.id),
+      ),
+      _ => null,
+    };
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            OutlinedButton.icon(
+              icon: Icon(
+                inLibrary ? Icons.bookmark : Icons.bookmark_add_outlined,
+              ),
+              label: Text(inLibrary ? '已在书架' : '加入书架'),
+              onPressed: inLibraryAsync.hasValue
+                  ? () => _toggleLibrary(ref, inLibrary)
+                  : null,
+            ),
+            FilledButton.icon(
+              icon: const Icon(Icons.menu_book),
+              label: Text(progress != null ? '继续阅读' : '开始阅读'),
+              onPressed: read,
+            ),
+          ],
+        ),
+        if (progress != null) ...[
+          const SizedBox(height: 6),
+          Text(
+            '上次读到：${progress.unitTitle}'
+            '${progress.page == null ? '' : ' 第 ${progress.page! + 1} 页'}',
+            style: muted,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ],
     );
   }
 }

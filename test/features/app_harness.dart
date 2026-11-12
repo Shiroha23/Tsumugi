@@ -3,7 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:tsumugi/app/router.dart';
+import 'package:tsumugi/core/network/source_http_client.dart';
 import 'package:tsumugi/core/storage/app_database.dart';
+import 'package:tsumugi/features/comic/reader/reader_preferences.dart';
+import 'package:tsumugi/shared/image/image_cache.dart';
+import 'package:tsumugi/shared/image/image_providers.dart';
 import 'package:tsumugi/sources/registry/providers.dart';
 
 import '../core/storage/test_database.dart';
@@ -20,6 +24,13 @@ class AppHarness {
     overrides: [
       appDatabaseProvider.overrideWithValue(db),
       sourceFactoriesProvider.overrideWithValue(SourceFactories([factory])),
+      // 图片不走网络与磁盘：封面 / 漫画页显示失败占位即可。
+      diskImageCacheProvider.overrideWithValue(const NoDiskImageCache()),
+      imageHttpClientsProvider.overrideWithValue(const _NoImageClients()),
+      // 阅读器偏好默认存文件（path_provider），测试中用内存。
+      readerPreferencesStoreProvider.overrideWithValue(
+        MemoryReaderPreferencesStore(),
+      ),
     ],
   );
 
@@ -56,4 +67,12 @@ class AppHarness {
     await tester.pumpAndSettle();
     await tester.runAsync(db.close);
   }
+}
+
+class _NoImageClients implements ImageHttpClients {
+  const _NoImageClients();
+
+  @override
+  Future<SourceHttpClient> clientFor(String sourceId) =>
+      Future.error(StateError('测试中不加载图片'));
 }

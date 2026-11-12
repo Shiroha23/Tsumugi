@@ -64,13 +64,14 @@ String fakeManifestJson(
 });
 
 class FakeSource implements DisposableSource {
-  FakeSource(this.manifest, {this.onSearch, this.onDetail});
+  FakeSource(this.manifest, {this.onSearch, this.onDetail, this.onContent});
 
   @override
   final SourceManifest manifest;
   final Future<PageResult<SearchItem>> Function(String keyword, int page)?
   onSearch;
   final Future<Detail> Function(String id)? onDetail;
+  final Future<MediaContent> Function(String unitId)? onContent;
 
   final searches = <(String, int)>[];
   final details = <String>[];
@@ -100,6 +101,7 @@ class FakeSource implements DisposableSource {
 
   @override
   Future<MediaContent> content(String unitId) =>
+      onContent?.call(unitId) ??
       Future.error(const SourceException(SourceErrorCode.unsupported));
 
   @override

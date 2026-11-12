@@ -6,7 +6,7 @@ import '../../shared/library/providers.dart';
 import '../../shared/widgets/empty_state.dart';
 import '../../sources/model/common.dart';
 import '../sources/labels.dart';
-import 'cover_image.dart';
+import '../../shared/image/source_image.dart';
 import 'open_item.dart';
 
 /// 书架页：“书架”与“历史”两个标签。
@@ -171,8 +171,10 @@ class _ShelfTile extends StatelessWidget {
           // 封面占满标题之外的高度：标题换行或系统字号放大时封面缩小，而不是溢出。
           Expanded(
             child: CoverImage(
+              sourceId: item.sourceId,
               url: item.cover,
               headers: item.coverHeaders,
+              borderRadius: const BorderRadius.all(Radius.circular(8)),
               expand: true,
             ),
           ),
@@ -209,6 +211,7 @@ class _HistoryTab extends ConsumerWidget {
             leading: SizedBox(
               width: 42,
               child: CoverImage(
+                sourceId: p.item.sourceId,
                 url: p.item.cover,
                 headers: p.item.coverHeaders,
               ),

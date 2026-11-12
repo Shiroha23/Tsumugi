@@ -128,6 +128,8 @@ class ImageErrorPlaceholder extends StatelessWidget {
 }
 
 /// 封面：固定比例（默认 3:4）、圆角、无地址时显示占位。用于书架 / 搜索 / 详情。
+///
+/// [expand] 为 true 时不固定比例，填满父组件给的空间（裁剪显示），用于高度受限的网格单元。
 class CoverImage extends StatelessWidget {
   const CoverImage({
     super.key,
@@ -137,6 +139,7 @@ class CoverImage extends StatelessWidget {
     this.width,
     this.aspectRatio = 3 / 4,
     this.borderRadius = const BorderRadius.all(Radius.circular(6)),
+    this.expand = false,
   });
 
   final String sourceId;
@@ -149,34 +152,34 @@ class CoverImage extends StatelessWidget {
   final double? width;
   final double aspectRatio;
   final BorderRadius borderRadius;
+  final bool expand;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final url = this.url;
+    final image = ClipRRect(
+      borderRadius: borderRadius,
+      child: ColoredBox(
+        color: scheme.surfaceContainerHighest,
+        child: url == null || url.isEmpty
+            ? Center(child: Icon(Icons.image_outlined, color: scheme.outline))
+            : SourceImage(
+                sourceId: sourceId,
+                image: ImageRef(url: url, headers: headers),
+                fit: BoxFit.cover,
+                width: double.infinity,
+                height: double.infinity,
+                placeholder: const SizedBox.shrink(),
+                errorWidget: (_, _, retry) =>
+                    ImageErrorPlaceholder(onRetry: retry, compact: true),
+              ),
+      ),
+    );
+    if (expand) return SizedBox(width: width, child: image);
     return SizedBox(
       width: width,
-      child: AspectRatio(
-        aspectRatio: aspectRatio,
-        child: ClipRRect(
-          borderRadius: borderRadius,
-          child: ColoredBox(
-            color: scheme.surfaceContainerHighest,
-            child: url == null || url.isEmpty
-                ? Icon(Icons.image_outlined, color: scheme.outline)
-                : SourceImage(
-                    sourceId: sourceId,
-                    image: ImageRef(url: url, headers: headers),
-                    fit: BoxFit.cover,
-                    width: double.infinity,
-                    height: double.infinity,
-                    placeholder: const SizedBox.shrink(),
-                    errorWidget: (_, _, retry) =>
-                        ImageErrorPlaceholder(onRetry: retry, compact: true),
-                  ),
-          ),
-        ),
-      ),
+      child: AspectRatio(aspectRatio: aspectRatio, child: image),
     );
   }
 }

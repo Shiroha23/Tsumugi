@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../shared/widgets/cover_image.dart';
+import '../../shared/image/source_image.dart';
 import '../../shared/widgets/empty_state.dart';
 import '../../shared/widgets/source_error_view.dart';
 import '../../sources/model/common.dart';
@@ -211,10 +211,11 @@ class _ResultTile extends StatelessWidget {
     ].join('\n');
     return ListTile(
       leading: CoverImage(
+        sourceId: sourceId,
         url: item.cover,
         headers: item.coverHeaders,
         width: 44,
-        height: 60,
+        aspectRatio: 44 / 60,
       ),
       title: Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: subtitle.isEmpty
