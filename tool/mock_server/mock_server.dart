@@ -226,6 +226,7 @@ class MockServer {
       case '/large':
         final n = int.tryParse(q['bytes'] ?? '') ?? 1024;
         res.headers.contentType = ContentType.binary;
+        res.contentLength = n;
         const chunk = 64 * 1024;
         for (var sent = 0; sent < n; sent += chunk) {
           res.add(List.filled(chunk < n - sent ? chunk : n - sent, 0x61));

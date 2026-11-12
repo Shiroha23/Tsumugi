@@ -316,6 +316,30 @@ void main() {
       expect(sw.elapsedMilliseconds, lessThan(1000));
       await pending;
     });
+
+    test('在限速队列中等待时取消，立即失败且不发出请求', () async {
+      final limited = mockClient(
+        server,
+        rateLimit: const RateLimitConfig(
+          requests: 1,
+          per: Duration(seconds: 30),
+        ),
+      );
+      addTearDown(limited.close);
+      await limited.request(const NetRequest('/echo?q=first'));
+
+      final before = server.requests.length;
+      final cancel = NetCancellation();
+      final queued = limited.request(
+        NetRequest('/echo?q=queued', cancellation: cancel),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      final sw = Stopwatch()..start();
+      cancel.cancel();
+      await expectLater(queued, throwsNet(NetworkErrorKind.cancelled));
+      expect(sw.elapsedMilliseconds, lessThan(1000));
+      expect(server.requests.length, before);
+    });
   });
 
   group('重试', () {
@@ -463,6 +487,17 @@ void main() {
         small.request(const NetRequest('/large?bytes=200000')),
         throwsNet(NetworkErrorKind.responseTooLarge),
       );
+    });
+
+    test('HEAD 声明的大小超过上限时不报错（没有响应体）', () async {
+      final small = mockClient(server, maxResponseBytes: 1000);
+      addTearDown(small.close);
+      final res = await small.request(
+        const NetRequest('/large?bytes=200000', method: 'HEAD'),
+      );
+      expect(res.status, 200);
+      expect(res.header('content-length'), '200000');
+      expect(res.bytes, isEmpty);
     });
 
     test('不支持的 method → invalidRequest', () async {

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tsumugi/core/network/rate_limiter.dart';
 
@@ -59,5 +61,25 @@ void main() {
     ]);
     expect(order, [0, 1, 2, 3]);
     expect(now, const Duration(seconds: 3));
+  });
+
+  test('abort 后立即返回 false，不消耗令牌，也不拖慢后面的调用', () async {
+    var now = Duration.zero;
+    final bucket = TokenBucket(
+      requests: 1,
+      per: const Duration(seconds: 10),
+      clock: () => now,
+      delay: (d) => Completer<void>().future, // 时间不前进：只有 abort 能让等待结束
+    );
+    expect(await bucket.acquire(), isTrue);
+
+    final abort = Completer<void>();
+    final queued = bucket.acquire(abort: abort.future);
+    abort.complete();
+    expect(await queued, isFalse);
+
+    // 令牌恢复后，下一个调用拿到的就是那一个令牌
+    now += const Duration(seconds: 10);
+    expect(await bucket.acquire(), isTrue);
   });
 }

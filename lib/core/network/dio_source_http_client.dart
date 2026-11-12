@@ -206,7 +206,15 @@ class DioSourceHttpClient implements SourceHttpClient {
     final retryable = _idempotent.contains(method);
     for (var attempt = 0; ; attempt++) {
       _throwIfCancelled(cancellation, uri);
-      await _bucket?.acquire();
+      if (_bucket case final bucket?) {
+        // 排队等待期间被取消时立即失败，且不消耗令牌。
+        final acquired = await bucket.acquire(
+          abort: cancellation?.whenCancelled,
+        );
+        if (!acquired) {
+          throw NetworkException(NetworkErrorKind.cancelled, uri: uri);
+        }
+      }
       _throwIfCancelled(cancellation, uri);
 
       final canRetry = retryable && attempt < config.maxRetries;
@@ -306,12 +314,20 @@ class DioSourceHttpClient implements SourceHttpClient {
           responseType: ResponseType.stream,
         ),
       );
-      final bytes = await _readLimited(response.data!, uri, token);
-      return _RawResponse(
-        response.statusCode ?? 0,
-        response.headers.map,
-        bytes,
+      final status = response.statusCode ?? 0;
+      // HEAD / 1xx / 204 / 304 没有响应体，Content-Length 只是资源大小，不做预检。
+      final bodyless =
+          method == 'HEAD' ||
+          (status >= 100 && status < 200) ||
+          status == 204 ||
+          status == 304;
+      final bytes = await _readLimited(
+        response.data!,
+        uri,
+        token,
+        checkDeclaredLength: !bodyless,
       );
+      return _RawResponse(status, response.headers.map, bytes);
     } on DioException catch (e) {
       throw switch (e.type) {
         DioExceptionType.cancel => NetworkException(
@@ -340,15 +356,16 @@ class DioSourceHttpClient implements SourceHttpClient {
   Future<Uint8List> _readLimited(
     ResponseBody body,
     Uri uri,
-    CancelToken token,
-  ) async {
+    CancelToken token, {
+    required bool checkDeclaredLength,
+  }) async {
     final limit = config.maxResponseBytes;
     NetworkException tooLarge() => NetworkException(
       NetworkErrorKind.responseTooLarge,
       message: 'response body exceeds $limit bytes',
       uri: uri,
     );
-    if (body.contentLength > limit) {
+    if (checkDeclaredLength && body.contentLength > limit) {
       token.cancel('too large');
       throw tooLarge();
     }

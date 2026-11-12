@@ -46,25 +46,41 @@ class TokenBucket {
     }
   }
 
-  /// 取得一个令牌；返回时即可发出请求。
-  Future<void> acquire() {
+  /// 取得一个令牌。返回 true 时即可发出请求。
+  ///
+  /// [abort] 完成时（例如请求被取消）立即返回 false，且不消耗令牌；
+  /// 排在其后的调用不会因它而多等。
+  Future<bool> acquire({Future<void>? abort}) {
     final prev = _tail;
     final done = Completer<void>();
     _tail = done.future;
-    return prev.then((_) async {
+    final result = Completer<bool>();
+    var aborted = false;
+    abort?.then((_) {
+      aborted = true;
+      if (!result.isCompleted) result.complete(false);
+    });
+
+    () async {
       try {
-        while (true) {
+        await prev;
+        while (!aborted) {
           _refill();
           if (_tokens >= 1) {
             _tokens -= 1;
+            result.complete(true);
             return;
           }
           final waitMicros = ((1 - _tokens) / _tokensPerMicro).ceil();
-          await _delay(Duration(microseconds: waitMicros));
+          await Future.any([
+            _delay(Duration(microseconds: waitMicros)),
+            ?abort,
+          ]);
         }
       } finally {
         done.complete();
       }
-    });
+    }();
+    return result.future;
   }
 }
