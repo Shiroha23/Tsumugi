@@ -97,7 +97,7 @@ docs/
 - **数据库**：`core/storage/app_database.dart` 中的 `AppDatabase`（drift），文件为应用支持目录下的
   `tsumugi.sqlite`（`getApplicationSupportDirectory`，不放在用户“文档”目录），SQL 在后台 isolate 执行。
   通过 `appDatabaseProvider` 获取，测试中用内存 SQLite 覆盖。
-- **迁移策略**：当前 `schemaVersion = 2`（v2 新增 `source_storage_entries`）。每次改表结构：`schemaVersion` 加一 →
+- **迁移策略**：当前 `schemaVersion = 3`（v2 新增 `source_storage_entries`；v3 新增书架与进度三张表，见 §4.2）。每次改表结构：`schemaVersion` 加一 →
   `dart run drift_dev make-migrations`（把新 schema 导出到 `drift_schemas/`，生成 steps 文件与
   `test/core/storage/migrations/` 下的迁移测试）→ 在 `onUpgrade` 中用 `stepByStep` 写每一步。
   已发布的 `drift_schemas/*.json` 不可修改。数据库版本高于客户端时拒绝打开（不支持降级）。
@@ -115,6 +115,25 @@ docs/
   经 `core/storage/source_storage.dart` 的 `SourceStorage` 访问；`SourceRegistry.remove` 在同一事务中删除该源的数据。
   用量按 Unicode 码点计（与 SQLite `length()` 一致）；`write(quota:)` 在一个 drift 事务中完成“算用量 → 查配额 → 写入”，
   `isCancelled` 用于丢弃已结束调用排队中的写操作。
+
+### 4.2 书架、进度与历史（M2）
+
+- **书架表** `library_entries`：主键 `(sourceId, itemId)`（`itemId` 即 `SearchItem.id`）；保存加入时的
+  标题 / 封面 / 封面请求头（JSON 文本）/ `mediaType` 快照，以及加入时间、元数据更新时间、可选分类与手动排序值。
+  源被删除或失效后书架仍可展示。列表顺序：`sortOrder` 升序，再按 `updatedAt` 倒序。
+- **条目进度表** `item_progress_entries`：主键 `(sourceId, itemId)`，每个条目只保留**最新**一条进度
+  （unit id / 标题、漫画页码（从 0 开始）与总页数、预留给小说 / 视频 / 音乐的 `position`、更新时间），
+  并带一份标题 / 封面快照。
+- **历史由条目进度表派生，不单独建表**：历史 = 按 `updatedAt` 倒序的条目进度（有索引）。理由：M2 只需要
+  “最近读过什么、读到哪”，与“最新进度”是同一份数据；单独的历史表会带来两处写入与一致性问题。
+  未来若需要逐次阅读日志（阅读时长统计等）再另加追加写的日志表。删除历史 = 删除条目进度
+  （默认连同 unit 进度一起删，可选保留）。历史与书架相互独立：未加入书架的条目也有历史，移出书架不删进度。
+- **unit 进度表** `unit_progress_entries`：主键 `(sourceId, itemId, unitId)`，记录每个 unit 自己的位置与已读标记。
+  到达最后一页（`page >= pageCount - 1`）或调用方显式标记时置为已读，之后的进度不会清除已读，取消须显式调用。
+- 访问层在 `shared/library/`（`LibraryRepository`）与 `shared/history/`（`HistoryRepository`），
+  Riverpod provider 见各目录的 `providers.dart`。书架页点击条目通过可覆盖的 `openItemProvider`
+  （`features/library/open_item.dart`）跳转，书架不直接依赖详情页路由。
+- 数据库中 `mediaType` 为未知值（更高版本客户端写入）的行在读取时被跳过。
 
 ## 5. 关键流程
 

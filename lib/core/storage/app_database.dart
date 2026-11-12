@@ -18,12 +18,20 @@ part 'app_database.g.dart';
 ///   然后在 [migration] 的 `onUpgrade` 中用 `stepByStep` 写出 from→to 的每一步。
 /// - 已发布的 `drift_schemas/*.json` 不可修改。
 /// - 不支持降级：数据库版本高于 [schemaVersion]（用户装回旧版客户端）时拒绝打开，避免损坏数据。
-@DriftDatabase(tables: [InstalledSources, SourceStorageEntries])
+@DriftDatabase(
+  tables: [
+    InstalledSources,
+    SourceStorageEntries,
+    LibraryEntries,
+    ItemProgressEntries,
+    UnitProgressEntries,
+  ],
+)
 class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -36,6 +44,13 @@ class AppDatabase extends _$AppDatabase {
         // v2：脚本源的按源 KV 存储（tsumugi.storage）。
         from1To2: (m, schema) async {
           await m.createTable(schema.sourceStorageEntries);
+        },
+        // v3：书架、条目进度（兼作历史）、按 unit 的进度与已读标记。
+        from2To3: (m, schema) async {
+          await m.createTable(schema.libraryEntries);
+          await m.createTable(schema.itemProgressEntries);
+          await m.createTable(schema.unitProgressEntries);
+          await m.createIndex(schema.itemProgressUpdatedAt);
         },
       )(m, from, to);
     },
