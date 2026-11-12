@@ -2,13 +2,25 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tsumugi/app/app.dart';
+import 'package:tsumugi/core/storage/app_database.dart';
+
+import '../core/storage/test_database.dart';
 
 Future<void> _pump(WidgetTester tester, Size size) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.reset);
-  await tester.pumpWidget(const ProviderScope(child: TsumugiApp()));
+  final db = openTestDatabase();
+  addTearDown(db.close);
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [appDatabaseProvider.overrideWithValue(db)],
+      child: const TsumugiApp(),
+    ),
+  );
   await tester.pumpAndSettle();
+  // 先卸载，让 drift 的 stream 在数据库关闭前结束。
+  addTearDown(() => tester.pumpWidget(const SizedBox()));
 }
 
 void main() {

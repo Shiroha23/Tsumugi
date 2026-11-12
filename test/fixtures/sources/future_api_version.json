@@ -1,0 +1,5 @@
+{
+  "apiVersion": 99,
+  "id": "com.example.future",
+  "manifest": { "shape": "unknown to apiVersion 1" }
+}
