@@ -192,7 +192,7 @@ interface MusicContent {
 - `list` 表达式总是取全部匹配（无需 `[]`），且不做默认提取：每个匹配节点（HTML 元素或 JSON 值）
   作为 `fields` 中各表达式的输入。
 - 列表条目缺少 `id` 或 `title` 时跳过该条目；unit 缺少 `id` 时跳过。unit 的 `index` 为（反转后的）序号，从 0 开始。
-- `hasMore`：结果非空即为 true，但单个值 `false` / `0` 视为 false（便于 JSON 接口）。省略时为 false。
+- `hasMore`：结果非空即为 true（匹配到的节点即使没有文本也算），但单个值 `false` / `0` 视为 false（便于 JSON 接口）。省略时为 false。
 - `explore` 分类的 id 为其在数组中的下标（`"0"`、`"1"`…）。
 - `POST` 且规则未给出 `Content-Type` 时：`body` 以 `{` 或 `[` 开头按 `application/json`，否则按
   `application/x-www-form-urlencoded`。
@@ -260,7 +260,7 @@ interface MusicContent {
 - 管道：中间步骤没有 `@提取` 时把原始节点传给下一步（如 `css:#intro |> css:b`）；上一步为多值时，
   css / xpath / json / regex 步骤对每个值分别求值后拼接。只要任一步骤带 `[]`，结果即为多值。
   css / xpath 的输入为字符串时按 HTML 解析，json 的输入为字符串时按 JSON 解析，regex 作用于元素时匹配其 outerHtml。
-- 任一步骤为空或失败，整条管道为空，进而触发 `||` 回退。
+- 任一步骤为空（包括提取出的空字符串）或失败，整条管道为空，进而触发 `||` 回退。
 - `js:` 之后是一个 **JS 表达式**（不是语句），其值即结果；`result` 为上一步的值（多值时为数组，
   作为首个步骤时：对整份响应为原始文本，对列表条目为其文本或 JSON 值），只能是 JSON 兼容值。返回数组即为多值，返回 `null` / `undefined` 即为空。
   同一个源的所有 `js:` 片段在同一个沙箱中执行（限制同 §4.4），沙箱中不提供 `tsumugi` 宿主 API，

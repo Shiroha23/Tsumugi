@@ -239,6 +239,25 @@ void main() {
       ]);
     });
 
+    test('empty extracted intermediate value stops the pipeline', () async {
+      const html = '<img data-src="" src="/valid.jpg">';
+      expect(
+        await engine.string(
+          'css:img@data-src |> regex:(.*) || css:img@src',
+          html,
+        ),
+        '/valid.jpg',
+      );
+      // 没有文本的节点仍会传给下一步。
+      expect(
+        await engine.string(
+          'css:p |> css:img@src',
+          '<p><img src="/a.jpg"></p>',
+        ),
+        '/a.jpg',
+      );
+    });
+
     test('empty intermediate result stops the pipeline', () async {
       expect(await engine.string('css:.none |> css:a', page), isNull);
       expect(logs, isEmpty);
@@ -253,6 +272,15 @@ void main() {
       expect(await engine.truthy(r'json:$.code', data), isFalse);
       expect(await engine.truthy(r'json:$.data.total', data), isTrue);
       expect(await engine.truthy(null, page), isFalse);
+    });
+
+    test('truthy keeps textless nodes', () async {
+      const html =
+          '<div class="pagination"><a class="next" href="?p=2">'
+          '<img src="next.png"></a></div>';
+      expect(await engine.truthy('css:.pagination .next', html), isTrue);
+      expect(await engine.truthy('css:.next@href', html), isTrue);
+      expect(await engine.truthy('css:.next@title', html), isFalse);
     });
 
     test('nodes ignore [] and default extraction', () async {
@@ -289,6 +317,7 @@ void main() {
         'result.nope()',
         'syntax error here (',
         '({ title: result })',
+        '"/images/" + result',
       ];
       late ScriptJsEvaluator js;
 
@@ -341,6 +370,16 @@ void main() {
         expect(
           await engine.string(r'json:$.title', nodes.single),
           'Example Title',
+        );
+      });
+
+      test('empty extracted value does not reach js', () async {
+        expect(
+          await engine.string(
+            'css:img@data-src |> js:"/images/" + result || css:img@src',
+            '<img data-src="" src="/valid.jpg">',
+          ),
+          '/valid.jpg',
         );
       });
 

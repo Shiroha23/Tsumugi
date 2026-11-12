@@ -89,12 +89,16 @@ class ExpressionEngine {
     for (final v in await values(source, input, nodes: true)) ?v,
   ];
 
-  /// 结果是否非空（用于 `hasMore`）。字符串 `false` / `0` 视为假。
+  /// 结果是否非空（用于 `hasMore`）：匹配到节点即为真（即使节点没有文本），
+  /// 单个标量值 `false` / `0` 视为假。
   Future<bool> truthy(String? source, Object? input) async {
-    final s = await strings(source, input);
-    if (s.isEmpty) return false;
-    final first = s.first.toLowerCase();
-    return !(s.length == 1 && (first == 'false' || first == '0'));
+    final v = await values(source, input, nodes: true);
+    if (v.isEmpty) return false;
+    if (v.length == 1 && v.first is! dom.Node) {
+      final s = stringify(v.first)?.toLowerCase();
+      return !(s == null || s.isEmpty || s == 'false' || s == '0');
+    }
+    return true;
   }
 
   /// 原始求值结果。未带 `[]` 时至多一个元素。
@@ -161,6 +165,11 @@ class ExpressionEngine {
         _log('表达式 `${expr.source}` 的步骤 `$step` 求值失败: $e');
         return const [];
       }
+      // 提取出的空字符串视为缺失，不再传给下一步；没有文本的节点保留。
+      values = [
+        for (final v in values)
+          if (v != null && !(v is String && v.trim().isEmpty)) v,
+      ];
       if (values.isEmpty) return const [];
     }
     return multi ? values : values.take(1).toList();
