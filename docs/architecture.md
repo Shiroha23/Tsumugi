@@ -135,6 +135,18 @@ detail(id) → 章节/剧集/曲目列表 → content(itemId)
   music : StreamRef + 可选歌词        → media_kit + 后台播放服务
 ```
 
+**图片加载（M2，`shared/image/`）**：所有源图片（封面、漫画页）经 `SourceImageLoader` 加载：
+内存 LRU（编码后字节，默认 64 MB）→ 磁盘 LRU（应用缓存目录 `images/`，默认 512 MB，
+键 = sha256(sourceId + url)）→ 该源的 `SourceHttpClient`（因此遵守白名单、限速、默认 headers；
+`ImageRef.headers` 随请求发送）。同一图片的并发请求合并，全局并发上限 6；超时 / 连接错误额外重试 1 次，
+字节无法解码时清除缓存条目。界面使用 `SourceImageProvider`（`ImageProvider`）或 `SourceImage` / `CoverImage` 组件，
+不直接使用 `Image.network`。已知限制：网络层只在响应读完后返回，下载进度目前为不确定进度。
+
+**漫画阅读器（M2，`features/comic/reader/`）**：路由 `/comic/:sourceId/:itemId/read/:unitId?page=N`
+（各段 URL 编码，`page` 从 0 开始）；纵向滚动 / 左→右 / 右→左三种模式（偏好存于应用支持目录
+`comic_reader.json`）；章节列表取自 `detail(itemId)`。阅读进度不直接写库，经
+`comicReaderProgressSinkProvider` 回调交给书架 / 历史层。
+
 ### 5.3 人机验证 / 登录
 
 网络层检测到挑战（如 403/503 + 特征）或源脚本主动请求时，弹出 WebView 让**用户手动**完成，

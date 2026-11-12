@@ -1,6 +1,7 @@
 import 'package:go_router/go_router.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import '../features/comic/reader/reader_route.dart';
 import '../features/library/library_page.dart';
 import '../features/search/search_page.dart';
 import '../features/settings/settings_page.dart';
@@ -14,6 +15,9 @@ abstract final class Routes {
   static const search = '/search';
   static const sources = '/sources';
   static const settings = '/settings';
+
+  /// 漫画阅读器；地址用 `comicReaderLocation(...)` 生成。
+  static const comicReader = comicReaderRoutePath;
 }
 
 @Riverpod(keepAlive: true)
@@ -57,6 +61,10 @@ GoRouter router(Ref ref) {
             ],
           ),
         ],
+      ),
+      GoRoute(
+        path: Routes.comicReader,
+        builder: (_, state) => comicReaderPageFromState(state),
       ),
     ],
   );
