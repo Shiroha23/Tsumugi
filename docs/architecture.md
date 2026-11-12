@@ -88,6 +88,26 @@ tool/
 docs/
 ```
 
+### 4.1 存储与源管理（M1）
+
+- **数据库**：`core/storage/app_database.dart` 中的 `AppDatabase`（drift），文件为应用支持目录下的
+  `tsumugi.sqlite`（`getApplicationSupportDirectory`，不放在用户“文档”目录），SQL 在后台 isolate 执行。
+  通过 `appDatabaseProvider` 获取，测试中用内存 SQLite 覆盖。
+- **迁移策略**：当前 `schemaVersion = 1`。每次改表结构：`schemaVersion` 加一 →
+  `dart run drift_dev make-migrations`（把新 schema 导出到 `drift_schemas/`，生成 steps 文件与
+  `test/core/storage/migrations/` 下的迁移测试）→ 在 `onUpgrade` 中用 `stepByStep` 写每一步。
+  已发布的 `drift_schemas/*.json` 不可修改。数据库版本高于客户端时拒绝打开（不支持降级）。
+- **已安装源表** `installed_sources`：清单 JSON 原文是唯一事实来源；`name / type / version /
+  apiVersion` 是冗余索引列，另有启用状态、排序值、安装 / 更新时间、来源（本地导入 / 仓库 URL）、
+  清单原始字节的 sha256。
+- **源注册表** `sources/registry/`：`SourceRegistry` 负责导入（文本 / 文件字节；剪贴板由 UI 读取）、
+  校验（先判 `apiVersion`，再查必填字段，最后 `SourceManifest.validate()`）、升级（同 id 版本更高；
+  保留启用状态与排序）、拒绝降级、启用 / 禁用、删除、组内重排、按 `MediaType` 过滤。
+  导入分两步：`prepareImport` 生成预览（含将访问的主机 = baseUrl 主机 + allowedHosts、未知字段警告），
+  用户确认后 `install`。
+- 注册表只管理清单。可运行的 `Source` 由按引擎注册的 `SourceFactory`（`sourceFactoriesProvider`）构造，
+  声明式 / 脚本引擎各自实现并注册。
+
 ## 5. 关键流程
 
 ### 5.1 搜索

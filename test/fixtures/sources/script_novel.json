@@ -1,0 +1,12 @@
+{
+  "apiVersion": 1,
+  "id": "com.example.novel",
+  "name": "示例小说",
+  "type": "novel",
+  "version": "0.3.0-beta.1",
+  "baseUrl": "https://novel.example.com",
+  "allowedHosts": ["api.example.com", "*.img.example.com"],
+  "nsfw": true,
+  "engine": "script",
+  "script": "export async function search(keyword, page) { return { items: [], hasMore: false }; }"
+}
