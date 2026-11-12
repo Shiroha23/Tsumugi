@@ -23,15 +23,18 @@ class _FakeHistory implements HistoryRepository {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-ComicReadingProgress _p(int page, {String? title = '第 1 话'}) =>
-    ComicReadingProgress(
-      sourceId: 's',
-      itemId: 'i',
-      unitId: 'c1',
-      unitTitle: title,
-      pageIndex: page,
-      pageCount: 10,
-    );
+ComicReadingProgress _p(
+  int page, {
+  String? title = '第 1 话',
+  String unit = 'c1',
+}) => ComicReadingProgress(
+  sourceId: 's',
+  itemId: 'i',
+  unitId: unit,
+  unitTitle: title,
+  pageIndex: page,
+  pageCount: 10,
+);
 
 const _item = LibraryItem(
   sourceId: 's',
@@ -91,6 +94,64 @@ void main() {
       known = true;
       recorder.report(_p(0));
       expect(history.writes, [('c1', 0)]);
+    });
+  });
+
+  test('换章时先写入上一章的待写进度（保证已读标记），新章节照常节流', () {
+    fakeAsync((async) {
+      final history = _FakeHistory();
+      final recorder = ComicProgressRecorder(
+        history: history,
+        itemFor: (_) => _item,
+      );
+      recorder.report(_p(0));
+      recorder.report(_p(9)); // 上一章最后一页，处于节流中
+      recorder.report(_p(0, unit: 'c2', title: '第 2 话'));
+      expect(history.writes, [('c1', 0), ('c1', 9)]);
+      async.elapse(const Duration(seconds: 1));
+      expect(history.writes, [('c1', 0), ('c1', 9), ('c2', 0)]);
+    });
+  });
+
+  group('readingOrder', () {
+    const detail = Detail(
+      id: 'i',
+      title: 't',
+      groups: [
+        UnitGroup(
+          name: 'A',
+          units: [Unit(id: 'a1', title: 'A1')],
+        ),
+        UnitGroup(
+          name: 'B',
+          units: [
+            Unit(id: 'b1', title: 'B1'),
+            Unit(id: 'b2', title: 'B2'),
+          ],
+        ),
+      ],
+    );
+
+    test('默认取第一组；给出章节时取包含它的那一组', () {
+      expect(readingOrder(detail).map((u) => u.id), ['a1']);
+      expect(readingOrder(detail, 'b2').map((u) => u.id), ['b1', 'b2']);
+      expect(readingOrder(detail, 'zz').map((u) => u.id), ['a1']);
+    });
+
+    test('units 优先于 groups', () {
+      const withUnits = Detail(
+        id: 'i',
+        title: 't',
+        units: [Unit(id: 'u1', title: 'U1')],
+        groups: [
+          UnitGroup(
+            name: 'B',
+            units: [Unit(id: 'b1', title: 'B1')],
+          ),
+        ],
+      );
+      expect(readingOrder(withUnits).map((u) => u.id), ['u1']);
+      expect(readingOrder(withUnits, 'b1').map((u) => u.id), ['b1']);
     });
   });
 }

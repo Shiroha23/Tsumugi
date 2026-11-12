@@ -160,4 +160,42 @@ void main() {
     );
     await app.dispose(tester);
   });
+
+  testWidgets('从第二条线路打开的章节同样记录进度', (tester) async {
+    final app = AppHarness(
+      FakeFactory(
+        (m) => FakeSource(
+          m,
+          onDetail: (id) async => const Detail(
+            id: _itemId,
+            title: '星之栖处',
+            groups: [
+              UnitGroup(
+                name: '线路一',
+                units: [Unit(id: 'a1', title: '第 1 话')],
+              ),
+              UnitGroup(
+                name: '线路二',
+                units: [Unit(id: 'b1', title: '备用 第 1 话')],
+              ),
+            ],
+          ),
+          onContent: (unitId) async => const ComicContent(
+            images: [ImageRef(url: 'http://img.example.com/p.png')],
+          ),
+        ),
+      ),
+    );
+    await app.install(tester, [fakeManifestJson(_sourceId)]);
+    await app.pump(tester);
+    app.router.push(comicReaderLocation(_sourceId, _itemId, 'b1'));
+    await _pumpFrames(tester, 25);
+
+    final progress = await tester.runAsync(
+      () => HistoryRepository(app.db).latestProgress(_sourceId, _itemId),
+    );
+    expect(progress?.unitId, 'b1');
+    expect(progress?.unitTitle, '备用 第 1 话');
+    await app.dispose(tester);
+  });
 }

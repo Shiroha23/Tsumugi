@@ -108,6 +108,13 @@ class ComicProgressRecorder {
     final item = itemFor(p);
     if (item == null) return;
     final key = (p.sourceId, p.itemId);
+    // 换章时先写入上一章的待写进度：已读标记依赖它的最后一页，不能被下一章覆盖。
+    if (_pending[key] case (final prev, final prevItem)
+        when prev.unitId != p.unitId) {
+      _timers.remove(key)?.cancel();
+      _pending.remove(key);
+      _write(key, prev, prevItem);
+    }
     final last = _lastWrite[key];
     final now = DateTime.now();
     if (last == null || now.difference(last) >= interval) {
@@ -181,7 +188,20 @@ Future<ComicContent> comicReaderChapter(
   return content;
 }
 
-/// 详情中的章节（阅读顺序）：优先 `units`，为空时取第一组。
-List<Unit> readingOrder(Detail detail) => detail.units.isNotEmpty
-    ? detail.units
-    : (detail.groups?.firstOrNull?.units ?? const []);
+/// 详情中的章节（阅读顺序）。
+///
+/// 给出 [unitId] 时返回**包含该章节**的那一组（先查 `units`，再依次查各线路），
+/// 这样从非首条线路打开的章节也能取到标题、上一章 / 下一章。
+/// 没有给出或都不包含时：优先 `units`，为空时取第一组。
+List<Unit> readingOrder(Detail detail, [String? unitId]) {
+  if (unitId != null) {
+    bool has(List<Unit> units) => units.any((u) => u.id == unitId);
+    if (has(detail.units)) return detail.units;
+    for (final g in detail.groups ?? const <UnitGroup>[]) {
+      if (has(g.units)) return g.units;
+    }
+  }
+  return detail.units.isNotEmpty
+      ? detail.units
+      : (detail.groups?.firstOrNull?.units ?? const []);
+}
