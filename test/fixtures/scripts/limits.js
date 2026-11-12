@@ -42,3 +42,23 @@ export async function recurse() {
 export async function ok() {
   return 'ok';
 }
+
+export function throwSpinningGetter() {
+  throw { get name() { for (;;) {} } };
+}
+
+export async function rejectSpinningGetter() {
+  await tsumugi.http.get('/tick');
+  throw { get message() { for (;;) {} } };
+}
+
+export async function returnSpinningToJSON() {
+  return { toJSON() { for (;;) {} } };
+}
+
+export async function waitThenBusy(ms) {
+  await tsumugi.http.get('/wait');
+  const end = Date.now() + ms;
+  while (Date.now() < end) {}
+  return 'done';
+}

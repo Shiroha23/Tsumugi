@@ -30,6 +30,10 @@ void main() {
     if (url == '/book/b1') return '{"title":"Alpha"}';
     if (url == '/book/b1/chapters') return '[1,2,3]';
     if (url == '/never') return Completer<String>().future;
+    if (url == '/wait') {
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      return '';
+    }
     if (url.startsWith('/chapter/')) {
       throw const ScriptException('需要登录', code: 'E_LOGIN_REQUIRED');
     }
@@ -231,6 +235,49 @@ void main() {
         rt.call('recurse'),
         throwsScript(code: ScriptException.limit),
       );
+    });
+
+    for (final export in [
+      'throwSpinningGetter',
+      'rejectSpinningGetter',
+      'returnSpinningToJSON',
+    ]) {
+      test('读取异常/结果对象时执行的脚本代码同样受 deadline 约束（$export）', () async {
+        rt = create(limits: const ScriptLimits(cpuTime: cpu));
+        await rt.load(fixture('limits.js'));
+        await expectLater(
+          rt.call(export),
+          throwsScript(code: ScriptException.limit),
+        );
+        expect(await rt.call('ok'), 'ok');
+      });
+    }
+
+    test('模块初始化抛出带死循环 getter 的对象时加载被中断', () async {
+      rt = create(limits: const ScriptLimits(cpuTime: cpu));
+      await expectLater(
+        rt.load('throw { get name() { for (;;) {} } };'),
+        throwsScript(code: ScriptException.limit),
+      );
+    });
+
+    test('宿主等待后的同步计算也受剩余总时长约束', () async {
+      // CPU 预算充足（5s），但 200ms 等待 + 400ms 计算 > 300ms 总时长。
+      rt = create(
+        limits: const ScriptLimits(wallTime: Duration(milliseconds: 300)),
+      );
+      await rt.load(fixture('limits.js'));
+      final sw = Stopwatch()..start();
+      await expectLater(
+        rt.call('waitThenBusy', [400]),
+        throwsScript(
+          code: ScriptException.limit,
+          message: contains('Wall time'),
+        ),
+      );
+      expect(sw.elapsed, lessThan(const Duration(milliseconds: 550)));
+      // 总时长内完成则正常返回。
+      expect(await rt.call('waitThenBusy', [20]), 'done');
     });
 
     test('超限之后运行时仍可继续使用', () async {

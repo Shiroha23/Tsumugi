@@ -9,8 +9,9 @@ import 'script_runtime.dart';
 ///
 /// 执行模型：
 /// - JS 在调用方 isolate 上同步执行；所有“进入 JS”的点（调用导出、resolve 宿主
-///   Promise）都包在 [_enterJs] 里，按剩余 CPU 预算设置 QuickJS 的中断 deadline，
-///   因此死循环会在预算耗尽时被引擎中断（不可被脚本 catch）。
+///   Promise）都包在 [_enterJs] 里，按“剩余 CPU 预算”与“剩余总时长”中较小者设置
+///   QuickJS 的中断 deadline，因此死循环会在预算耗尽时被引擎中断（不可被脚本 catch）。
+///   检查脚本抛出的异常对象（其 getter 可能执行脚本代码）也在 deadline 内完成。
 /// - 等待宿主 Future 的时间不计入 CPU 预算，只计入 [ScriptLimits.wallTime]。
 /// - 同一实例上的 [call] 串行执行（宿主 Promise 需要知道属于哪一次调用）。
 /// - 不设置 module loader，脚本内 `import` 一律失败；关闭 `eval` / `Function`。
@@ -72,15 +73,13 @@ class QuickJsScriptRuntime implements ScriptRuntime {
         if (_namespace != null) {
           throw StateError('A script is already loaded.');
         }
-        final call = _Call();
+        final call = _Call(limits);
         _current = call;
         try {
           _namespace = _enterJs(
             call,
             () => _rt.evaluateModuleSync(source, name: name),
           );
-        } on JSException catch (e) {
-          throw _mapException(e);
         } on StateError catch (e) {
           // 顶层 await 仍在等待：源脚本不允许顶层 await。
           throw ScriptException(e.message);
@@ -107,31 +106,38 @@ class QuickJsScriptRuntime implements ScriptRuntime {
     }
     final fn = fnValue.asObject.asFunction;
 
-    final call = _Call();
+    final call = _Call(limits);
     _current = call;
-    final timer = Timer(limits.wallTime, () {
-      call.fail(
-        ScriptException(
-          'Wall time limit exceeded (${limits.wallTime.inMilliseconds} ms).',
-          code: ScriptException.limit,
-        ),
-      );
-    });
+    // 只覆盖“等待宿主 Future”的情况；JS 同步执行时由 [_enterJs] 的 deadline 兜底。
+    final timer = Timer(
+      limits.wallTime,
+      () => call.fail(call.wallLimitError()),
+    );
 
+    // 这两个回调在 JS 微任务中运行（已处于 deadline 内）。读取结果 / 异常对象可能
+    // 执行脚本代码（toJSON、getter）；若因此被中断，记录失败并把异常交回引擎继续展开。
     final onFulfilled = JSFunction.createFromHostFunction(_rt, (rt, _, a) {
       try {
         call.complete(a.isEmpty ? null : _toDart(a.first));
+      } on JSException {
+        call.fail(_uninspectable(call));
+        rethrow;
       } on Object catch (e) {
         call.fail(_asScriptException(e));
       }
       return JSValue.undefined(rt);
     });
     final onRejected = JSFunction.createFromHostFunction(_rt, (rt, _, a) {
-      call.fail(
-        a.isEmpty
-            ? const ScriptException('Rejected')
-            : _reasonToException(a.first),
-      );
+      try {
+        call.fail(
+          a.isEmpty
+              ? const ScriptException('Rejected')
+              : _reasonToException(call, a.first),
+        );
+      } on JSException {
+        call.fail(_uninspectable(call));
+        rethrow;
+      }
       return JSValue.undefined(rt);
     });
 
@@ -175,20 +181,20 @@ class QuickJsScriptRuntime implements ScriptRuntime {
     if (_disposed) throw StateError('Runtime disposed.');
   }
 
-  /// 进入 JS 执行 [body]，按 [call] 剩余的 CPU 预算设置中断 deadline。
+  /// 进入 JS 执行 [body]，按 [call] 剩余的 CPU / 总时长预算（取小）设置中断 deadline。
+  ///
+  /// JS 异常在 deadline 仍有效时就地转换为 [ScriptException]：异常对象的 getter
+  /// 可能是脚本代码，不能在 deadline 之外读取。
   T _enterJs<T>(_Call call, T Function() body) {
     if (call.cpu.isRunning) return body(); // 已在 JS 内（嵌套进入）。
-    final remaining = limits.cpuTime - call.cpu.elapsed;
-    if (remaining <= Duration.zero) {
-      throw ScriptException(
-        'CPU time limit exceeded (${limits.cpuTime.inMilliseconds} ms).',
-        code: ScriptException.limit,
-      );
-    }
+    final remaining = call.remaining;
+    if (remaining <= Duration.zero) throw call.timeLimitError();
     _rt.setDeadline(remaining);
     call.cpu.start();
     try {
       return body();
+    } on JSException catch (e) {
+      throw _inspect(call, e.value);
     } finally {
       call.cpu.stop();
       if (!_disposed) _rt.clearDeadline();
@@ -310,15 +316,27 @@ class QuickJsScriptRuntime implements ScriptRuntime {
 
   // --- 错误映射 ---------------------------------------------------------------
 
+  /// 不读取 JS 对象，因此可在 deadline 之外安全调用。
   ScriptException _asScriptException(Object error) => switch (error) {
     ScriptException() => error,
-    JSException() => _mapException(error),
+    JSException() => const ScriptException('Script error.'),
     _ => ScriptException(error.toString()),
   };
 
-  ScriptException _mapException(JSException e) => _reasonToException(e.value);
+  /// 必须在 [_enterJs] 的 deadline 内调用。
+  ScriptException _inspect(_Call call, JSValue reason) {
+    try {
+      return _reasonToException(call, reason);
+    } on JSException {
+      return _uninspectable(call);
+    }
+  }
 
-  ScriptException _reasonToException(JSValue reason) {
+  ScriptException _uninspectable(_Call call) => call.exhausted
+      ? call.timeLimitError()
+      : const ScriptException('Script threw a value that could not be read.');
+
+  ScriptException _reasonToException(_Call call, JSValue reason) {
     if (!reason.isObject) {
       String text;
       try {
@@ -338,11 +356,7 @@ class QuickJsScriptRuntime implements ScriptRuntime {
     final message = str('message') ?? 'Script error';
     final stack = str('stack');
     if (name == 'InternalError' && message == 'interrupted') {
-      return ScriptException(
-        'CPU time limit exceeded (${limits.cpuTime.inMilliseconds} ms).',
-        code: ScriptException.limit,
-        stack: stack,
-      );
+      return call.timeLimitError(stack: stack);
     }
     if (message.contains('out of memory')) {
       return ScriptException(
@@ -363,14 +377,46 @@ class QuickJsScriptRuntime implements ScriptRuntime {
 }
 
 class _Call {
+  _Call(this.limits);
+
+  final ScriptLimits limits;
   final cpu = Stopwatch();
+  final wall = Stopwatch()..start();
   final _completer = Completer<Object?>();
 
   Future<Object?> get future => _completer.future;
   bool get isDone => _completer.isCompleted;
 
+  Duration get _cpuLeft => limits.cpuTime - cpu.elapsed;
+  Duration get _wallLeft => limits.wallTime - wall.elapsed;
+
+  /// 下一段 JS 执行最多可用的时长。
+  Duration get remaining => _cpuLeft < _wallLeft ? _cpuLeft : _wallLeft;
+
+  bool get exhausted => remaining <= Duration.zero;
+
+  ScriptException timeLimitError({String? stack}) => _wallLeft <= _cpuLeft
+      ? wallLimitError(stack: stack)
+      : ScriptException(
+          'CPU time limit exceeded (${limits.cpuTime.inMilliseconds} ms).',
+          code: ScriptException.limit,
+          stack: stack,
+        );
+
+  ScriptException wallLimitError({String? stack}) => ScriptException(
+    'Wall time limit exceeded (${limits.wallTime.inMilliseconds} ms).',
+    code: ScriptException.limit,
+    stack: stack,
+  );
+
   void complete(Object? value) {
-    if (!isDone) _completer.complete(value);
+    if (isDone) return;
+    // 同步 JS 执行期间 Dart 计时器无法触发，完成时再核对一次总时长。
+    if (wall.elapsed > limits.wallTime) {
+      _completer.completeError(wallLimitError());
+    } else {
+      _completer.complete(value);
+    }
   }
 
   void fail(ScriptException error) {
