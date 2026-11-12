@@ -168,7 +168,14 @@ class _ShelfTile extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          CoverImage(url: item.cover, headers: item.coverHeaders),
+          // 封面占满标题之外的高度：标题换行或系统字号放大时封面缩小，而不是溢出。
+          Expanded(
+            child: CoverImage(
+              url: item.cover,
+              headers: item.coverHeaders,
+              expand: true,
+            ),
+          ),
           const SizedBox(height: 6),
           Text(
             item.title,

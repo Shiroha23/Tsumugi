@@ -87,6 +87,40 @@ void main() {
     await unmount(tester);
   });
 
+  testWidgets('窄屏 + 放大字号时两行标题不溢出', (tester) async {
+    await tester.runAsync(() async {
+      for (final id in ['a', 'b', 'c']) {
+        await library.add(
+          LibraryItem(
+            sourceId: 'com.example.comic',
+            itemId: id,
+            title: '一个很长很长很长很长很长很长很长的标题 $id',
+            mediaType: MediaType.comic,
+          ),
+        );
+      }
+    });
+    tester.view.physicalSize = const Size(360, 740);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [appDatabaseProvider.overrideWithValue(db)],
+        child: const MediaQuery(
+          data: MediaQueryData(
+            size: Size(360, 740),
+            textScaler: TextScaler.linear(1.3),
+          ),
+          child: MaterialApp(home: LibraryPage()),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('很长的标题'), findsNWidgets(3));
+    expect(tester.takeException(), isNull);
+    await unmount(tester);
+  });
+
   testWidgets('长按移出书架', (tester) async {
     await tester.runAsync(() => library.add(item('a')));
     await pumpPage(tester);
