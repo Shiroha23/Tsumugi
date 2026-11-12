@@ -84,6 +84,7 @@ lib/
     sync/                 # WebDAV 同步
   features/
     comic/  novel/  video/  music/
+    common/               # 各媒体共用的页面组件（作品详情、阅读顺序）
     library/  sources/  settings/  search/
 test/
   fixtures/               # mock 页面与示例源（仅虚构站点）
@@ -159,6 +160,8 @@ UI(search) → SourceRegistry.enabled(type?) → 并发调用 source.search()
 漫画详情路由 `/comic/:sourceId/:itemId`，阅读器 `/comic/:sourceId/:itemId/read/:unitId`；`itemId` / `unitId`
 通常本身是路径，作为单个路径段时经 `Uri.encodeComponent`（`ComicRoutes`）。`Detail` 没有 `coverHeaders`：
 从搜索结果进入且封面相同则沿用该条目的 `coverHeaders`，否则使用源清单的默认 `headers`。
+详情页本身是 `features/common/detail/MediaDetailPage`（漫画、小说共用），各媒体只提供阅读器地址与“上次读到”的文案。
+小说详情路由 `/novel/:sourceId/:itemId`（`NovelRoutes`）。
 
 ### 5.2 打开内容
 
@@ -181,6 +184,17 @@ detail(id) → 章节/剧集/曲目列表 → content(itemId)
 （详情路由的子路由；各段 URL 编码，用 `ComicRoutes.reader` / `comicReaderLocation` 生成，`page` 从 0 开始）；纵向滚动 / 左→右 / 右→左三种模式（偏好存于应用支持目录
 `comic_reader.json`）；章节列表取自 `detail(itemId)`。阅读进度不直接写库，经
 `comicReaderProgressSinkProvider` 回调交给书架 / 历史层。
+
+**小说阅读器（M3，`features/novel/`）**：路由 `/novel/:sourceId/:itemId/read/:unitId?pos=N`（`NovelRoutes.reader`，
+`pos` 为章节内字符偏移，定义见 source-spec §2.2.1）。
+
+- 正文：`novelReaderChapterProvider` 调用 `content(unitId)` 并按 `nextPageId` 拼接章节内分页；纯文本与受限 HTML
+  都先转换为 `NovelChapter`（段落 / 图片 / 分隔线块，`features/novel/content/novel_document.dart`），HTML 按白名单清洗，
+  不经任何 HTML 渲染器。
+- 排版：`novel_layout.dart` 中的 `NovelTextStyles` 统一构造文字（段首缩进两个全角空格），上下滚动模式逐块渲染，
+  左右翻页模式用 `TextPainter` 按屏幕逐行分页（`paginateNovel`），改字号 / 窗口大小时重新分页并保持字符偏移。
+- 偏好（模式、字号、行距、段距、页边距、字体、主题）存于应用支持目录 `novel_reader.json`。
+- 进度经 `novelReaderProgressSinkProvider` 节流写入 `HistoryRepository.recordProgress(position:)`，读到章节末尾时标记已读。
 
 ### 5.3 人机验证 / 登录（M3）
 
