@@ -1,0 +1,59 @@
+{
+  "apiVersion": 1,
+  "id": "com.example.mock.comic.declarative",
+  "name": "Mock 漫画（声明式）",
+  "type": "comic",
+  "version": "1.0.0",
+  "author": "tsumugi",
+  "lang": "zh",
+  "description": "虚构源，配合 tool/mock_server 手动调试与测试使用。",
+  "baseUrl": "http://127.0.0.1:8080",
+  "allowedHosts": [
+    "img.example.com"
+  ],
+  "headers": {
+    "Referer": "http://127.0.0.1:8080/"
+  },
+  "engine": "declarative",
+  "rules": {
+    "search": {
+      "request": {
+        "url": "/comic/search?q={{keyword}}&page={{page}}"
+      },
+      "list": "css:.result-item",
+      "fields": {
+        "id": "css:a@href",
+        "title": "css:.title@text",
+        "cover": "css:img@data-src",
+        "subtitle": "css:.author@text"
+      },
+      "hasMore": "css:.pagination .next"
+    },
+    "detail": {
+      "request": {
+        "url": "{{id}}"
+      },
+      "fields": {
+        "title": "css:h1@text",
+        "cover": "css:.cover img@src",
+        "author": "css:.author@text",
+        "description": "css:.intro@text",
+        "tags": "css:.tags a@text[]"
+      },
+      "units": {
+        "list": "css:.chapter-list li",
+        "fields": {
+          "id": "css:a@href",
+          "title": "css:a@text"
+        },
+        "reverse": true
+      }
+    },
+    "content": {
+      "request": {
+        "url": "{{unitId}}"
+      },
+      "images": "css:.page img@data-src[]"
+    }
+  }
+}
