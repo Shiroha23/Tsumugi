@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tsumugi/features/comic/detail/comic_routes.dart';
+import 'package:tsumugi/features/comic/reader/comic_reader_page.dart';
 import 'package:tsumugi/sources/model/common.dart';
 import 'package:tsumugi/sources/source.dart';
 
@@ -84,13 +85,19 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('第 2 话'));
-    await tester.pumpAndSettle();
+    // 阅读器有持续的加载动画，不能 pumpAndSettle。
+    for (var i = 0; i < 5; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
     expect(
       app.router.state.uri.toString(),
       ComicRoutes.reader('com.example.a', _itemId, '/comic/book/1/chapter/2'),
     );
-    // 占位阅读器拿到的是解码后的 unitId。
-    expect(find.text('阅读器尚未实现\n/comic/book/1/chapter/2'), findsOneWidget);
+    // 阅读器拿到的是解码后的 id。
+    final reader = tester.widget<ComicReaderPage>(find.byType(ComicReaderPage));
+    expect(reader.sourceId, 'com.example.a');
+    expect(reader.itemId, _itemId);
+    expect(reader.unitId, '/comic/book/1/chapter/2');
 
     await app.dispose(tester);
   });

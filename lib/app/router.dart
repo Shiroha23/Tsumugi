@@ -1,9 +1,9 @@
-import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../features/comic/detail/comic_detail_page.dart';
 import '../features/comic/detail/comic_routes.dart';
+import '../features/comic/reader/reader_route.dart';
 import '../features/library/library_page.dart';
 import '../features/search/search_page.dart';
 import '../features/settings/settings_page.dart';
@@ -18,6 +18,9 @@ abstract final class Routes {
   static const search = '/search';
   static const sources = '/sources';
   static const settings = '/settings';
+
+  /// 漫画阅读器；地址用 `comicReaderLocation(...)` 生成。
+  static const comicReader = comicReaderRoutePath;
 }
 
 @Riverpod(keepAlive: true)
@@ -73,11 +76,10 @@ GoRouter router(Ref ref) {
               : null,
         ),
         routes: [
-          // 占位：由漫画阅读器会话替换为真正的阅读器页面。
+          // 漫画阅读器：完整路径即 Routes.comicReader（`?page=N` 为初始页，从 0 开始）。
           GoRoute(
             path: ComicRoutes.readerPattern,
-            builder: (_, state) =>
-                _ReaderPlaceholderPage(unitId: state.pathParameters['unitId']!),
+            builder: (_, state) => comicReaderPageFromState(state),
           ),
         ],
       ),
@@ -85,17 +87,4 @@ GoRouter router(Ref ref) {
   );
   ref.onDispose(router.dispose);
   return router;
-}
-
-/// 阅读器占位页（漫画阅读器会话会替换）。
-class _ReaderPlaceholderPage extends StatelessWidget {
-  const _ReaderPlaceholderPage({required this.unitId});
-
-  final String unitId;
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('阅读')),
-    body: Center(child: Text('阅读器尚未实现\n$unitId', textAlign: TextAlign.center)),
-  );
 }
