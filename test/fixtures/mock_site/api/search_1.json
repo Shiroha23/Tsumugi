@@ -1,0 +1,11 @@
+{
+  "code": 0,
+  "data": {
+    "page": 1,
+    "hasMore": true,
+    "list": [
+      { "id": "b101", "name": "纸飞机日记", "cover": "http://img.example.com/covers/b101.png", "author": "虚构作者己" },
+      { "id": "b102", "name": "月台上的猫", "cover": "http://img.example.com/covers/b102.png", "author": "虚构作者庚" }
+    ]
+  }
+}
