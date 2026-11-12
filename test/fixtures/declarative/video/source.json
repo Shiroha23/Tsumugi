@@ -1,0 +1,16 @@
+{
+  "apiVersion": 1,
+  "id": "com.example.video.demo",
+  "name": "示例视频站",
+  "type": "video",
+  "version": "1.0.0",
+  "baseUrl": "https://video.example.com",
+  "allowedHosts": ["*.example-cdn.com"],
+  "engine": "declarative",
+  "rules": {
+    "content": {
+      "request": { "url": "/play/{{unitId}}" },
+      "streams": "css:script#player@text |> regex:\"url\":\"(.+?)\"@1[]"
+    }
+  }
+}

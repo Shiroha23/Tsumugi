@@ -25,8 +25,8 @@
 | 状态管理 | Riverpod（含代码生成） | |
 | 路由 | go_router | |
 | 网络 | dio + cookie_jar | 每个源独立 Cookie 域与拦截器 |
-| HTML 解析 | `html`（CSS 选择器） + XPath 库 | XPath 库选型待验证 |
-| JSON 路径 | JSONPath 实现库 | 选型待验证 |
+| HTML 解析 | `html`（CSS 选择器） + [`xml`](https://pub.dev/packages/xml)（XPath，MIT） | M1 选定，见 §6 风险 4 |
+| JSON 路径 | [`json_path`](https://pub.dev/packages/json_path)（RFC 9535，MIT） | M1 选定，见 §6 风险 4 |
 | JS 运行时 | [`qjs`](https://pub.dev/packages/qjs)（QuickJS-ng，MIT） | M0 已验证，三平台同一引擎；封装在 `core/engine/script`，见 §6.1 |
 | 数据库 | drift（SQLite） | |
 | 音视频 | media_kit（libmpv） | 视频与音乐共用 |
@@ -117,7 +117,7 @@ detail(id) → 章节/剧集/曲目列表 → content(itemId)
 1. **QuickJS 绑定的跨平台可用性** —— M0 已完成验证，结论见 §6.1。
 2. **iOS 分发**：无法上架 App Store，CI 产出未签名 IPA，用户自签。
 3. **音乐后台播放**：需要各平台的媒体会话适配（Android 前台服务、iOS AVAudioSession、Windows SMTC）。
-4. **XPath / JSONPath 库质量**：需用 fixtures 做兼容性测试。
+4. **XPath / JSONPath 库质量** —— M1 已选型，结论见 §6.2。
 
 ### 6.1 JS 运行时选型结论（M0，2026-11）
 
@@ -171,6 +171,30 @@ CPU 预算跨 await 累计、总时长上限、内存上限、栈上限、超限
   本地用 `native_toolchain_c` 编译源码。需要可复现构建时可在 M1 评估改为强制源码编译。
 - `qjs` 为单人维护的新库（风险：维护中断）。缓解：引擎细节全部隔离在 `QuickJsScriptRuntime` 一个文件内，
   其 C 桥接层很薄，必要时可 fork；fjs 作为第二候选。
+
+### 6.2 XPath / JSONPath 选型结论（M1，2026-11）
+
+两者都只在 `lib/core/engine/expression/` 内使用，规则引擎的其他部分不直接依赖。
+
+**XPath：[`xml`](https://pub.dev/packages/xml) 7.1（MIT，纯 Dart）。** `package:html` 的 DOM 本身不支持 XPath，
+`HtmlXPath`（`expression/html_xpath.dart`）为每棵 HTML 树建一个不带命名空间的 XML 镜像（按树根缓存），
+求值后把结果元素映射回原 HTML 节点，因此 `@html` / `@outerHtml` 与后续 css 步骤仍作用于原节点。
+
+| 包 | XPath 版本 | 许可证 | 维护 | 结论 |
+|---|---|---|---|---|
+| **xml** ✅ | XPath 3.1（XPath 1.0 的超集），W3C 函数库 | MIT | 2026-09 仍在发版，pub.dev 449 likes，Dart 生态最常用的 XML 库 | 选用 |
+| xpath_selector + xpath_selector_html_parser | 自研子集（轴、谓词、函数不全） | BSD-3 | 最后发版 2023-01 | 能直接作用于 `html` DOM，但功能与维护都不足 |
+| html_xpath | 子集 | Apache-2.0 | 已 discontinued | 否 |
+
+取舍：镜像需要一次 O(n) 的树复制，只在规则真正用到 xpath 时发生，每份文档一次；
+换来完整的 XPath 语义与活跃的上游。规范仍只承诺 XPath 1.0（§3.3），3.1 的额外函数不保证跨版本可用。
+
+**JSONPath：[`json_path`](https://pub.dev/packages/json_path) 0.9（MIT，纯 Dart）。** 实现 RFC 9535，
+声明通过官方 Compliance Test Suite；依赖只有 petitparser 等纯 Dart 包。
+RFC 9535 是目前唯一的 JSONPath 标准，选它可避免各实现间过滤器语法的差异。
+
+两者都支持 Windows / Android / iOS（纯 Dart，无原生库）。兼容性测试见
+`test/core/engine/expression/expression_engine_test.dart`。
 
 ## 7. 里程碑
 
