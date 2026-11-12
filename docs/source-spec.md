@@ -381,7 +381,15 @@ export async function search(keyword, page) {
 | 单次调用的 HTTP 请求数 | 50 |
 | 单个响应体大小 | 20 MB |
 
-超限时终止脚本，返回错误 `E_LIMIT`。
+超限时终止脚本，返回错误 `E_LIMIT`。补充说明：
+
+- CPU 时间与总时长超限不可被脚本 `try/catch` 拦截。
+- 内存与栈超限表现为**分配失败的异常**：未捕获时返回 `E_LIMIT`；脚本可以 catch 它继续执行，
+  但超限的那次分配本身不会成功，内存上限始终有效。
+- 触发 `E_LIMIT` 后，客户端会丢弃该源的 JS 运行时并重新求值模块，**模块级变量会被重置**。
+  需要跨调用保存的数据请使用 `tsumugi.storage`。
+- 宿主函数只能在入口调用进行期间使用；调用结束后才执行到的宿主调用会被拒绝。
+- 单次调用的 HTTP 请求数由宿主 HTTP API 计数（待接入）；响应体大小由网络层强制（§5）。
 
 ---
 
@@ -414,7 +422,10 @@ export async function search(keyword, page) {
 | `E_LIMIT` | 触发沙箱限制 |
 | `E_UNSUPPORTED` | 源未实现该能力 |
 
-脚本可 `throw { code: "E_LOGIN_REQUIRED", message: "..." }` 主动上报。
+脚本可 `throw { code: "E_LOGIN_REQUIRED", message: "..." }` 主动上报。脚本显式给出的 `code`
+优先于一切按消息文本的推断。`E_HTTP` 可附带 `status`（100–599 的整数）：
+`throw { code: "E_HTTP", status: 503, message: "..." }`；宿主 API 抛出的 `E_HTTP` 错误同样带有 `status`，
+脚本可通过 `e.status` 读取。
 
 ---
 

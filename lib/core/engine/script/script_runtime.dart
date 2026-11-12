@@ -42,24 +42,32 @@ class ScriptLimits {
 /// 脚本执行失败。`code` 取自 docs/source-spec.md §6 的错误码；
 /// 普通的未捕获 JS 异常 `code` 为 `null`。
 class ScriptException implements Exception {
-  const ScriptException(this.message, {this.code, this.stack});
+  const ScriptException(this.message, {this.code, this.status, this.stack});
 
   static const limit = 'E_LIMIT';
   static const unsupported = 'E_UNSUPPORTED';
 
   final String? code;
   final String message;
+
+  /// HTTP 状态码，通常随 `E_HTTP` 一起出现（100–599）。
+  ///
+  /// 在宿主与脚本之间双向保留：宿主抛出时脚本可读 `e.status`，
+  /// 脚本抛出 `{ code, status }` 时 Dart 侧可读此字段。
+  final int? status;
   final String? stack;
 
   @override
   String toString() =>
-      'ScriptException(${code ?? 'E_SCRIPT'}): $message'
+      'ScriptException(${code ?? 'E_SCRIPT'}'
+      '${status == null ? '' : ' $status'}): $message'
       '${stack == null ? '' : '\n$stack'}';
 }
 
 /// 一个已加载源脚本的运行时实例。一个源对应一个实例，互不共享状态。
 abstract interface class ScriptRuntime {
-  /// 以 ES 模块方式加载源脚本。每个实例只能加载一次。
+  /// 以 ES 模块方式加载源脚本。每个实例只能加载一次；
+  /// 加载失败后实例不可再用（再次 [load] 或 [call] 抛出 [StateError]），需新建实例。
   Future<void> load(String source, {String name = 'source.js'});
 
   /// 调用模块导出的（异步）函数，返回其 resolve 的值。
