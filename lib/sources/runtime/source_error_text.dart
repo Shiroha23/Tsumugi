@@ -20,7 +20,7 @@ final class SourceErrorInfo {
 
   final SourceErrorCode? code;
 
-  /// `E_CHALLENGE`：需要用户在 WebView 中手动完成验证。
+  /// `E_CHALLENGE` / `E_LOGIN_REQUIRED`：需要用户在 WebView 中手动完成验证或登录。
   final bool needsVerification;
 }
 
@@ -40,7 +40,9 @@ SourceErrorInfo describeSourceError(Object error) => switch (error) {
       },
       detail: message,
       code: code,
-      needsVerification: code == SourceErrorCode.challenge,
+      needsVerification:
+          code == SourceErrorCode.challenge ||
+          code == SourceErrorCode.loginRequired,
     ),
   TimeoutException() => const SourceErrorInfo(
     title: '请求超时',

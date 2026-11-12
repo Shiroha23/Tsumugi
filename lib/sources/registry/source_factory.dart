@@ -7,6 +7,7 @@ import '../declarative/declarative_source_factory.dart';
 import '../model/manifest.dart';
 import '../script/script_source_factory.dart';
 import '../script/script_ui.dart';
+import '../session/source_sessions.dart';
 import '../source.dart';
 
 part 'source_factory.g.dart';
@@ -45,14 +46,20 @@ final class SourceFactories {
 }
 
 /// 已注册的引擎工厂。创建出的源由调用方释放（见 `lib/sources/runtime/`）。
+///
+/// 两种引擎的 HTTP 客户端都使用该源的 [SourceSessions] 会话（与图片加载共用 Cookie / UA）。
 @Riverpod(keepAlive: true)
-SourceFactories sourceFactories(Ref ref) => SourceFactories([
-  DeclarativeSourceFactory(),
-  ScriptSourceFactory(
-    storage: DriftSourceStorage(ref.watch(appDatabaseProvider)),
-    ui: ref.watch(scriptUiProvider),
-  ),
-]);
+SourceFactories sourceFactories(Ref ref) {
+  final sessions = ref.watch(sourceSessionsProvider);
+  return SourceFactories([
+    DeclarativeSourceFactory(httpClientFor: sessions.clientFor),
+    ScriptSourceFactory(
+      storage: DriftSourceStorage(ref.watch(appDatabaseProvider)),
+      httpClientFor: sessions.clientFor,
+      ui: ref.watch(scriptUiProvider),
+    ),
+  ]);
+}
 
 /// 脚本宿主 API `tsumugi.ui` 的界面实现；界面层接入 WebView 后覆盖此 provider。
 @Riverpod(keepAlive: true)

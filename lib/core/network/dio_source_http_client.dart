@@ -9,18 +9,22 @@ import 'package:dio_cookie_manager/dio_cookie_manager.dart';
 import 'network_exception.dart';
 import 'rate_limiter.dart';
 import 'source_http_client.dart';
+import 'source_session.dart';
 
 /// 基于 dio + cookie_jar 的 [SourceHttpClient] 实现。
 ///
 /// 重定向由本类逐跳处理（dio 本身不跟随），以便对每一跳执行白名单检查。
 class DioSourceHttpClient implements SourceHttpClient {
-  /// [cookieJar] 默认为内存 Jar；持久化时由调用方传入按源隔离的 `PersistCookieJar`。
+  /// [session] 为本源的会话（与同一源的其他客户端共用 Cookie 与 UA）；未给出时新建一个，
+  /// 其 Cookie Jar 为 [cookieJar]（默认内存 Jar）。
   /// [adapter] 仅用于测试或特殊传输层（例如把虚构域名路由到本地 mock 服务器）。
   DioSourceHttpClient(
     this.config, {
+    SourceSession? session,
     CookieJar? cookieJar,
     HttpClientAdapter? adapter,
-  }) : cookieJar = cookieJar ?? CookieJar(),
+  }) : assert(session == null || cookieJar == null),
+       session = session ?? SourceSession(cookieJar: cookieJar),
        _bucket = switch (config.rateLimit) {
          final r? => TokenBucket(requests: r.requests, per: r.per),
          null => null,
@@ -29,12 +33,14 @@ class DioSourceHttpClient implements SourceHttpClient {
     // 这样请求级 timeout 可以放宽或收紧默认值。
     _dio = Dio();
     if (adapter != null) _dio.httpClientAdapter = adapter;
-    _dio.interceptors.add(CookieManager(this.cookieJar));
+    _dio.interceptors.add(CookieManager(this.session.cookieJar));
   }
 
   @override
   final SourceNetworkConfig config;
-  final CookieJar cookieJar;
+  @override
+  final SourceSession session;
+  CookieJar get cookieJar => session.cookieJar;
   final TokenBucket? _bucket;
   late final Dio _dio;
 
@@ -64,6 +70,9 @@ class DioSourceHttpClient implements SourceHttpClient {
         e.key.toLowerCase(): e.value,
       for (final e in request.headers.entries) e.key.toLowerCase(): e.value,
     };
+    if (session.userAgent case final ua? when ua.isNotEmpty) {
+      headers.putIfAbsent('user-agent', () => ua);
+    }
     List<int>? body;
     if (request.body case final b?) {
       body = b.encode();
@@ -234,6 +243,7 @@ class DioSourceHttpClient implements SourceHttpClient {
         raw.headers,
         raw.bytes,
       )) {
+        session.lastChallengeUrl = uri;
         throw NetworkException(
           NetworkErrorKind.challenge,
           message: 'human verification required',

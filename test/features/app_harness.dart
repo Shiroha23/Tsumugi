@@ -8,9 +8,11 @@ import 'package:tsumugi/core/storage/app_database.dart';
 import 'package:tsumugi/features/comic/reader/reader_preferences.dart';
 import 'package:tsumugi/shared/image/image_cache.dart';
 import 'package:tsumugi/shared/image/image_providers.dart';
+import 'package:tsumugi/shared/webview/providers.dart';
 import 'package:tsumugi/sources/registry/providers.dart';
 
 import '../core/storage/test_database.dart';
+import '../shared/webview/webview_fakes.dart';
 import '../sources/runtime/runtime_support.dart';
 
 /// 用真实路由（[routerProvider]）、内存数据库与 [FakeFactory] 启动整个应用。
@@ -18,6 +20,9 @@ class AppHarness {
   AppHarness(this.factory);
 
   final FakeFactory factory;
+
+  /// 「打开验证页」不启动真实 WebView。
+  final verification = FakeSourceVerification();
   final AppDatabase db = openTestDatabase();
   late final SourceRegistry registry = SourceRegistry(db);
   late final ProviderContainer container = ProviderContainer(
@@ -31,6 +36,7 @@ class AppHarness {
       readerPreferencesStoreProvider.overrideWithValue(
         MemoryReaderPreferencesStore(),
       ),
+      sourceVerificationProvider.overrideWithValue(verification),
     ],
   );
 

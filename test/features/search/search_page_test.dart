@@ -64,15 +64,19 @@ void main() {
     expect(find.text('星之栖处'), findsOneWidget);
     expect(find.text('1+ 条'), findsOneWidget);
     expect(find.text('需要验证'), findsOneWidget);
-    expect(find.text('去验证'), findsOneWidget);
+    expect(find.text('打开验证页'), findsOneWidget);
     expect(find.text('服务器返回错误（HTTP 502）'), findsOneWidget);
     expect(find.text('重试'), findsNWidgets(2));
 
-    // E_CHALLENGE：只预留入口，不做任何自动处理。
-    await tester.tap(find.text('去验证'));
-    await tester.pump();
-    expect(find.text('WebView 验证尚未实现'), findsOneWidget);
-    await tester.pumpAndSettle(const Duration(seconds: 5));
+    // E_CHALLENGE：打开该源的验证页，用户完成后自动重试该分组。
+    final b = app.factory.created.singleWhere(
+      (s) => s.manifest.id == 'com.example.b',
+    );
+    expect(b.searches, hasLength(1));
+    await tester.tap(find.text('打开验证页'));
+    await tester.pumpAndSettle();
+    expect(app.verification.calls, ['com.example.b']);
+    expect(b.searches, hasLength(2));
 
     await tester.tap(find.text('加载更多'));
     await tester.pumpAndSettle();

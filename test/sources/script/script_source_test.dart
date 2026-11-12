@@ -677,11 +677,9 @@ void main() {
     final req = ui.requests.single;
     expect(req.url, Uri.parse('http://comic.example.com/login'));
     expect(req.title, 'Login');
-    expect(
-      req.doneWhenUrlMatches?.hasMatch('http://comic.example.com/members'),
-      isTrue,
-    );
+    expect(req.doneWhenUrlMatches, '/members');
     expect(identical(req.cookies, source.http), isTrue);
+    expect(identical(req.session, source.http.session), isTrue);
 
     expect(
       await source.debugCall('openWebView', ['http://outside.example.net/']),
@@ -690,6 +688,32 @@ void main() {
 
     final plain = await open(_hostManifest(id: 'com.example.plain'));
     expect(await plain.debugCall('openWebView', ['/login']), 'E_UNSUPPORTED');
+  });
+
+  test('openWebView: at most once per entry call', () async {
+    final ui = _FakeUi();
+    final source = await open(_hostManifest(), ui: ui);
+    expect(await source.debugCall('openWebViewTwice'), ['done', 'E_LIMIT']);
+    expect(ui.requests, hasLength(1));
+    // 计数按入口调用重置。
+    expect(await source.debugCall('openWebViewTwice'), ['done', 'E_LIMIT']);
+    expect(ui.requests, hasLength(2));
+  });
+
+  test('openWebView: invalid or overlong doneWhenUrlMatches', () async {
+    final ui = _FakeUi();
+    final source = await open(_hostManifest(), ui: ui);
+    expect(await source.debugCall('openWebViewBadPattern', ['(']), 'error');
+    expect(
+      await source.debugCall('openWebViewBadPattern', ['a' * 513]),
+      'error',
+    );
+    expect(ui.requests, isEmpty);
+    // 恰好 512 字符可以。
+    expect(
+      await source.debugCall('openWebViewBadPattern', ['a' * 512]),
+      'done',
+    );
   });
 
   test('E_LIMIT resets module state; the source stays usable', () async {

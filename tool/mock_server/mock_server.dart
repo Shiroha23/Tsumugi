@@ -22,7 +22,12 @@
 /// | `GET /members` | 需要 `session` Cookie，否则 401 |
 /// | `GET /cookie/set?name=&value=` | 设置任意 Cookie |
 /// | `GET /challenge` | 403 + `cf-mitigated: challenge` 响应头 |
-/// | `GET /challenge/page` | 503 + 含验证表单的页面 |
+/// | `GET /challenge/page` | 无 `verified` Cookie 时 503 + 含验证表单的页面，有则 200 |
+/// | `POST /challenge/verify` | 设置 HttpOnly 的 `verified=1` 并 303 到 `/challenge/page`（手动验证用） |
+/// | `GET /login` | 登录表单（POST 到 `/login`，密码 secret） |
+/// | `GET /` | 首页：验证 / 登录 / 白名单外链接 |
+/// | `GET /gated/<path>` | 有 `verified` Cookie 时等同 `<path>`，否则 503 验证页 |
+/// | `GET /members-only/<path>` | 有 `session` Cookie 时等同 `<path>`，否则 401 |
 /// | `GET /slow?ms=` | 延迟 ms 毫秒后响应 |
 /// | `GET /slow-body?ms=` | 先发送响应头，延迟后再发送响应体 |
 /// | `GET /status/<code>` | 返回指定状态码 |
@@ -108,11 +113,32 @@ class MockServer {
 
   Future<void> _route(HttpRequest req, String body) async {
     final res = req.response;
-    final path = req.uri.path;
+    var path = req.uri.path;
     final q = req.uri.queryParameters;
+    final verified = req.cookies.any(
+      (c) => c.name == 'verified' && c.value == '1',
+    );
+    final loggedIn = req.cookies.any(
+      (c) => c.name == 'session' && c.value.startsWith('ok-'),
+    );
+    if (path.startsWith('/gated/')) {
+      if (!verified) {
+        res.statusCode = HttpStatus.serviceUnavailable;
+        return _html(res, 'pages/challenge.html');
+      }
+      path = path.substring('/gated'.length);
+    } else if (path.startsWith('/members-only/')) {
+      if (!loggedIn) {
+        res.statusCode = HttpStatus.unauthorized;
+        return _json(res, {'error': 'login required'});
+      }
+      path = path.substring('/members-only'.length);
+    }
     final segments = req.uri.pathSegments;
 
     switch (path) {
+      case '/':
+        return _html(res, 'pages/index.html');
       case '/comic/search':
         final page = int.tryParse(q['page'] ?? '1') ?? 1;
         final file = switch (page) {
@@ -160,6 +186,8 @@ class MockServer {
           'cookies': {for (final c in req.cookies) c.name: c.value},
           'body': body,
         });
+      case '/login' when req.method == 'GET':
+        return _html(res, 'pages/login.html');
       case '/login':
         final form = Uri.splitQueryString(body);
         if (req.method == 'POST' && form['pass'] == 'secret') {
@@ -198,8 +226,18 @@ class MockServer {
         res.write('<!doctype html><title>Access denied</title>');
         return res.close();
       case '/challenge/page':
+        if (verified) return _html(res, 'pages/verified.html');
         res.statusCode = HttpStatus.serviceUnavailable;
         return _html(res, 'pages/challenge.html');
+      case '/challenge/verify' when req.method == 'POST':
+        res.cookies.add(
+          Cookie('verified', '1')
+            ..path = '/'
+            ..httpOnly = true,
+        );
+        res.statusCode = HttpStatus.seeOther;
+        res.headers.set(HttpHeaders.locationHeader, '/challenge/page');
+        return res.close();
       case '/slow':
         await Future<void>.delayed(_ms(q['ms'], 1000));
         return _json(res, {'slow': true});

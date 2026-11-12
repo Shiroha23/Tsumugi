@@ -1,35 +1,74 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../sources/runtime/source_error_text.dart';
+import '../webview/providers.dart';
 
 /// 显示源调用失败的原因（§6 错误码的中文提示），可选「重试」。
 ///
-/// `E_CHALLENGE` 额外显示「去验证」入口：将来在 WebView 中让用户**手动**完成验证
-/// （architecture §5.3），客户端不做任何自动绕过。
-class SourceErrorView extends StatelessWidget {
+/// `E_CHALLENGE` / `E_LOGIN_REQUIRED` 且给出 [sourceId] 时额外显示「打开验证页」：在 WebView 中让用户
+/// **手动**完成验证或登录（architecture §5.3），完成后 Cookie 写回该源并自动调用 [onRetry]。
+/// 客户端不做任何自动绕过。
+class SourceErrorView extends ConsumerStatefulWidget {
   const SourceErrorView({
     super.key,
     required this.error,
+    this.sourceId,
     this.onRetry,
     this.compact = false,
   });
 
   final Object error;
+
+  /// 出错的源；为 null 时不提供「打开验证页」。
+  final String? sourceId;
   final VoidCallback? onRetry;
 
   /// 紧凑模式：用于搜索结果分组内的一行。
   final bool compact;
 
   @override
+  ConsumerState<SourceErrorView> createState() => _SourceErrorViewState();
+}
+
+class _SourceErrorViewState extends ConsumerState<SourceErrorView> {
+  bool _verifying = false;
+
+  Future<void> _openVerification() async {
+    final sourceId = widget.sourceId;
+    if (sourceId == null || _verifying) return;
+    setState(() => _verifying = true);
+    try {
+      final done = await ref
+          .read(sourceVerificationProvider)
+          .verifySource(sourceId);
+      // 等待期间视图可能已销毁或被复用到另一个源上。
+      if (done && mounted && widget.sourceId == sourceId) {
+        widget.onRetry?.call();
+      }
+    } on Object catch (e) {
+      if (mounted) {
+        final info = describeSourceError(e);
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text('无法打开验证页：${info.detail ?? info.title}')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _verifying = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final info = describeSourceError(error);
+    final info = describeSourceError(widget.error);
+    final onRetry = widget.onRetry;
     final scheme = Theme.of(context).colorScheme;
     final actions = [
-      if (info.needsVerification)
+      if (info.needsVerification && widget.sourceId != null)
         TextButton.icon(
           icon: const Icon(Icons.verified_user_outlined),
-          label: const Text('去验证'),
-          onPressed: () => _openVerification(context),
+          label: const Text('打开验证页'),
+          onPressed: _verifying ? null : _openVerification,
         ),
       if (onRetry != null)
         TextButton.icon(
@@ -44,7 +83,7 @@ class SourceErrorView extends StatelessWidget {
     );
     final detail = info.detail;
 
-    if (compact) {
+    if (widget.compact) {
       return Padding(
         padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
         child: Row(
@@ -100,11 +139,5 @@ class SourceErrorView extends StatelessWidget {
         ),
       ),
     );
-  }
-
-  // TODO(m3): 打开 WebView 让用户手动完成验证，完成后把 Cookie 回写到该源的 Cookie 域并重试。
-  void _openVerification(BuildContext context) {
-    ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text('WebView 验证尚未实现')));
   }
 }

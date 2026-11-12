@@ -14,6 +14,7 @@
 
 - Flutter 3.47（stable）/ Dart 3.13，开发机为 Windows
 - iOS 只通过 GitHub Actions 的 macOS runner 构建（未签名 IPA）
+- Windows 构建需要 `nuget.exe` 在 PATH 中（flutter_inappwebview 经 NuGet 拉取 WebView2 SDK）
 
 ## 常用命令
 

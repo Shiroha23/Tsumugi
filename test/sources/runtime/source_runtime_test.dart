@@ -262,6 +262,16 @@ void main() {
     );
     expect(challenge.title, '需要验证');
     expect(challenge.needsVerification, isTrue);
+    final login = describeSourceError(
+      const SourceException(SourceErrorCode.loginRequired),
+    );
+    expect(login.title, '需要登录');
+    expect(login.needsVerification, isTrue);
+    expect(
+      describeSourceError(const SourceException(SourceErrorCode.network))
+          .needsVerification,
+      isFalse,
+    );
     expect(
       describeSourceError(const SourceException(SourceErrorCode.network)).title,
       '网络错误或超时',

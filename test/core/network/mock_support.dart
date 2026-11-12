@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:dio/io.dart';
 import 'package:tsumugi/core/network/dio_source_http_client.dart';
 import 'package:tsumugi/core/network/source_http_client.dart';
+import 'package:tsumugi/core/network/source_session.dart';
 
 import '../../../tool/mock_server/mock_server.dart';
 
@@ -28,6 +29,7 @@ DioSourceHttpClient mockClient(
   int maxRetries = 2,
   int maxRedirects = 5,
   int maxResponseBytes = 20 * 1024 * 1024,
+  SourceSession? session,
 }) => DioSourceHttpClient(
   SourceNetworkConfig(
     sourceId: sourceId,
@@ -42,4 +44,5 @@ DioSourceHttpClient mockClient(
     maxResponseBytes: maxResponseBytes,
   ),
   adapter: mockAdapter(server),
+  session: session,
 );
