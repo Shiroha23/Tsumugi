@@ -25,6 +25,7 @@ class FakeComicSource implements Source {
   FakeComicSource({this.failFirstContent = false});
 
   bool failFirstContent;
+  bool failFirstDetail = false;
   final contentCalls = <String>[];
   int detailCalls = 0;
 
@@ -40,6 +41,10 @@ class FakeComicSource implements Source {
   @override
   Future<Detail> detail(String id) async {
     detailCalls++;
+    if (failFirstDetail) {
+      failFirstDetail = false;
+      throw const SourceException(SourceErrorCode.network, '超时');
+    }
     return Detail(
       id: id,
       title: '虚构漫画',
@@ -230,6 +235,52 @@ void main() {
       expect(find.text('3 / 3'), findsOneWidget);
       expect(last().unitId, 'c1');
       expect(last().pageIndex, 2);
+    });
+
+    testWidgets('chapter list failure can be retried from the end page', (
+      tester,
+    ) async {
+      source.failFirstDetail = true;
+      await open(tester);
+      for (var i = 0; i < 3; i++) {
+        await key(tester, LogicalKeyboardKey.arrowRight);
+      }
+      expect(find.text('章节列表加载失败'), findsOneWidget);
+      expect(find.text('已经是最后一章'), findsNothing);
+      await tester.tap(find.text('重试获取章节'));
+      await settle(tester);
+      expect(source.detailCalls, 2);
+      expect(find.text('下一章：第2话'), findsOneWidget);
+    });
+
+    testWidgets('next key retries a failed chapter list', (tester) async {
+      source.failFirstDetail = true;
+      await open(tester);
+      for (var i = 0; i < 4; i++) {
+        await key(tester, LogicalKeyboardKey.arrowRight);
+      }
+      expect(find.text('章节列表加载失败，正在重试'), findsOneWidget);
+      expect(source.detailCalls, 2);
+      await key(tester, LogicalKeyboardKey.arrowRight);
+      expect(last().unitId, 'c2');
+    });
+
+    testWidgets('mouse wheel works on the end page', (tester) async {
+      await open(tester);
+      for (var i = 0; i < 3; i++) {
+        await key(tester, LogicalKeyboardKey.arrowRight);
+      }
+      expect(find.text('下一章：第2话'), findsOneWidget);
+      final pointer = TestPointer(1, PointerDeviceKind.mouse);
+      await tester.sendEventToBinding(pointer.hover(const Offset(100, 100)));
+      await tester.sendEventToBinding(pointer.scroll(const Offset(0, -120)));
+      await settle(tester);
+      expect(find.text('3 / 3'), findsOneWidget);
+      await tester.sendEventToBinding(pointer.scroll(const Offset(0, 120)));
+      await settle(tester);
+      await tester.sendEventToBinding(pointer.scroll(const Offset(0, 120)));
+      await settle(tester);
+      expect(last().unitId, 'c2');
     });
 
     testWidgets('first chapter has no previous chapter', (tester) async {

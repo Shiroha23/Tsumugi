@@ -236,8 +236,30 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
     sink(progress);
   }
 
+  AsyncValue<Detail> get _detail =>
+      ref.read(comicReaderDetailProvider(_sourceId, widget.itemId));
+
+  void _retryChapters() =>
+      ref.invalidate(comicReaderDetailProvider(_sourceId, widget.itemId));
+
+  /// 章节列表不可用（加载中 / 失败）时提示并返回 true；失败时顺带重试。
+  bool _chaptersUnavailable() {
+    switch (_detail) {
+      case AsyncError():
+        _retryChapters();
+        _toast('章节列表加载失败，正在重试');
+        return true;
+      case AsyncData():
+        return false;
+      default:
+        _toast('正在获取章节列表');
+        return true;
+    }
+  }
+
   /// 读到末尾后的“下一章”意图。
   void _nextChapterIntent({bool explicit = false}) {
+    if (_chaptersUnavailable()) return;
     final next = _neighbor(1);
     if (next == null) {
       _toast('已经是最后一章');
@@ -247,6 +269,7 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
   }
 
   void _previousChapter({bool toLastPage = true}) {
+    if (_chaptersUnavailable()) return;
     final prev = _neighbor(-1);
     if (prev == null) {
       _toast('已经是第一章');
@@ -608,8 +631,9 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
                     page: _page,
                     count: images?.length ?? 0,
                     rtl: _mode == ReaderMode.rightToLeft,
-                    hasPrevious: _neighbor(-1) != null,
-                    hasNext: _neighbor(1) != null,
+                    // 章节列表失败时保持可点，点击即重试。
+                    hasPrevious: _neighbor(-1) != null || detail is AsyncError,
+                    hasNext: _neighbor(1) != null || detail is AsyncError,
                     onJump: _jumpTo,
                     onPrevious: () => _previousChapter(toLastPage: false),
                     onNext: () => _nextChapterIntent(explicit: true),
@@ -623,14 +647,19 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
     );
   }
 
+  Widget _endOfChapter(String message) => _EndOfChapter(
+    message: message,
+    // 列表项在布局阶段构建，不能 watch；build 已 watch 详情，变化时列表会整体重建。
+    chapters: _detail,
+    next: _neighbor(1),
+    onNext: () => _nextChapterIntent(explicit: true),
+    onRetryChapters: _retryChapters,
+  );
+
   Widget _buildReader(ReaderPreferences prefs, List<ImageRef> images) {
     _ensureControllers(prefs.mode, images.length);
     if (images.isEmpty) {
-      return _EndOfChapter(
-        message: '本章没有图片',
-        next: _neighbor(1),
-        onNext: () => _nextChapterIntent(explicit: true),
-      );
+      return _endOfChapter('本章没有图片');
     }
     final reader = prefs.mode.isPaged
         ? _buildPaged(prefs.mode, images)
@@ -663,10 +692,10 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
       },
       itemBuilder: (context, i) {
         if (i >= count) {
-          return _EndOfChapter(
-            message: '本章完',
-            next: _neighbor(1),
-            onNext: () => _nextChapterIntent(explicit: true),
+          // 章末页同样用滚轮前后翻页。
+          return _WheelCatcher(
+            onWheel: (dy) => _step(dy > 0 ? _Step.next : _Step.previous),
+            child: _endOfChapter('本章完'),
           );
         }
         return _WheelCatcher(
@@ -707,11 +736,7 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
                 itemExtentBuilder: (i, _) => _extentOf(i, count),
                 itemBuilder: (context, i) {
                   if (i >= count) {
-                    return _EndOfChapter(
-                      message: '本章完',
-                      next: _neighbor(1),
-                      onNext: () => _nextChapterIntent(explicit: true),
-                    );
+                    return _endOfChapter('本章完');
                   }
                   return ReaderPageImage(
                     key: ValueKey('page-$_unitId-$i'),
@@ -801,13 +826,17 @@ class _ErrorView extends StatelessWidget {
 class _EndOfChapter extends StatelessWidget {
   const _EndOfChapter({
     required this.message,
+    required this.chapters,
     required this.next,
     required this.onNext,
+    required this.onRetryChapters,
   });
 
   final String message;
+  final AsyncValue<Detail> chapters;
   final Unit? next;
   final VoidCallback onNext;
+  final VoidCallback onRetryChapters;
 
   @override
   Widget build(BuildContext context) {
@@ -818,7 +847,16 @@ class _EndOfChapter extends StatelessWidget {
         children: [
           Text(message, style: const TextStyle(color: Colors.white70)),
           const SizedBox(height: 12),
-          if (next != null)
+          if (chapters is AsyncError) ...[
+            const Text('章节列表加载失败', style: TextStyle(color: Colors.white38)),
+            const SizedBox(height: 8),
+            FilledButton.tonal(
+              onPressed: onRetryChapters,
+              child: const Text('重试获取章节'),
+            ),
+          ] else if (chapters is! AsyncData)
+            const Text('正在获取章节列表…', style: TextStyle(color: Colors.white38))
+          else if (next != null)
             FilledButton.tonal(
               onPressed: onNext,
               child: Text('下一章：${next.title}'),

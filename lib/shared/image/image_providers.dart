@@ -25,10 +25,18 @@ abstract interface class ImageHttpClients {
 
 /// 从源注册表读取清单构造客户端，按 sourceId 缓存。
 class RegistryImageHttpClients implements ImageHttpClients {
-  RegistryImageHttpClients(this._registry);
+  /// 订阅注册表的变化（直接订阅数据库流，不经 provider，避免无监听者时被 Riverpod 暂停），
+  /// 源升级 / 重装 / 删除后丢弃旧客户端。
+  RegistryImageHttpClients(this._registry) {
+    _changes = _registry.watchAll().listen(sync, onError: (Object _) {});
+  }
 
   final SourceRegistry _registry;
+  late final StreamSubscription<List<InstalledSource>> _changes;
   final _clients = <String, Future<SourceHttpClient>>{};
+
+  /// 构造客户端时所用清单的 sha256，用于发现源升级 / 重装。
+  final _manifestSha = <String, String>{};
 
   @override
   Future<SourceHttpClient> clientFor(String sourceId) {
@@ -48,21 +56,42 @@ class RegistryImageHttpClients implements ImageHttpClients {
   Future<SourceHttpClient> _create(String sourceId) async {
     final installed = await _registry.get(sourceId);
     final manifest = installed?.manifest;
-    if (manifest == null) {
+    if (installed == null || manifest == null) {
       throw SourceException(
         SourceErrorCode.unsupported,
         installed == null ? '源未安装：$sourceId' : '源清单不可用：$sourceId',
       );
     }
+    _manifestSha[sourceId] = installed.manifestSha256;
     return DioSourceHttpClient(networkConfigFromManifest(manifest));
   }
 
-  /// 丢弃某个源的客户端（例如源被升级或删除后）。
-  void invalidate(String sourceId) {
-    _clients.remove(sourceId)?.then((c) => c.close()).ignore();
+  /// 已安装源列表变化时调用：清单变化（升级 / 重装）或被删除的源丢弃旧客户端，
+  /// 下次加载按新清单（白名单、headers、限速）重建。
+  void sync(Iterable<InstalledSource> installed) {
+    final current = {for (final s in installed) s.id: s.manifestSha256};
+    for (final id in _clients.keys.toList()) {
+      final sha = _manifestSha[id];
+      // sha 为 null：客户端仍在创建中，创建时读取的已是最新清单。
+      if (sha != null && current[id] != sha) invalidate(id);
+    }
   }
 
+  /// 丢弃某个源的客户端。旧客户端稍后关闭，让进行中的请求有机会完成。
+  void invalidate(String sourceId) {
+    _manifestSha.remove(sourceId);
+    final old = _clients.remove(sourceId);
+    if (old == null) return;
+    old
+        .then((c) => Timer(closeDelay, c.close))
+        .then<void>((_) {}, onError: (Object _) {});
+  }
+
+  /// [invalidate] 后旧客户端的关闭延迟。
+  Duration closeDelay = const Duration(seconds: 30);
+
   void dispose() {
+    _changes.cancel().ignore();
     for (final c in _clients.values) {
       c.then((c) => c.close()).ignore();
     }
