@@ -133,10 +133,9 @@ void main() {
 
     test('disk cache survives a new loader (memory cleared)', () async {
       final disk = FileDiskImageCache(() async => tmp);
-      await loaderWith(disk: disk)
-          .load('com.example.comic', const ImageRef(url: _page1));
-      // 等待后台写盘。
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+      final first = loaderWith(disk: disk);
+      await first.load('com.example.comic', const ImageRef(url: _page1));
+      await first.flushDiskWrites();
       expect(await disk.sizeBytes(), greaterThan(0));
 
       final fresh = loaderWith(disk: FileDiskImageCache(() async => tmp));
@@ -153,12 +152,12 @@ void main() {
       final loader = loaderWith(disk: disk);
       const ref = ImageRef(url: _page1);
       await loader.load('com.example.comic', ref);
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await loader.flushDiskWrites();
       await loader.evict('com.example.comic', _page1);
       expect(await disk.sizeBytes(), 0);
       await loader.load('com.example.comic', ref);
       expect(server.hits('/pages/1.png'), 2);
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await loader.flushDiskWrites();
     });
 
     test('host outside the allowlist is rejected without a request', () async {

@@ -109,6 +109,17 @@ class SourceImageLoader {
     load(sourceId, ref).then((_) {}, onError: (_) {});
   }
 
+  final _pendingWrites = <Future<void>>{};
+
+  void _trackWrite(Future<void> write) {
+    final tracked = write.then<void>((_) {}, onError: (Object _) {});
+    _pendingWrites.add(tracked);
+    tracked.whenComplete(() => _pendingWrites.remove(tracked));
+  }
+
+  /// 等待已发起的后台磁盘写入完成（例如退出前或测试中）。
+  Future<void> flushDiskWrites() => Future.wait(List.of(_pendingWrites));
+
   /// 删除某张图的缓存（例如字节无法解码时）。
   Future<void> evict(String sourceId, String url) {
     final key = ImageCacheKey(sourceId, url);
@@ -161,7 +172,7 @@ class SourceImageLoader {
           final bytes = res.bytes;
           memoryCache.put(key, bytes);
           // 磁盘写入不阻塞返回。
-          diskCache.put(key, bytes).ignore();
+          _trackWrite(diskCache.put(key, bytes));
           pending.emit(_done(bytes));
           return bytes;
         } on NetworkException catch (e) {
