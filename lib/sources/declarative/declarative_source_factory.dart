@@ -43,7 +43,7 @@ class SourceHttpFetcher implements Fetcher {
       status: response.status,
       url: response.url,
       headers: response.headers,
-      body: response.text,
+      body: response.decodeText(charset: request.charset),
     );
   }
 }

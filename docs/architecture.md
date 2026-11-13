@@ -33,6 +33,7 @@
 | 音视频 | media_kit（libmpv） | 视频与音乐共用 |
 | WebView | [`flutter_inappwebview`](https://pub.dev/packages/flutter_inappwebview) 6.2.0-beta.3（Apache-2.0） | M3 选定：登录 / 人机验证（用户手动完成），见 §5.3 |
 | 序列化 | freezed + json_serializable | |
+| 文本编码 | 自实现 WHATWG Encoding 解码器（纯 Dart，无新依赖） | #22：GBK / GB18030 / Big5 / Shift_JIS / EUC-KR / 单字节编码，见 §6.3 |
 | 压缩 / ZIP | [`archive`](https://pub.dev/packages/archive)（MIT） | M3 选定：生成 EPUB（OCF ZIP 容器），纯 Dart，三平台一致，见 §5.2「小说导出」 |
 | 文件选择 / 保存 | [`file_picker`](https://pub.dev/packages/file_picker)（MIT） | M1 导入清单；M3 起 `saveFile` 用于保存导出文件 |
 
@@ -69,6 +70,7 @@ lib/
         host/             # worker 内的宿主 API（crypto、HTML 句柄）与 tsumugi prelude
       expression/         # 选择器表达式（css/xpath/json/regex）
     network/              # HttpClient、Cookie、限速、重试、日志
+    encoding/             # 响应文本的编码识别与解码（WHATWG Encoding，§6.3）
     storage/              # drift 数据库、KV 存储
     logging/
   sources/
@@ -97,6 +99,7 @@ test/
   core/  sources/  shared/
 tool/
   mock_server/            # 本地 mock HTTP 服务，供测试与规则调试
+  encoding/               # 由 WHATWG 索引生成 lib/core/encoding/whatwg_indexes.dart
 docs/
 ```
 
@@ -319,6 +322,10 @@ tsumugi.ui.openWebView ────────┘   （单飞 / 节流） └�
   `lib/sources/network_error_mapping.dart`（core 不依赖 sources）。
 - 错误统一为 `NetworkException(kind)`，`NetworkErrorKind` 与 source-spec §6 错误码一一映射
   （`NetworkException.toSourceException()`，同样在 sources 一侧）。
+- **响应文本解码**（`NetResponse.text` / `decodeText`，实现在 `lib/core/encoding/`）：按显式 `charset` → BOM →
+  `Content-Type` 的 charset → HTML `<meta>` / XML 声明（只看响应体前 4 KB）→ utf-8 识别编码，规则见 source-spec §5。
+  声明式引擎、脚本 `tsumugi.http`（`text` / `json`）与小说阅读 / 导出（正文来自同一请求）都经此路径；
+  `responseType: "bytes"` 与图片直接取原始字节，不受影响。不认识的 charset 跳过并记录调试日志（`tsumugi.network`）。
 - `ChallengeDetector` 只做检测（状态码 + 响应头 / 页面特征），命中时上报 `E_CHALLENGE`。
 - 测试与规则调试使用 `tool/mock_server/`（纯 Dart，页面在 `test/fixtures/mock_site/`）。
   测试中通过自定义 `HttpClientAdapter` 把 `comic.example.com` 等虚构主机名的连接接到本地随机端口，
@@ -333,7 +340,8 @@ tsumugi.ui.openWebView ────────┘   （单飞 / 节流） └�
   （`MockServer.rewriteFictionalHosts`，单元测试不开启）。
   Windows 防火墙首次会询问是否允许 dart 接受入站连接。
 
-已知限制：响应文本只识别 utf-8 / latin1 / ascii 字符集（其余按 utf-8 宽松解码），GBK 等需后续补充（[#22](https://github.com/Shiroha23/Tsumugi/issues/22)）；
+已知限制：不支持 EUC-JP / ISO-2022-JP（缺 JIS X 0212 索引与有状态解码器，遇到时按 utf-8 解码并记录日志）；
+请求方向仍只用 UTF-8 编码（模板 `{{keyword}}` 的 URL 编码、表单与请求体），只接受 GBK 编码参数的站点暂无法搜索；
 Cookie Jar 在按源的 `SourceSession` 中（§5.3），目前只在内存中，持久化（按源目录的 `PersistCookieJar`）为后续工作（[#21](https://github.com/Shiroha23/Tsumugi/issues/21)）。
 
 ### 5.5 脚本源（M1）
@@ -479,6 +487,29 @@ RFC 9535 是目前唯一的 JSONPath 标准，选它可避免各实现间过滤�
 
 两者都支持 Windows / Android / iOS（纯 Dart，无原生库）。兼容性测试见
 `test/core/engine/expression/expression_engine_test.dart`。
+
+### 6.3 文本编码选型结论（#22，2026-11）
+
+**自实现 [WHATWG Encoding Standard](https://encoding.spec.whatwg.org/) 的解码器（纯 Dart），不引入编码库。**
+浏览器按这份标准解码网页，与之一致就能得到和浏览器相同的结果（如 `gb2312` / `gbk` 标签按 GB18030 解码、
+`latin1` / `ascii` 按 windows-1252、Big5 即 Big5-HKSCS）。
+
+| 方案 | 覆盖 | 许可证 | 结论 |
+|---|---|---|---|
+| **自实现 + WHATWG 索引** ✅ | GB18030（含四字节区间）、Big5、Shift_JIS、EUC-KR、UTF-16、全部单字节编码 | 索引数据：WHATWG 标准中并入源码的部分按 BSD-3 授权（与 GPL-3.0 兼容） | 选用 |
+| [`enough_convert`](https://pub.dev/packages/enough_convert) | GBK、Big5、单字节；无 Shift_JIS / EUC-KR，无 GB18030 四字节 | MPL-2.0 | 覆盖不足；非法字节默认抛异常 |
+| [`charset`](https://pub.dev/packages/charset) | GBK、Shift_JIS、EUC-KR、单字节；无 Big5 | BSD-3 | 覆盖不足，最后发版 2023 |
+| 平台 API（ICU / iconv） | 全 | — | 三平台不一致，需原生桥接 |
+
+- `lib/core/encoding/whatwg_indexes.dart` 由 `tool/encoding/gen_whatwg_indexes.dart` 从 WHATWG 索引文件生成
+  （文件头记录各索引的 Identifier）；多字节索引按「码点差值 → zigzag varint → zlib（`archive` 包）→ base64」
+  压缩，源码约 130 KB，首次用到某个编码时解压（几毫秒）。
+- 解码算法逐条照搬标准（含错误时「把 ASCII 字节放回输入流」等细节），非法字节输出 U+FFFD，从不抛异常。
+- 与 Python `gb18030` / `big5hkscs` / `cp932` / `cp949` 编解码器对全部可编码字符做过交叉比对，
+  差异只在标准有意不同之处（GB18030-2022 的 PUA 调整、cp932 / HKSCS 的单向兼容映射）。
+- 只实现解码；请求方向（编码 GBK 表单 / 查询参数）为后续工作。
+- 测试：`test/core/encoding/`、`test/core/network/net_response_test.dart`，以及 mock 服务器的 GBK / Big5 虚构页面
+  （`test/fixtures/mock_site/encoding/`）。
 
 ## 7. 里程碑
 

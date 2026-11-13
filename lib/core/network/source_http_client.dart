@@ -1,7 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer' as developer;
 import 'dart:typed_data';
 
+import '../encoding/charset_sniffing.dart';
+import '../encoding/text_decoding.dart';
 import 'challenge_detector.dart';
 import 'host_policy.dart';
 import 'network_exception.dart';
@@ -237,13 +240,32 @@ class NetResponse {
 
   String? header(String name) => headers[name.toLowerCase()];
 
-  /// 按 `Content-Type` 的 charset 解码（支持 utf-8 / latin1 / ascii，其余按 utf-8 宽松解码）。
-  late final String text = _decodeText();
+  /// 识别出的响应文本编码（不含显式指定的情况），见 [detectCharset]。
+  late final CharsetDetection charset = detectCharset(
+    bytes,
+    contentType: header('content-type'),
+    log: _debugLog,
+  );
 
-  /// 把 [text] 解析为 JSON；失败抛出 [NetworkErrorKind.decode]。
-  Object? json() {
+  /// 响应文本：按 BOM → `Content-Type` 的 charset → HTML `<meta>` → utf-8 识别编码
+  /// （docs/source-spec.md §5）；非法字节替换为 U+FFFD。
+  late final String text = decodeBytes(bytes, charset.encoding);
+
+  /// 与 [text] 相同，但 [charset] 非 null 时按它解码（WHATWG 标签，如 `gbk`）。
+  /// 标签必须是 [normalizeCharset] 认识的，否则抛出 [ArgumentError]。
+  String decodeText({String? charset}) {
+    if (charset == null) return text;
+    final enc = normalizeCharset(charset);
+    if (enc == null) {
+      throw ArgumentError.value(charset, 'charset', 'unsupported charset');
+    }
+    return decodeBytes(bytes, enc);
+  }
+
+  /// 把 [decodeText] 的结果解析为 JSON；失败抛出 [NetworkErrorKind.decode]。
+  Object? json({String? charset}) {
     try {
-      return jsonDecode(text);
+      return jsonDecode(decodeText(charset: charset));
     } on FormatException catch (e) {
       throw NetworkException(
         NetworkErrorKind.decode,
@@ -255,19 +277,6 @@ class NetResponse {
     }
   }
 
-  String _decodeText() {
-    final charset = RegExp(
-      r'charset="?([\w.:-]+)"?',
-      caseSensitive: false,
-    ).firstMatch(header('content-type') ?? '')?.group(1)?.toLowerCase();
-    switch (charset) {
-      case 'iso-8859-1' || 'latin1' || 'latin-1':
-        return latin1.decode(bytes);
-      case 'us-ascii' || 'ascii':
-        return ascii.decode(bytes, allowInvalid: true);
-      default:
-        final s = utf8.decode(bytes, allowMalformed: true);
-        return s.startsWith('﻿') ? s.substring(1) : s;
-    }
-  }
+  void _debugLog(String message) =>
+      developer.log('$message ($url)', name: 'tsumugi.network');
 }
