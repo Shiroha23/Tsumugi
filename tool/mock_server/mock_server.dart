@@ -112,6 +112,49 @@ class MockServer {
     }
   }
 
+  /// 虚构源固定写的地址；[_source] 会把它换成请求实际使用的地址。
+  static const fixtureOrigin = 'http://127.0.0.1:8080';
+
+  Future<void> _source(HttpRequest req, String name) async {
+    final res = req.response;
+    final dir = Directory(
+      '${fixturesDir.parent.path}${Platform.pathSeparator}sources',
+    );
+    if (name.isEmpty) {
+      final files =
+          dir
+              .listSync()
+              .whereType<File>()
+              .map((f) => f.uri.pathSegments.last)
+              .where((n) => n.endsWith('.json'))
+              .toList()
+            ..sort();
+      res.headers.contentType = ContentType.html;
+      res.write(
+        '<!doctype html><meta charset="utf-8"><title>sources</title><ul>'
+        '${files.map((f) => '<li><a href="/sources/$f">$f</a></li>').join()}'
+        '</ul>',
+      );
+      return res.close();
+    }
+    // 只允许目录内的 .json 文件名，防止路径穿越。
+    if (!RegExp(r'^[A-Za-z0-9._-]+\.json$').hasMatch(name)) {
+      res.statusCode = HttpStatus.badRequest;
+      return res.close();
+    }
+    final file = File('${dir.path}${Platform.pathSeparator}$name');
+    if (!file.existsSync()) {
+      res.statusCode = HttpStatus.notFound;
+      return res.close();
+    }
+    final host = req.headers.host ?? '127.0.0.1';
+    final port = req.headers.port ?? this.port;
+    final origin = 'http://$host:$port';
+    res.headers.contentType = ContentType.json;
+    res.write(file.readAsStringSync().replaceAll(fixtureOrigin, origin));
+    return res.close();
+  }
+
   Future<void> _route(HttpRequest req, String body) async {
     final res = req.response;
     var path = req.uri.path;
@@ -122,6 +165,11 @@ class MockServer {
     final loggedIn = req.cookies.any(
       (c) => c.name == 'session' && c.value.startsWith('ok-'),
     );
+    // 供真机调试：返回 test/fixtures/sources/ 中的虚构源，把其中的
+    // `http://127.0.0.1:8080` 换成本次请求所用的地址（如局域网 IP），手机上即可直接导入。
+    if (path.startsWith('/sources/')) {
+      return _source(req, path.substring('/sources/'.length));
+    }
     if (path.startsWith('/gated/')) {
       if (!verified) {
         res.statusCode = HttpStatus.serviceUnavailable;
