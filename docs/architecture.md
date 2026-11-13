@@ -296,6 +296,15 @@ tsumugi.ui.openWebView ────────┘   （单飞 / 节流） └�
 - 测试与规则调试使用 `tool/mock_server/`（纯 Dart，页面在 `test/fixtures/mock_site/`）。
   测试中通过自定义 `HttpClientAdapter` 把 `comic.example.com` 等虚构主机名的连接接到本地随机端口，
   白名单仍按真实主机名检查；手动调试：`dart run tool/mock_server/main.dart --port 8080`。
+- **明文 http**：Android（`android:usesCleartextTraffic="true"`）与 iOS（`NSAllowsArbitraryLoads`）
+  均允许 http，因为不少源站点只提供 http；访问范围仍由每个源的 `HostPolicy` 白名单限制，
+  安全边界不依赖传输层。Secure Cookie 不会经 http 发送（`SecureCookieJar`，§5.3）。
+- **真机调试**：`dart run tool/mock_server/main.dart --host 0.0.0.0` 监听局域网并打印本机地址；
+  手机浏览器打开 `http://<电脑局域网 IP>:8080/sources/`，复制虚构源 JSON 导入应用——
+  `/sources/<文件名>` 会把虚构源里的 `http://127.0.0.1:8080` 换成请求所用的地址；命令行启动的服务器
+  还会把页面 / JSON 中虚构的图片主机 `http://img.example.com` 换成请求地址，封面与漫画页才能显示
+  （`MockServer.rewriteFictionalHosts`，单元测试不开启）。
+  Windows 防火墙首次会询问是否允许 dart 接受入站连接。
 
 已知限制：响应文本只识别 utf-8 / latin1 / ascii 字符集（其余按 utf-8 宽松解码），GBK 等需后续补充；
 Cookie Jar 在按源的 `SourceSession` 中（§5.3），目前只在内存中，持久化（按源目录的 `PersistCookieJar`）为后续工作。
