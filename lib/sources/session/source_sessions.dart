@@ -68,8 +68,7 @@ class SourceSessions {
     }
     if (previous == null) {
       initialSweep = persistence?.sweep(
-        (id) =>
-            (_installed?.contains(id) ?? false) || _sessions.containsKey(id),
+        () => {...?_installed, ..._sessions.keys},
       );
     }
   }

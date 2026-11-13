@@ -267,8 +267,9 @@ tsumugi.ui.openWebView ────────┘   （单飞 / 节流） └�
   Cookie 对图片同样有效。源被删除时丢弃其会话。会话按源持久化，重启后登录 / 验证状态仍有效，见下方「会话持久化」。
 - **会话持久化**（[#21](https://github.com/Shiroha23/Tsumugi/issues/21)）：`SessionPersistence`（`core/network/session_persistence.dart`）
   把每个源的 Cookie 与 WebView 同步来的 User-Agent 存为**一个源一个文件**：
-  `<应用支持目录>/source_sessions/<sourceId 的 UTF-8 十六进制>.json`（应用支持目录不会被系统当作缓存清理；
-  文件名用十六进制编码，避免 `..`、Windows 保留名与大小写不敏感的文件系统带来的冲突）。
+  `<应用支持目录>/source_sessions/<sourceId 的 UTF-8 字节的 sha256>.json`（应用支持目录不会被系统当作缓存清理；
+  文件名定长，不受 sourceId 长度影响——清单不限制 id 长度，直接编码可能超过 255 字符的文件名上限；
+  也避开 `..`、Windows 保留名与大小写不敏感的文件系统带来的冲突）。
   - 选型：不用 `cookie_jar` 自带的 `PersistCookieJar`——它按主机分多个文件、非原子写入、并发写可能交错，
     读到损坏文件时抛异常；也不放进 drift，Cookie 读写频繁且与业务数据无关，单独的小文件更易隔离与删除。
     内存中仍是 `cookie_jar` 的 `DefaultCookieJar`，外面依次包 `PersistingCookieJar`（读写前等待加载、写后落盘、

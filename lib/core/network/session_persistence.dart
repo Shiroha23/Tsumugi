@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
+
 /// 持久化日志回调。
 typedef SessionLog = void Function(String message);
 
@@ -129,7 +131,7 @@ class StoredCookie {
 
 /// 把每个源的会话存为一个 JSON 文件（docs/architecture.md §5.3「会话持久化」）。
 ///
-/// - 文件：`<目录>/<sourceId 的 UTF-8 十六进制>.json`；一个源只读写自己的文件。
+/// - 文件：`<目录>/<sourceId 的 sha256>.json`；一个源只读写自己的文件。
 /// - 同一源的加载、写入、删除在一个队列中串行执行；写入先写临时文件再重命名替换。
 /// - 文件损坏时删除并记录日志，按空会话处理；IO 失败只记录日志，不向调用方抛出。
 class SessionPersistence {
@@ -152,31 +154,22 @@ class SessionPersistence {
 
   static void _ignore(String _) {}
 
-  /// [sourceId] 对应的文件名（不含目录）。
-  static String fileNameFor(String sourceId) =>
-      '${_hex(utf8.encode(sourceId))}$_ext';
+  /// [sourceId] 对应的文件名（不含目录）：UTF-8 字节的 sha256 小写十六进制 + `.json`。
+  ///
+  /// 定长（69 个字符），不受 sourceId 长度影响，也避开 `..`、Windows 保留名与大小写问题。
+  static String fileNameFor(String sourceId) => '${_key(sourceId)}$_ext';
 
-  /// 从文件名还原 sourceId；不是本类生成的文件名时返回 null。
-  static String? sourceIdOf(String fileName) {
-    if (!fileName.endsWith(_ext)) return null;
-    final hex = fileName.substring(0, fileName.length - _ext.length);
-    if (hex.isEmpty || hex.length.isOdd || !_hexPattern.hasMatch(hex)) {
-      return null;
-    }
-    try {
-      return utf8.decode([
-        for (var i = 0; i < hex.length; i += 2)
-          int.parse(hex.substring(i, i + 2), radix: 16),
-      ]);
-    } on FormatException {
-      return null;
-    }
+  /// 文件与队列的键。
+  static String _key(String sourceId) =>
+      sha256.convert(utf8.encode(sourceId)).toString();
+
+  /// 文件名是否为本类生成的会话文件（或其临时文件）；返回其键，否则返回 null。
+  static String? _keyOfFile(String fileName) {
+    final match = _filePattern.firstMatch(fileName);
+    return match?.group(1);
   }
 
-  static final _hexPattern = RegExp(r'^[0-9a-f]+$');
-
-  static String _hex(List<int> bytes) =>
-      bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  static final _filePattern = RegExp(r'^([0-9a-f]{64})\.json(\.tmp)?$');
 
   Future<Directory> _dir() => _directory ??= _resolveDirectory().then(
     (d) => d,
@@ -186,23 +179,25 @@ class SessionPersistence {
     },
   );
 
-  Future<File> _file(String sourceId, [String ext = _ext]) async {
+  Future<File> _file(String sourceId, [String ext = _ext]) =>
+      _fileOfKey(_key(sourceId), ext);
+
+  Future<File> _fileOfKey(String key, [String ext = _ext]) async {
     final dir = await _dir();
-    final name = fileNameFor(sourceId);
-    return File(
-      '${dir.path}${Platform.pathSeparator}'
-      '${name.substring(0, name.length - _ext.length)}$ext',
-    );
+    return File('${dir.path}${Platform.pathSeparator}$key$ext');
   }
 
   /// 在 [sourceId] 的队列中执行 [op]；[op] 的异常传给返回的 Future，但不影响队列中后续操作。
-  Future<T> _enqueue<T>(String sourceId, Future<T> Function() op) {
-    final previous = _queues[sourceId] ?? Future<void>.value();
+  Future<T> _enqueue<T>(String sourceId, Future<T> Function() op) =>
+      _enqueueKey(_key(sourceId), op);
+
+  Future<T> _enqueueKey<T>(String key, Future<T> Function() op) {
+    final previous = _queues[key] ?? Future<void>.value();
     final result = previous.then((_) => op());
     final tail = result.then<void>((_) {}, onError: (Object _) {});
-    _queues[sourceId] = tail;
+    _queues[key] = tail;
     tail.whenComplete(() {
-      if (identical(_queues[sourceId], tail)) _queues.remove(sourceId);
+      if (identical(_queues[key], tail)) _queues.remove(key);
     }).ignore();
     return result;
   }
@@ -276,10 +271,10 @@ class SessionPersistence {
     }
   });
 
-  /// 删除 [keep] 返回 false 的源的会话文件，并清理残留的临时文件；不认识的文件不碰。
+  /// 删除不属于 [keep] 返回的任何源的会话文件，并清理残留的临时文件；不认识的文件不碰。
   ///
-  /// [keep] 在每个源的队列中、真正删除前才求值，因此列目录期间新安装并写入的源不会被误删。
-  Future<void> sweep(bool Function(String sourceId) keep) async {
+  /// [keep] 在每个文件的队列中、真正删除前才求值，因此列目录期间新安装并写入的源不会被误删。
+  Future<void> sweep(Iterable<String> Function() keep) async {
     final List<FileSystemEntity> entries;
     try {
       final dir = await _dir();
@@ -289,33 +284,29 @@ class SessionPersistence {
       _log('sweep session files failed: $e');
       return;
     }
-    final stale = <String>{};
-    for (final entry in entries) {
-      if (entry is! File) continue;
-      final name = entry.uri.pathSegments.last;
-      final base = name.endsWith(_tmpExt)
-          ? name.substring(0, name.length - '.tmp'.length)
-          : name;
-      final id = sourceIdOf(base);
-      if (id == null) continue; // 不是本类的文件，不碰
-      stale.add(id);
-    }
+    final keys = <String>{
+      for (final entry in entries)
+        if (entry is File) ?_keyOfFile(entry.uri.pathSegments.last),
+    };
     await Future.wait([
-      for (final id in stale)
-        _enqueue(id, () async {
+      for (final key in keys)
+        _enqueueKey(key, () async {
           try {
             // 临时文件只会是上次写入中断留下的（写入在队列内完成），总可以删除。
-            await _deleteFile(await _file(id, _tmpExt));
-            if (!keep(id)) await _deleteFile(await _file(id));
+            await _deleteFile(await _fileOfKey(key, _tmpExt));
+            if (!keep().map(_key).contains(key)) {
+              await _deleteFile(await _fileOfKey(key));
+            }
           } on Object catch (e) {
-            _log('[$id] sweep session file failed: $e');
+            _log('sweep session file $key failed: $e');
           }
         }),
     ]);
   }
 
   /// 等待 [sourceId] 队列中已排队的操作完成（测试用）。
-  Future<void> idle(String sourceId) => _queues[sourceId] ?? Future.value();
+  Future<void> idle(String sourceId) =>
+      _queues[_key(sourceId)] ?? Future.value();
 
   static Future<void> _deleteFile(File file) async {
     try {

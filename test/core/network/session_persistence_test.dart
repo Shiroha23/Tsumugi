@@ -42,16 +42,25 @@ void main() {
   };
 
   group('文件名', () {
-    test('sourceId 以 UTF-8 十六进制编码，可还原', () {
-      expect(SessionPersistence.fileNameFor('a.b'), '612e62.json');
-      for (final id in ['..', 'con', 'com.example.comic', '中文']) {
-        final name = SessionPersistence.fileNameFor(id);
-        expect(name, matches(RegExp(r'^[0-9a-f]+\.json$')));
-        expect(SessionPersistence.sourceIdOf(name), id);
+    test('文件名为 sourceId 的 sha256，定长且不受 id 内容影响', () {
+      final names = {
+        for (final id in ['..', 'con', 'com.example.comic', '中文', 'a' * 300])
+          SessionPersistence.fileNameFor(id),
+      };
+      expect(names, hasLength(5));
+      for (final name in names) {
+        expect(name, matches(RegExp(r'^[0-9a-f]{64}\.json$')));
       }
-      expect(SessionPersistence.sourceIdOf('readme.txt'), isNull);
-      expect(SessionPersistence.sourceIdOf('6.json'), isNull);
-      expect(SessionPersistence.sourceIdOf('ZZ.json'), isNull);
+    });
+
+    test('很长的 sourceId 也能持久化（文件名不超过 255）', () async {
+      final id = 'com.example.${'x' * 240}';
+      final s = SourceSession.persistent(id, persistence);
+      await s.cookieJar.saveFromResponse(comic, [Cookie('k', 'v')]);
+      await persistence.idle(id);
+      expect(logs, isEmpty);
+      expect(fileOf(id).existsSync(), isTrue);
+      expect(await cookiesOn(restart(id), comic), {'k': 'v'});
     });
   });
 
@@ -373,7 +382,7 @@ void main() {
       final tmp = File('${fileOf(a).path}.tmp')..writeAsStringSync('partial');
       final foreign = File('${dir.path}/notes.txt')..writeAsStringSync('keep');
 
-      await persistence.sweep((id) => id == a);
+      await persistence.sweep(() => [a]);
       expect(fileOf(a).existsSync(), isTrue);
       expect(tmp.existsSync(), isFalse);
       expect(fileOf(b).existsSync(), isFalse);
@@ -386,7 +395,7 @@ void main() {
       await s.cookieJar.saveFromResponse(comic, [Cookie('k', 'v')]);
       await persistence.idle(b);
 
-      final sweeping = persistence.sweep(keep.contains);
+      final sweeping = persistence.sweep(() => keep);
       keep.add(b); // 在清理真正执行前，b 被安装
       await sweeping;
       expect(fileOf(b).existsSync(), isTrue);
