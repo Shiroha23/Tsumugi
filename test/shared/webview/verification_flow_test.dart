@@ -52,7 +52,7 @@ void main() {
     registry = SourceRegistry(db);
     sessions = SourceSessions();
     store = FakeWebCookieStore();
-    launcher = FakeWebViewLauncher();
+    launcher = FakeWebViewLauncher(null, store);
     verifier = SourceVerifier(launcher: launcher, cookies: store);
     toasts = [];
     factories = SourceFactories([

@@ -16,7 +16,10 @@ class InAppWebViewLauncher implements WebViewLauncher {
   final InAppWebViewEnvironment environment;
 
   @override
-  Future<WebViewOutcome> open(VerificationRequest request) async {
+  Future<WebViewOutcome> open(
+    VerificationRequest request, {
+    required CompletionHandler onComplete,
+  }) async {
     // 先确认平台可用（Windows 上检查 WebView2 Runtime），失败时抛出 E_UNSUPPORTED。
     final env = await environment.environment;
     final navigator = navigatorKey.currentState;
@@ -30,14 +33,16 @@ class InAppWebViewLauncher implements WebViewLauncher {
         builder: (_) => SourceWebViewPage(
           request: request,
           environment: env,
+          onComplete: onComplete,
           onDisposed: () {
             if (!disposed.isCompleted) disposed.complete();
           },
         ),
       ),
     );
-    // push 的 Future 在 pop 时就完成，此时页面（与原生 WebView）还在退出动画中，仍可能写入 Cookie。
-    // 等页面销毁后再交给调用方同步并清空 Cookie 存储，避免旧页面的写入落到清空之后。
+    // Cookie 已在页面关闭前经 onComplete 同步。push 的 Future 在 pop 时就完成，此时页面
+    // （与原生 WebView）还在退出动画中，仍可能写入 Cookie；等它销毁后调用方再清空存储，
+    // 旧页面之后的写入不会留给下一个源。
     await disposed.future
         .timeout(const Duration(seconds: 5))
         .then<void>((_) {}, onError: (Object _) {});
@@ -54,12 +59,16 @@ class SourceWebViewPage extends StatefulWidget {
   const SourceWebViewPage({
     super.key,
     required this.request,
+    required this.onComplete,
     this.environment,
     this.onDisposed,
   });
 
   final VerificationRequest request;
   final iaw.WebViewEnvironment? environment;
+
+  /// 用户完成时、页面关闭前调用（WebView 仍存活），见 [CompletionHandler]。
+  final CompletionHandler onComplete;
 
   /// 页面（及其原生 WebView）销毁时调用。
   final VoidCallback? onDisposed;
@@ -88,7 +97,7 @@ class _SourceWebViewPageState extends State<SourceWebViewPage> {
   /// 已 pop（完成或取消）。
   bool _finished = false;
 
-  /// 正在完成（读取 UA）；期间仍可取消。
+  /// 正在完成（读取 UA、同步 Cookie）；期间仍可取消。
   bool _finishing = false;
 
   @override
@@ -146,7 +155,7 @@ class _SourceWebViewPageState extends State<SourceWebViewPage> {
           .showSnackBar(const SnackBar(content: Text('当前页面不在源的白名单内，请先返回')));
       return;
     }
-    _finishing = true;
+    setState(() => _finishing = true);
     String? ua;
     try {
       final r = await _controller
@@ -156,13 +165,42 @@ class _SourceWebViewPageState extends State<SourceWebViewPage> {
     } on Object {
       // 读取失败或超时时不同步 UA。
     }
-    _finishing = false;
-    // 等待期间用户可能已取消。
     if (!mounted || _finished) return;
-    _finished = true;
-    Navigator.of(context).pop(
-      WebViewOutcome(completed: true, visited: {..._visited}, userAgent: ua),
+    final outcome = WebViewOutcome(
+      completed: true,
+      visited: {..._visited},
+      userAgent: ua,
     );
+    // 在页面关闭前同步：WebView 销毁后（尤其 Windows）已无法可靠读取 Cookie。
+    final int count;
+    try {
+      count = await widget.onComplete(
+        outcome,
+        InAppLiveWebView(_controller, widget.environment),
+      );
+    } on Object catch (e) {
+      debugPrint('[webview] sync cookies failed: $e');
+      if (mounted) {
+        setState(() => _finishing = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '同步 Cookie 失败：${e is SourceException ? e.message : e}。可再点「完成」重试，或关闭。',
+            ),
+          ),
+        );
+      }
+      return;
+    }
+    // 等待期间用户可能已取消（此时已写入的 Cookie 保留）。
+    if (!mounted || _finished) return;
+    if (count == 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('没有从验证页读取到任何 Cookie；若重试仍失败，请重新打开验证页')),
+      );
+    }
+    _finished = true;
+    Navigator.of(context).pop(outcome);
   }
 
   void _cancel() {
@@ -215,7 +253,10 @@ class _SourceWebViewPageState extends State<SourceWebViewPage> {
               tooltip: '刷新',
               onPressed: () => _controller?.reload(),
             ),
-            TextButton(onPressed: _finish, child: const Text('完成')),
+            TextButton(
+              onPressed: _finishing ? null : _finish,
+              child: Text(_finishing ? '同步中…' : '完成'),
+            ),
           ],
           bottom: _progress > 0 && _progress < 100
               ? PreferredSize(

@@ -246,13 +246,18 @@ tsumugi.ui.openWebView ────────┘   （单飞 / 节流） └�
 - **完成**：用户点「完成」，或主框架**加载完成**的地址匹配 `doneWhenUrlMatches`（只对白名单内的地址判断，
   求值期间若已导航到别处则忽略；正则在后台 isolate 中串行求值、限时 1 s，超时则不再自动判断，
   避免恶意正则卡住界面）。点关闭为取消（读取 UA 期间仍可取消，读取限时 2 s）。
-  页面 pop 后等其销毁再同步并清空 Cookie，避免退出中的旧页面在清空之后写入。
-- **Cookie 同步**：完成后对「`baseUrl`、`allowedHosts` 中的非通配主机、本次访问过的白名单内地址」逐个读取 WebView
+  **Cookie 在页面关闭前同步**（WebView 仍存活）：同步失败时页面不关闭，提示用户重试「完成」或取消，
+  不会把读取失败当作 0 个；一个 Cookie 也没读到时给出提示。同步后清空该页面的 Cookie，页面 pop 后
+  再等其销毁、清空全局存储一次，退出动画中的旧页面之后的写入不会留给下一个源。
+- **Cookie 同步**：页面关闭前对「`baseUrl`、`allowedHosts` 中的非通配主机、本次访问过的白名单内地址」逐个读取 WebView
   中会发往该地址的 Cookie（含 HttpOnly），以**主机限定**（不带 Domain）、保留 Path / 过期时间 / Secure /
   HttpOnly 的形式写入该源的 Cookie Jar（`SourceSession.importCookies`，非白名单地址一律拒绝）。
   平台没给出的属性按收紧方向补全：Path 取读取时的地址路径，经 https 读到的视为 Secure
   （Android 缺少 `GET_COOKIE_INFO` 时只返回 name / value）。`SourceSession` 的 Jar 包装为 `SecureCookieJar`，
   修正 `cookie_jar` 会把 Secure Cookie 发往 http 的问题（每一跳重定向同样生效）。
+  Windows 上经该页面自己的 WebView2 调用 CDP `Network.getCookies` 读取（失败时报错）；不用插件的 `CookieManager`，
+  因为它经临时 WebView2 读取，页面销毁后常以 `ERROR_NOT_READY` 失败且只返回空列表（M3 手动测试中发现）。
+  同一主机上的同名、同 Path Cookie 只写入一次。
   因为 WebView 的 Cookie 存储是全局的，**打开前与结束后都清空 WebView 的 Cookie**（Windows 上插件报告清空失败时不打开验证页；Android 的返回值只表示是否删掉了 Cookie，不作判断），
   所以一个源的验证页看不到、也同步不到其他源留下的 Cookie。代价：每次打开验证页都从空白状态开始
   （源 Cookie Jar 中已有的 Cookie 不会预先放进 WebView）；localStorage 等其他站点数据不清空。

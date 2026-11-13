@@ -68,7 +68,8 @@ void main() {
 
     test('skips foreign domains, expired and malformed cookies', () async {
       final s = SourceSession();
-      final now = DateTime.utc(2026, 11, 12);
+      // cookie_jar 读取时按真实时间判断过期，因此以当前时间为基准。
+      final now = DateTime.now().toUtc();
       final n = await s.importCookies(
         comic,
         [

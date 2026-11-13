@@ -23,14 +23,15 @@ void main() {
     late DioSourceHttpClient http;
 
     setUp(() {
-      launcher = FakeWebViewLauncher();
+      final store = FakeWebCookieStore();
+      launcher = FakeWebViewLauncher(null, store);
       clock = FakeClock();
       foreground = true;
       toasts = [];
       ui = WebViewScriptUi(
         verifier: SourceVerifier(
           launcher: launcher,
-          cookies: FakeWebCookieStore(),
+          cookies: store,
           isForeground: () => foreground,
           throttle: WebViewThrottle(clock: clock.call),
         ),

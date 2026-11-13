@@ -9,8 +9,9 @@ import 'webview_throttle.dart';
 ///
 /// 1. 清空 WebView 的 Cookie（WebView 存储是全局的，避免看到其他源的 Cookie）；
 /// 2. 显示验证页，等待用户**手动**完成或取消；
-/// 3. 完成时读取白名单内主机的 Cookie，写入该源的 [SourceSession]，必要时记下 WebView 的 UA；
-/// 4. 再次清空 WebView 的 Cookie。
+/// 3. 用户完成时、**页面关闭前**（WebView 仍存活）读取白名单内主机的 Cookie，写入该源的
+///    [SourceSession]，必要时记下 WebView 的 UA，并清空 WebView 的 Cookie；
+/// 4. 页面销毁后再次清空 WebView 的 Cookie（兜底）。
 ///
 /// 同一时刻只显示一个验证页：同一源的并发请求共用进行中的那一次，其他源的请求被拒绝。
 /// 脚本发起的打开（`userInitiated: false`）还受前台检查与 [WebViewThrottle] 限制。
@@ -98,13 +99,31 @@ class SourceVerifier {
         '无法清空 WebView 的 Cookie',
       );
     }
+    var synced = false;
     try {
-      final outcome = await launcher.open(request);
+      final outcome = await launcher.open(
+        request,
+        onComplete: (outcome, webView) async {
+          final count = await _sync(request, session, outcome, webView);
+          synced = true;
+          try {
+            await webView.clearCookies();
+          } on Object catch (e) {
+            _log('clear live WebView cookies failed: $e');
+          }
+          return count;
+        },
+      );
       // 冷却只针对脚本打开过的验证页（source-spec §4.2）；用户主动打开与未能显示的情况不计。
       if (!userInitiated) {
         throttle.record(request.sourceId, completed: outcome.completed);
       }
-      if (outcome.completed) await _sync(request, session, outcome);
+      if (outcome.completed && !synced) {
+        throw const SourceException(
+          SourceErrorCode.unsupported,
+          '验证页关闭前没有同步 Cookie',
+        );
+      }
       return outcome.completed;
     } finally {
       try {
@@ -115,11 +134,13 @@ class SourceVerifier {
     }
   }
 
-  /// 读取白名单内地址的 Cookie 并写入 [session]。
-  Future<void> _sync(
+  /// 读取白名单内地址的 Cookie 并写入 [session]，返回写入数量。
+  /// 任一地址读取失败时抛出 `SourceException`（不当作 0 个）。
+  Future<int> _sync(
     VerificationRequest request,
     SourceSession session,
     WebViewOutcome outcome,
+    LiveWebView webView,
   ) async {
     final policy = request.policy;
     final targets = <Uri>{
@@ -131,15 +152,32 @@ class SourceVerifier {
     }.where(policy.isAllowed);
 
     var total = 0;
+    // 同一 Cookie 常在多个地址（根路径、起始页、访问过的页面）上都能读到，每台主机只写入一次。
+    final seen = <String>{};
     for (final target in targets) {
+      final List<WebCookie> found;
       try {
-        final found = await cookies.cookiesFor(target);
-        total += await session.importCookies(target, found, policy);
+        found = await webView.cookiesFor(target);
       } on Object catch (e) {
-        _log('sync cookies for $target failed: $e');
+        _log('[${request.sourceId}] read cookies for $target failed: $e');
+        throw SourceException(
+          SourceErrorCode.unsupported,
+          '读取验证页 Cookie 失败（${target.host}）：$e',
+        );
       }
+      final fresh = [
+        for (final c in found)
+          if (seen.add(
+            '${target.host};${c.name};${c.path == null || c.path!.isEmpty ? '/' : c.path}',
+          ))
+            c,
+      ];
+      total += await session.importCookies(target, fresh, policy);
     }
     _log('[${request.sourceId}] synced $total cookie(s) from WebView');
+    if (total == 0) {
+      _log('[${request.sourceId}] warning: no cookies found for $targets');
+    }
 
     if (request.userAgent == null) {
       final ua = outcome.userAgent?.trim();
@@ -148,6 +186,7 @@ class SourceVerifier {
       }
     }
     session.lastChallengeUrl = null;
+    return total;
   }
 
   static Uri _root(Uri u) => Uri(

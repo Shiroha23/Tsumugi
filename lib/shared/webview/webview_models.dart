@@ -78,18 +78,37 @@ class WebViewOutcome {
   final String? userAgent;
 }
 
-/// 显示验证页的界面层；测试中用假实现，不启动真实 WebView。
-abstract interface class WebViewLauncher {
-  /// 显示验证页并等待用户完成或关闭。平台不支持 WebView 时抛出
-  /// `SourceException(E_UNSUPPORTED)`。
-  Future<WebViewOutcome> open(VerificationRequest request);
-}
-
-/// WebView 的（全局）Cookie 存储。
-abstract interface class WebCookieStore {
-  /// 会发往 [url] 的 Cookie（含 HttpOnly）。
+/// 验证页仍然存活时对其 Cookie 的访问（只在 [CompletionHandler] 执行期间有效）。
+///
+/// 必须在页面关闭 / 销毁**之前**读取：Windows 上 WebView 销毁后插件经临时 WebView2 读取，
+/// 失败（如 `ERROR_NOT_READY`）时只返回空列表，无法与“没有 Cookie”区分。
+abstract interface class LiveWebView {
+  /// 会发往 [url] 的 Cookie（含 HttpOnly）。读取失败时抛出异常，不返回空列表。
   Future<List<WebCookie>> cookiesFor(Uri url);
 
+  /// 清空 WebView 的全部 Cookie（同步完成后、页面关闭前调用）。
+  Future<void> clearCookies();
+}
+
+/// 用户完成时、页面关闭前由验证页调用：同步 Cookie 并返回写入的数量。
+/// 抛出异常时页面不关闭，提示用户重试或取消。
+typedef CompletionHandler = Future<int> Function(
+  WebViewOutcome outcome,
+  LiveWebView webView,
+);
+
+/// 显示验证页的界面层；测试中用假实现，不启动真实 WebView。
+abstract interface class WebViewLauncher {
+  /// 显示验证页并等待用户完成或关闭。用户完成时，页面在关闭前调用 [onComplete]，
+  /// 成功后才关闭；取消时不调用。平台不支持 WebView 时抛出 `SourceException(E_UNSUPPORTED)`。
+  Future<WebViewOutcome> open(
+    VerificationRequest request, {
+    required CompletionHandler onComplete,
+  });
+}
+
+/// WebView 的（全局）Cookie 存储：打开验证页前 / 结束后清空。
+abstract interface class WebCookieStore {
   /// 清空 WebView 的全部 Cookie。
   Future<void> clearAll();
 }

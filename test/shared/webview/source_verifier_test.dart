@@ -34,7 +34,7 @@ void main() {
 
   setUp(() {
     store = FakeWebCookieStore();
-    launcher = FakeWebViewLauncher();
+    launcher = FakeWebViewLauncher(null, store);
     clock = FakeClock();
     foreground = true;
     verifier = SourceVerifier(
@@ -102,6 +102,75 @@ void main() {
     expect(store.clears, 2);
     expect(store.cookies, isEmpty);
     expect(session.userAgent, 'WebViewUA/1.0');
+  });
+
+  test('cookies are read while the page is alive, before it closes', () async {
+    final session = SourceSession();
+    launcher.onOpen = (_) {
+      store.cookies.add(
+        const WebCookie(name: 'cf', value: 'ok', domain: 'comic.example.com'),
+      );
+      return const WebViewOutcome(completed: true);
+    };
+    expect(
+      await verifier.verify(
+        request(_config('a')),
+        session,
+        userInitiated: true,
+      ),
+      isTrue,
+    );
+    final events = store.events;
+    final closed = events.indexOf('closed');
+    final reads = [
+      for (final (i, e) in events.indexed)
+        if (e.startsWith('read ')) i,
+    ];
+    expect(reads, isNotEmpty);
+    expect(reads.every((i) => i < closed), isTrue, reason: '$events');
+    expect(events.indexOf('clear live'), lessThan(closed));
+    expect(events.first, 'clear');
+    expect(events.last, 'clear');
+    expect(launcher.syncedCounts, [1]);
+    expect(await jar(session, 'https://comic.example.com/'), {'cf': 'ok'});
+  });
+
+  test('a failed cookie read is reported, not counted as zero', () async {
+    final session = SourceSession();
+    store.failReads = true;
+    launcher.onOpen = (_) => const WebViewOutcome(completed: true);
+    // 页面在同步失败时不关闭；假页面随后视为用户取消。
+    expect(
+      await verifier.verify(
+        request(_config('a')),
+        session,
+        userInitiated: true,
+      ),
+      isFalse,
+    );
+    expect(
+      launcher.syncErrors.single,
+      isA<SourceException>().having(
+        (e) => e.message,
+        'message',
+        contains('读取验证页 Cookie 失败'),
+      ),
+    );
+    expect(launcher.syncedCounts, isEmpty);
+  });
+
+  test('completing without syncing first is an error', () async {
+    launcher
+      ..skipComplete = true
+      ..onOpen = (_) => const WebViewOutcome(completed: true);
+    await expectLater(
+      verifier.verify(
+        request(_config('a')),
+        SourceSession(),
+        userInitiated: true,
+      ),
+      _sourceError(SourceErrorCode.unsupported),
+    );
   });
 
   test(
