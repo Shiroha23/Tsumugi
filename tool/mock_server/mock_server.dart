@@ -45,7 +45,19 @@ import 'dart:convert';
 import 'dart:io';
 
 class MockServer {
-  MockServer._(this._server, this.fixturesDir);
+  MockServer._(this._server, this.fixturesDir, this.rewriteFictionalHosts);
+
+  /// 手动调试模式：把页面 / JSON 中虚构的图片主机（[fictionalImageOrigin]）换成本次请求所用的地址，
+  /// 这样在桌面或真机上直接访问本服务器时，封面与漫画页也能加载。
+  ///
+  /// 单元测试不开启：测试通过自定义连接把虚构主机名接到本服务器，并断言虚构主机名本身。
+  final bool rewriteFictionalHosts;
+
+  /// 页面与 JSON 中的虚构图片主机；`/covers/*`、`/pages/*` 在任意主机名下都会返回图片。
+  static const fictionalImageOrigin = 'http://img.example.com';
+
+  /// 开启 [rewriteFictionalHosts] 时，每个响应要改写成的地址。
+  final _rewriteTo = Expando<String>();
 
   final HttpServer _server;
 
@@ -67,6 +79,7 @@ class MockServer {
     int port = 0,
     InternetAddress? address,
     String? fixturesDir,
+    bool rewriteFictionalHosts = false,
   }) async {
     final dir = Directory(fixturesDir ?? 'test/fixtures/mock_site');
     if (!dir.existsSync()) {
@@ -76,7 +89,7 @@ class MockServer {
       address ?? InternetAddress.loopbackIPv4,
       port,
     );
-    final mock = MockServer._(server, dir);
+    final mock = MockServer._(server, dir, rewriteFictionalHosts);
     server.listen(mock._handle);
     return mock;
   }
@@ -147,16 +160,29 @@ class MockServer {
       res.statusCode = HttpStatus.notFound;
       return res.close();
     }
-    final host = req.headers.host ?? '127.0.0.1';
-    final port = req.headers.port ?? this.port;
-    final origin = 'http://$host:$port';
     res.headers.contentType = ContentType.json;
-    res.write(file.readAsStringSync().replaceAll(fixtureOrigin, origin));
+    res.write(
+      file.readAsStringSync().replaceAll(fixtureOrigin, _requestOrigin(req)),
+    );
     return res.close();
   }
 
+  /// 请求实际使用的地址（Host 头），如 `http://192.168.1.5:8080`。
+  String _requestOrigin(HttpRequest req) {
+    final host = req.headers.host ?? '127.0.0.1';
+    final port = req.headers.port ?? this.port;
+    final h = host.contains(':') ? '[$host]' : host;
+    return 'http://$h:$port';
+  }
+
+  String _rewrite(HttpResponse res, String text) => switch (_rewriteTo[res]) {
+    final origin? => text.replaceAll(fictionalImageOrigin, origin),
+    null => text,
+  };
+
   Future<void> _route(HttpRequest req, String body) async {
     final res = req.response;
+    if (rewriteFictionalHosts) _rewriteTo[res] = _requestOrigin(req);
     var path = req.uri.path;
     final q = req.uri.queryParameters;
     final verified = req.cookies.any(
@@ -360,7 +386,12 @@ class MockServer {
 
   Future<void> _file(HttpResponse res, String name, ContentType type) async {
     res.headers.contentType = type;
-    await res.addStream(File('${fixturesDir.path}/$name').openRead());
+    final file = File('${fixturesDir.path}/$name');
+    if (_rewriteTo[res] != null && type.primaryType != 'image') {
+      res.write(_rewrite(res, await file.readAsString()));
+    } else {
+      await res.addStream(file.openRead());
+    }
     return res.close();
   }
 
@@ -372,7 +403,7 @@ class MockServer {
     var text = await File('${fixturesDir.path}/$name').readAsString();
     vars.forEach((k, v) => text = text.replaceAll('{{$k}}', _escape(v)));
     res.headers.contentType = ContentType.html;
-    res.write(text);
+    res.write(_rewrite(res, text));
     return res.close();
   }
 

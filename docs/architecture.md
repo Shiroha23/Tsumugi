@@ -301,7 +301,9 @@ tsumugi.ui.openWebView ────────┘   （单飞 / 节流） └�
   安全边界不依赖传输层。Secure Cookie 不会经 http 发送（`SecureCookieJar`，§5.3）。
 - **真机调试**：`dart run tool/mock_server/main.dart --host 0.0.0.0` 监听局域网并打印本机地址；
   手机浏览器打开 `http://<电脑局域网 IP>:8080/sources/`，复制虚构源 JSON 导入应用——
-  `/sources/<文件名>` 会把虚构源里的 `http://127.0.0.1:8080` 换成请求所用的地址。
+  `/sources/<文件名>` 会把虚构源里的 `http://127.0.0.1:8080` 换成请求所用的地址；命令行启动的服务器
+  还会把页面 / JSON 中虚构的图片主机 `http://img.example.com` 换成请求地址，封面与漫画页才能显示
+  （`MockServer.rewriteFictionalHosts`，单元测试不开启）。
   Windows 防火墙首次会询问是否允许 dart 接受入站连接。
 
 已知限制：响应文本只识别 utf-8 / latin1 / ascii 字符集（其余按 utf-8 宽松解码），GBK 等需后续补充；

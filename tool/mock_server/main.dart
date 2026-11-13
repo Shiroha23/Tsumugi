@@ -28,6 +28,8 @@ Future<void> main(List<String> args) async {
     port: int.tryParse(arg('--port') ?? '') ?? 8080,
     address: host == null ? null : InternetAddress(host),
     fixturesDir: arg('--fixtures'),
+    // 手动调试：图片地址也指向本服务器（见 MockServer.rewriteFictionalHosts）。
+    rewriteFictionalHosts: true,
   );
   stdout.writeln('mock server listening on ${server.origin}');
   if (host != null && host != '127.0.0.1') {

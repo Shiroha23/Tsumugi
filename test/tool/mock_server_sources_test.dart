@@ -43,4 +43,28 @@ void main() {
     expect((await get('/sources/..%2F..%2Fpubspec.yaml')).$1, 400);
     expect((await get('/sources/nope.json')).$1, 404);
   });
+
+  group('手动调试模式（rewriteFictionalHosts）', () {
+    test('页面与 JSON 中的虚构图片主机换成请求地址；默认关闭', () async {
+      final debug = await MockServer.start(rewriteFictionalHosts: true);
+      addTearDown(debug.close);
+      Future<String> body(MockServer s, String path) async {
+        final req = await client.getUrl(s.origin.resolve(path));
+        return utf8.decoder.bind(await req.close()).join();
+      }
+
+      final origin = 'http://127.0.0.1:${debug.port}';
+      final chapter = await body(debug, '/comic/book/1/chapter/1');
+      expect(chapter, contains('$origin/pages/'));
+      expect(chapter, isNot(contains(MockServer.fictionalImageOrigin)));
+      final api = await body(debug, '/api/search?q=x&page=1');
+      expect(api, contains('$origin/covers/'));
+
+      // 默认（单元测试）不改写。
+      expect(
+        await body(server, '/comic/book/1/chapter/1'),
+        contains(MockServer.fictionalImageOrigin),
+      );
+    });
+  });
 }
