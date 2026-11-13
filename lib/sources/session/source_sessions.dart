@@ -66,7 +66,12 @@ class SourceSessions {
     for (final id in removed.toList()) {
       remove(id);
     }
-    if (previous == null) initialSweep = persistence?.sweep(keep);
+    if (previous == null) {
+      initialSweep = persistence?.sweep(
+        (id) =>
+            (_installed?.contains(id) ?? false) || _sessions.containsKey(id),
+      );
+    }
   }
 
   /// 关闭并丢弃 [sourceId] 的会话，删除其持久化文件。

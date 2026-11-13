@@ -246,10 +246,17 @@ class PersistingCookieJar implements CookieJar {
     return _mem.loadForRequest(uri);
   }
 
+  /// `Max-Age` 换算出的过期时间的上限（RFC 6265bis 建议 400 天），也避免超出 `DateTime` 范围。
+  static const maxCookieAge = Duration(days: 400);
+
   @override
   Future<void> saveFromResponse(Uri uri, List<Cookie> cookies) async {
     await ready;
     if (cookies.isEmpty) return;
+    final now = _clock();
+    for (final c in cookies) {
+      _normalizeExpiry(c, now);
+    }
     await _mem.saveFromResponse(uri, cookies);
     await _changed();
   }
@@ -268,17 +275,24 @@ class PersistingCookieJar implements CookieJar {
     await _changed();
   }
 
-  DateTime? _expiryOf(SerializableCookie c) {
-    var expires = c.cookie.expires?.toUtc();
-    if (c.cookie.maxAge case final maxAge?) {
-      final byMaxAge = DateTime.fromMillisecondsSinceEpoch(
-        (c.createTimeStamp + maxAge) * 1000,
-        isUtc: true,
-      );
-      if (expires == null || byMaxAge.isBefore(expires)) expires = byMaxAge;
+  /// 把 `Max-Age` 换算为绝对的 `Expires`（RFC 6265 §5.3：Max-Age 优先于 Expires），
+  /// 并把过期时间限制在 [maxCookieAge] 之内；之后内存与磁盘只看 `expires`。
+  static void _normalizeExpiry(Cookie c, DateTime now) {
+    final limit = now.add(maxCookieAge);
+    if (c.maxAge case final maxAge?) {
+      c
+        ..expires = maxAge <= 0
+            ? DateTime.fromMillisecondsSinceEpoch(0, isUtc: true)
+            : (maxAge >= maxCookieAge.inSeconds
+                  ? limit
+                  : now.add(Duration(seconds: maxAge)))
+        ..maxAge = null;
+    } else if (c.expires case final e? when e.isAfter(limit)) {
+      c.expires = limit;
     }
-    return expires;
   }
+
+  DateTime? _expiryOf(SerializableCookie c) => c.cookie.expires;
 
   bool _isExpired(SerializableCookie c, DateTime now) {
     final e = _expiryOf(c);

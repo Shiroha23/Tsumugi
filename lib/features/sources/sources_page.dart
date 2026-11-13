@@ -46,7 +46,11 @@ class _SourcesPageState extends ConsumerState<SourcesPage> {
       ),
     );
     if (ok != true) return;
+    // 先取会话管理器：即使它此前尚未创建，删除也会立即清理该源的 Cookie 文件，
+    // 不依赖之后的 registry 推送。
+    final sessions = ref.read(sourceSessionsProvider);
     await ref.read(sourceRegistryProvider).remove(source.id);
+    sessions.remove(source.id);
   }
 
   Future<void> _confirmClearSession(InstalledSource source) async {

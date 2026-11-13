@@ -178,6 +178,45 @@ void main() {
       expect(fileOf(a).existsSync(), isFalse);
     });
 
+    test('Max-Age 优先于 Expires（RFC 6265 §5.3）', () async {
+      var now = DateTime.now();
+      final s = SourceSession.persistent(a, persistence, clock: () => now);
+      await s.cookieJar.saveFromResponse(comic, [
+        Cookie('both', '1')
+          ..path = '/'
+          ..maxAge = 3600
+          ..expires = now.add(const Duration(minutes: 10)),
+      ]);
+      now = now.add(const Duration(minutes: 30));
+      expect(await cookiesOn(s, comic), {'both': '1'});
+      await persistence.idle(a);
+      final r = restart(a, clock: () => now);
+      expect(await cookiesOn(r, comic), {'both': '1'});
+    });
+
+    test('超大 Max-Age / Expires 限制在 400 天，不影响读写', () async {
+      final now = DateTime.now();
+      final s = SourceSession.persistent(a, persistence, clock: () => now);
+      await s.cookieJar.saveFromResponse(comic, [
+        Cookie('huge', '1')
+          ..path = '/'
+          ..maxAge = 10000000000000,
+        Cookie('far', '2')
+          ..path = '/'
+          ..expires = DateTime.utc(9999),
+      ]);
+      expect(await cookiesOn(s, comic), {'huge': '1', 'far': '2'});
+      await persistence.idle(a);
+      final saved = jsonDecode(fileOf(a).readAsStringSync()) as Map;
+      final limit = now
+          .add(PersistingCookieJar.maxCookieAge)
+          .millisecondsSinceEpoch;
+      for (final c in (saved['cookies'] as List).cast<Map>()) {
+        expect(c['expires'], lessThanOrEqualTo(limit));
+      }
+      expect(await cookiesOn(restart(a), comic), {'huge': '1', 'far': '2'});
+    });
+
     test('已过期的 Secure Cookie 不会发往 https', () async {
       var now = DateTime.now();
       final s = SourceSession(clock: () => now);
@@ -275,6 +314,11 @@ void main() {
             {'host': 'comic.example.com', 'name': 'semi', 'value': 'a;b'},
             {'name': 'nohost', 'value': '1'},
             {'host': 'comic.example.com', 'name': 'x', 'expires': 'soon'},
+            {
+              'host': 'comic.example.com',
+              'name': 'y',
+              'expires': 8640000000000001,
+            },
             42,
           ],
         }),
@@ -329,11 +373,32 @@ void main() {
       final tmp = File('${fileOf(a).path}.tmp')..writeAsStringSync('partial');
       final foreign = File('${dir.path}/notes.txt')..writeAsStringSync('keep');
 
-      await persistence.sweep({a});
+      await persistence.sweep((id) => id == a);
       expect(fileOf(a).existsSync(), isTrue);
       expect(tmp.existsSync(), isFalse);
       expect(fileOf(b).existsSync(), isFalse);
       expect(foreign.existsSync(), isTrue);
+    });
+
+    test('sweep 删除前重新判断：列目录期间安装的源不会被误删', () async {
+      final keep = <String>{};
+      final s = SourceSession.persistent(b, persistence);
+      await s.cookieJar.saveFromResponse(comic, [Cookie('k', 'v')]);
+      await persistence.idle(b);
+
+      final sweeping = persistence.sweep(keep.contains);
+      keep.add(b); // 在清理真正执行前，b 被安装
+      await sweeping;
+      expect(fileOf(b).existsSync(), isTrue);
+    });
+
+    test('写入失败只记录日志，内存中的 Cookie 照常使用', () async {
+      // 目标路径被一个目录占用：rename 失败。
+      Directory(fileOf(a).path).createSync();
+      final s = SourceSession.persistent(a, persistence);
+      await s.cookieJar.saveFromResponse(comic, [Cookie('k', 'v')]);
+      expect(await cookiesOn(s, comic), {'k': 'v'});
+      expect(logs.where((l) => l.contains('save session failed')), isNotEmpty);
     });
 
     test('目录不可用时记录日志，请求照常进行', () async {

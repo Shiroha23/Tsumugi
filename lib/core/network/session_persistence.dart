@@ -64,6 +64,9 @@ class StoredCookie {
     this.httpOnly = false,
   });
 
+  /// `DateTime` 能表示的最大毫秒数。
+  static const _maxEpochMs = 8640000000000000;
+
   /// 主机限定 Cookie 的主机，或带 Domain 的 Cookie 的域（不含前导点）。
   final String host;
 
@@ -106,6 +109,9 @@ class StoredCookie {
       throw const FormatException('cookie without host or name');
     }
     final expires = field<int?>('expires', null);
+    if (expires != null && expires.abs() > _maxEpochMs) {
+      throw const FormatException('cookie expires out of range');
+    }
     return StoredCookie(
       host: host,
       domainCookie: field<bool>('domainCookie', false),
@@ -239,9 +245,9 @@ class SessionPersistence {
   /// 返回 null 表示放弃这次写入（如会话已关闭），返回空快照时删除文件。
   Future<void> write(String sourceId, SessionSnapshot? Function() snapshot) =>
       _enqueue(sourceId, () async {
-        final data = snapshot();
-        if (data == null) return;
         try {
+          final data = snapshot();
+          if (data == null) return;
           if (data.isEmpty) {
             await _deleteFile(await _file(sourceId));
           } else {
@@ -270,8 +276,10 @@ class SessionPersistence {
     }
   });
 
-  /// 删除不属于 [keep] 中任何源的会话文件（及无法识别的残留临时文件）。
-  Future<void> sweep(Set<String> keep) async {
+  /// 删除 [keep] 返回 false 的源的会话文件，并清理残留的临时文件；不认识的文件不碰。
+  ///
+  /// [keep] 在每个源的队列中、真正删除前才求值，因此列目录期间新安装并写入的源不会被误删。
+  Future<void> sweep(bool Function(String sourceId) keep) async {
     final List<FileSystemEntity> entries;
     try {
       final dir = await _dir();
@@ -290,21 +298,19 @@ class SessionPersistence {
           : name;
       final id = sourceIdOf(base);
       if (id == null) continue; // 不是本类的文件，不碰
-      if (!keep.contains(id) || name.endsWith(_tmpExt)) stale.add(id);
+      stale.add(id);
     }
     await Future.wait([
       for (final id in stale)
-        if (keep.contains(id))
-          // 已安装源只清理残留的临时文件。
-          _enqueue(id, () async {
-            try {
-              await _deleteFile(await _file(id, _tmpExt));
-            } on Object catch (e) {
-              _log('[$id] delete temp file failed: $e');
-            }
-          })
-        else
-          delete(id),
+        _enqueue(id, () async {
+          try {
+            // 临时文件只会是上次写入中断留下的（写入在队列内完成），总可以删除。
+            await _deleteFile(await _file(id, _tmpExt));
+            if (!keep(id)) await _deleteFile(await _file(id));
+          } on Object catch (e) {
+            _log('[$id] sweep session file failed: $e');
+          }
+        }),
     ]);
   }
 
