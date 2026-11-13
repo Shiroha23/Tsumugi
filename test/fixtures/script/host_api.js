@@ -180,6 +180,28 @@ export async function openWebView(url) {
   }
 }
 
+export async function openWebViewTwice() {
+  const codes = [];
+  for (let i = 0; i < 2; i++) {
+    try {
+      await tsumugi.ui.openWebView('/login');
+      codes.push('done');
+    } catch (e) {
+      codes.push(e.code);
+    }
+  }
+  return codes;
+}
+
+export async function openWebViewBadPattern(pattern) {
+  try {
+    await tsumugi.ui.openWebView('/login', { doneWhenUrlMatches: pattern });
+    return 'done';
+  } catch (e) {
+    return 'error';
+  }
+}
+
 let counter = 0;
 
 export async function bump() {

@@ -165,7 +165,12 @@ class _GroupSection extends ConsumerWidget {
         for (final item in group.items)
           _ResultTile(sourceId: group.sourceId, item: item, type: type),
         if (error != null)
-          SourceErrorView(error: error, onRetry: loadMore, compact: true)
+          SourceErrorView(
+            error: error,
+            sourceId: group.sourceId,
+            onRetry: loadMore,
+            compact: true,
+          )
         else if (!group.loading && group.page > 0 && group.items.isEmpty)
           const ListTile(dense: true, title: Text('没有结果')),
         if (group.loading && group.items.isNotEmpty)

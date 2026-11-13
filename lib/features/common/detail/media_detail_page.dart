@@ -66,7 +66,11 @@ class _MediaDetailPageState extends ConsumerState<MediaDetailPage> {
         AsyncData(:final value) => _buildDetail(context, value),
         AsyncError(:final error) => _Bare(
           title: title,
-          child: SourceErrorView(error: error, onRetry: _retry),
+          child: SourceErrorView(
+            error: error,
+            sourceId: widget.sourceId,
+            onRetry: _retry,
+          ),
         ),
         _ => _Bare(
           title: title,

@@ -581,6 +581,7 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
         AsyncData(:final value) => _buildReader(styles, value, unit),
         AsyncError(:final error) => SourceErrorView(
           error: error,
+          sourceId: _sourceId,
           onRetry: () => ref.invalidate(
             novelReaderChapterProvider(_sourceId, widget.itemId, _unitId),
           ),

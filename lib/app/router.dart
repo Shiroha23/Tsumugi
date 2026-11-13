@@ -10,6 +10,7 @@ import '../features/novel/novel_routes.dart';
 import '../features/search/search_page.dart';
 import '../features/settings/settings_page.dart';
 import '../features/sources/sources_page.dart';
+import '../shared/webview/providers.dart';
 import '../sources/model/common.dart';
 import 'shell.dart';
 
@@ -31,6 +32,7 @@ abstract final class Routes {
 @Riverpod(keepAlive: true)
 GoRouter router(Ref ref) {
   final router = GoRouter(
+    navigatorKey: ref.watch(rootNavigatorKeyProvider),
     initialLocation: Routes.library,
     routes: [
       StatefulShellRoute.indexedStack(

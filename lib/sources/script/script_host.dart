@@ -18,6 +18,8 @@ class ScriptHostLimits {
     this.maxStorageValueChars = 1 << 20,
     this.maxStorageCharsPerSource = 10 << 20,
     this.maxLogChars = 4000,
+    this.maxWebViewsPerCall = 1,
+    this.maxDonePatternLength = 512,
   });
 
   /// 单次入口调用最多发出的 `tsumugi.http.*` 请求数（重试与重定向不另计）。
@@ -32,11 +34,19 @@ class ScriptHostLimits {
 
   /// 单条日志的最大长度，超出截断。
   final int maxLogChars;
+
+  /// 单次入口调用最多调用 `ui.openWebView` 的次数（超出 → `E_LIMIT`）。
+  /// 跨调用的频率限制由 UI 实现负责（architecture §5.3）。
+  final int maxWebViewsPerCall;
+
+  /// `doneWhenUrlMatches` 正则的最大长度。
+  final int maxDonePatternLength;
 }
 
 /// 一次入口调用的上下文：请求计数与取消信号。
 class ScriptCallScope {
   int requests = 0;
+  int webViews = 0;
   final cancellation = NetCancellation();
   bool _closed = false;
 
@@ -139,7 +149,7 @@ class ScriptHost {
       return null;
     }),
     'ui.openWebView': (a) => _guard(() async {
-      _active();
+      final scope = _active();
       final url = http.config.baseUrl.resolve(_str(a, 0, 'url'));
       if (!http.config.hostPolicy.isAllowed(url)) {
         throw const SourceException(
@@ -153,24 +163,36 @@ class ScriptHost {
       }
       final pattern = (opts as Map?)?['doneWhenUrlMatches'];
       final title = opts?['title'];
-      RegExp? done;
       if (pattern != null) {
         if (pattern is! String) {
           throw const ScriptException('doneWhenUrlMatches must be a string.');
         }
+        if (pattern.length > limits.maxDonePatternLength) {
+          throw ScriptException(
+            'doneWhenUrlMatches is longer than ${limits.maxDonePatternLength} characters.',
+          );
+        }
         try {
-          done = RegExp(pattern);
+          RegExp(pattern);
         } on FormatException catch (e) {
           throw ScriptException('Invalid doneWhenUrlMatches: ${e.message}');
         }
       }
+      if (scope.webViews >= limits.maxWebViewsPerCall) {
+        throw ScriptException(
+          'ui.openWebView may be called at most ${limits.maxWebViewsPerCall} '
+          'time(s) per call.',
+          code: ScriptException.limit,
+        );
+      }
+      scope.webViews++;
       await ui.openWebView(
         WebViewRequest(
           sourceId: _id,
           url: url,
           cookies: http,
           title: title is String ? title : null,
-          doneWhenUrlMatches: done,
+          doneWhenUrlMatches: pattern as String?,
         ),
       );
       return null;

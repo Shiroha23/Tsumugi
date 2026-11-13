@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'challenge_detector.dart';
 import 'host_policy.dart';
 import 'network_exception.dart';
+import 'source_session.dart';
 
 /// 声明式引擎与脚本宿主 API（`tsumugi.http` / `tsumugi.cookies`）共用的按源 HTTP 客户端。
 ///
@@ -12,6 +13,9 @@ import 'network_exception.dart';
 /// （docs/source-spec.md §5）。所有方法均为异步；失败时抛出 [NetworkException]。
 abstract interface class SourceHttpClient {
   SourceNetworkConfig get config;
+
+  /// 本源的会话（Cookie Jar、WebView 同步来的 UA）。同一源的多个客户端可共用一个会话。
+  SourceSession get session;
 
   /// 发出请求。
   ///

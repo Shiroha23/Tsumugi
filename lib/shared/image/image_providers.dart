@@ -4,10 +4,10 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
-import '../../core/network/dio_source_http_client.dart';
 import '../../core/network/source_http_client.dart';
-import '../../sources/network_error_mapping.dart';
+import '../../sources/model/manifest.dart';
 import '../../sources/registry/providers.dart';
+import '../../sources/session/source_sessions.dart';
 import '../../sources/source.dart';
 import 'image_cache.dart';
 import 'source_image_loader.dart';
@@ -16,9 +16,9 @@ part 'image_providers.g.dart';
 
 /// 图片请求使用的按源 HTTP 客户端。
 ///
-/// 默认实现按已安装源的清单为每个源构造一个独立的 [DioSourceHttpClient]（白名单、限速、
-/// 默认 headers 与清单一致）。它与源实例自身的客户端**不共享** Cookie 域；
-/// 需要登录 Cookie 的图片在集成阶段可覆盖此 provider，改为复用源的客户端。
+/// 默认实现按已安装源的清单为每个源构造一个独立的客户端（白名单、限速、默认 headers 与清单一致），
+/// 但与源实例**共用该源的 `SourceSession`**（Cookie 与 WebView 同步的 UA，architecture §5.3），
+/// 因此需要登录 / 验证 Cookie 的图片也能加载。限速队列不共用。
 abstract interface class ImageHttpClients {
   Future<SourceHttpClient> clientFor(String sourceId);
 }
@@ -27,11 +27,17 @@ abstract interface class ImageHttpClients {
 class RegistryImageHttpClients implements ImageHttpClients {
   /// 订阅注册表的变化（直接订阅数据库流，不经 provider，避免无监听者时被 Riverpod 暂停），
   /// 源升级 / 重装 / 删除后丢弃旧客户端。
-  RegistryImageHttpClients(this._registry) {
+  ///
+  /// [clientFor] 由清单构造客户端，默认不共用会话；应用中传入 `SourceSessions.clientFor`。
+  RegistryImageHttpClients(
+    this._registry, {
+    SourceHttpClient Function(SourceManifest manifest)? clientFor,
+  }) : _clientFor = clientFor ?? SourceSessions().clientFor {
     _changes = _registry.watchAll().listen(sync, onError: (Object _) {});
   }
 
   final SourceRegistry _registry;
+  final SourceHttpClient Function(SourceManifest manifest) _clientFor;
   late final StreamSubscription<List<InstalledSource>> _changes;
   final _clients = <String, Future<SourceHttpClient>>{};
 
@@ -63,7 +69,7 @@ class RegistryImageHttpClients implements ImageHttpClients {
       );
     }
     _manifestSha[sourceId] = installed.manifestSha256;
-    return DioSourceHttpClient(networkConfigFromManifest(manifest));
+    return _clientFor(manifest);
   }
 
   /// 已安装源列表变化时调用：清单变化（升级 / 重装）或被删除的源丢弃旧客户端，
@@ -101,7 +107,10 @@ class RegistryImageHttpClients implements ImageHttpClients {
 
 @Riverpod(keepAlive: true)
 ImageHttpClients imageHttpClients(Ref ref) {
-  final clients = RegistryImageHttpClients(ref.watch(sourceRegistryProvider));
+  final clients = RegistryImageHttpClients(
+    ref.watch(sourceRegistryProvider),
+    clientFor: ref.watch(sourceSessionsProvider).clientFor,
+  );
   ref.onDispose(clients.dispose);
   return clients;
 }

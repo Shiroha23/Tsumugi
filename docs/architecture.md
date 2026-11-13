@@ -31,7 +31,7 @@
 | 加密 | [`crypto`](https://pub.dev/packages/crypto)（BSD-3）+ [`pointycastle`](https://pub.dev/packages/pointycastle)（MIT） | 纯 Dart；`tsumugi.crypto` 的摘要 / HMAC 与 AES（CBC / ECB / GCM） |
 | 数据库 | drift（SQLite） | |
 | 音视频 | media_kit（libmpv） | 视频与音乐共用 |
-| WebView | flutter_inappwebview | 用于登录 / 人机验证兜底 |
+| WebView | [`flutter_inappwebview`](https://pub.dev/packages/flutter_inappwebview) 6.2.0-beta.3（Apache-2.0） | M3 选定：登录 / 人机验证（用户手动完成），见 §5.3 |
 | 序列化 | freezed + json_serializable | |
 
 依赖版本在引入时以 pub.dev 最新稳定版为准，并锁定在 `pubspec.lock`。
@@ -178,7 +178,7 @@ detail(id) → 章节/剧集/曲目列表 → content(itemId)
 键 = sha256(sourceId + url)）→ 该源的 `SourceHttpClient`（因此遵守白名单、限速、默认 headers；
 `ImageRef.headers` 随请求发送）。同一图片的并发请求合并，全局并发上限 6；超时 / 连接错误额外重试 1 次，
 字节无法解码时清除缓存条目。界面使用 `SourceImageProvider`（`ImageProvider`）或 `SourceImage` / `CoverImage` 组件，
-不直接使用 `Image.network`。已知限制：网络层只在响应读完后返回，下载进度目前为不确定进度。
+不直接使用 `Image.network`。图片客户端与源实例共用该源的 `SourceSession`（Cookie 与 UA，§5.3）。已知限制：网络层只在响应读完后返回，下载进度目前为不确定进度。
 
 **漫画阅读器（M2，`features/comic/reader/`）**：路由 `/comic/:sourceId/:itemId/read/:unitId?page=N`
 （详情路由的子路由；各段 URL 编码，用 `ComicRoutes.reader` / `comicReaderLocation` 生成，`page` 从 0 开始）；纵向滚动 / 左→右 / 右→左三种模式（偏好存于应用支持目录
@@ -196,10 +196,89 @@ detail(id) → 章节/剧集/曲目列表 → content(itemId)
 - 偏好（模式、字号、行距、段距、页边距、字体、主题）存于应用支持目录 `novel_reader.json`。
 - 进度经 `novelReaderProgressSinkProvider` 节流写入 `HistoryRepository.recordProgress(position:)`，读到章节末尾时标记已读。
 
-### 5.3 人机验证 / 登录
+### 5.3 人机验证 / 登录（M3）
 
 网络层检测到挑战（如 403/503 + 特征）或源脚本主动请求时，弹出 WebView 让**用户手动**完成，
-完成后将 Cookie 回写到该源的 Cookie 域并重试请求。客户端不自动破解验证码。
+完成后将 Cookie 回写到该源的 Cookie 域并重试请求。客户端不自动破解验证码，也不在 WebView 中
+自动填写、点击或注入任何脚本（唯一的脚本调用是读取 `navigator.userAgent`）。
+
+**WebView 选型（2026-11）：[`flutter_inappwebview`](https://pub.dev/packages/flutter_inappwebview) 6.2.0-beta.3（Apache-2.0）。**
+
+使用 beta 的原因：最新稳定版 6.1.5（2024-10）在当前工具链上无法构建——Android 插件使用了新版 AGP 已拒绝的
+`proguard-android.txt`，6.2.0-beta.3（2026-02）已改为 `proguard-android-optimize.txt`。Windows 上插件经 C++/WinRT
+引入 `<experimental/coroutine>`，VS 2026 默认报错 STL1011，`windows/CMakeLists.txt` 按 MSVC 提示定义了
+`_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS`。上游发布含这些修复的稳定版后应切换回去。
+
+| 包 | Win / Android / iOS | 读取 HttpOnly Cookie | 拦截主框架导航 | 自定义 UA | 许可证 | 结论 |
+|---|---|---|---|---|---|---|
+| **flutter_inappwebview** ✅ | ✓（WebView2）/ ✓ / ✓ | ✓ Windows 经 CDP `Network.getCookies`，Android `CookieManager`，iOS `WKHTTPCookieStore` | ✓ `shouldOverrideUrlLoading` | ✓ | Apache-2.0 | 选用；稳定版停在 2024-10（6.2 仍为 beta），风险见下 |
+| webview_flutter | ✗ / ✓ / ✓ | 只能写不能读 | ✓ | ✓ | BSD-3 | 无 Windows |
+| webview_windows | ✓ / ✗ / ✗ | ✗（无 Cookie 读取 API） | 部分 | ✓ | BSD-3 | 只有 Windows，且需与 webview_flutter 拼两套实现 |
+| desktop_webview_window | ✓（独立窗口）/ ✗ / ✗ | ✗ | ✗ | — | Apache-2.0 | 只有桌面 |
+
+Apache-2.0 与 GPL-3.0 兼容；Windows 构建时由插件的 CMake 经 NuGet 拉取 WebView2 SDK（BSD-3）、WIL（MIT）
+与 nlohmann/json（MIT），因此**构建机需要 `nuget.exe` 在 PATH 中**（GitHub 的 `windows-latest` 镜像自带；
+本机可 `winget install Microsoft.NuGet`）。运行时需要系统已安装 WebView2 Runtime（Windows 11 自带），缺失时页面给出提示。
+风险：上游稳定版发版放缓。缓解：插件只出现在 `shared/webview/` 的两个文件中
+（`inappwebview_page.dart`、`inappwebview_cookie_store.dart`），其余代码依赖可注入的
+`WebViewLauncher` / `WebCookieStore` 接口，必要时可换实现。
+
+**组成（`shared/webview/`）**
+
+```
+SourceErrorView「打开验证页」 ─┐                 ┌─ WebViewLauncher（真实：推入 SourceWebViewPage）
+                               ├▶ SourceVerifier ┤
+tsumugi.ui.openWebView ────────┘   （单飞 / 节流） └─ WebCookieStore（真实：flutter_inappwebview CookieManager）
+   (WebViewScriptUi)                     │
+                                         ▼
+                                SourceSession（按源：Cookie Jar + UA）◀── 源实例与图片的 DioSourceHttpClient 共用
+```
+
+- **按源会话** `SourceSession`（`core/network/source_session.dart`）：一个源的 Cookie Jar、
+  WebView 同步来的 User-Agent、最近一次检测到挑战的地址。`SourceSessions`（`sources/session/`）
+  按 sourceId 提供同一个会话，**源实例（声明式 / 脚本）与图片加载器的客户端共用它**，因此登录 / 验证
+  Cookie 对图片同样有效。源被删除时丢弃其会话。会话目前只在内存中，重启后需重新验证（后续工作）。
+- **打开**：地址必须在该源的 `HostPolicy` 白名单内。`SourceErrorView` 打开的是最近一次触发挑战的地址
+  （网络层检测到挑战时记录在会话中），没有时为 `baseUrl`；脚本打开的是它给出的地址。
+- **导航限制**：主框架导航到白名单外（或非 http(s)）的地址时取消导航，页面顶部提示被阻止的主机；
+  若某个平台未经 `shouldOverrideUrlLoading` 就开始加载（如部分重定向），`onLoadStart` 立即停止加载并显示同样的提示。
+  子资源与 iframe 不受限制（验证组件常来自第三方主机），但它们的 Cookie 不会被同步。
+- **完成**：用户点「完成」，或主框架**加载完成**的地址匹配 `doneWhenUrlMatches`（只对白名单内的地址判断，
+  求值期间若已导航到别处则忽略；正则在后台 isolate 中串行求值、限时 1 s，超时则不再自动判断，
+  避免恶意正则卡住界面）。点关闭为取消（读取 UA 期间仍可取消，读取限时 2 s）。
+  **Cookie 在页面关闭前同步**（WebView 仍存活）：同步失败时页面不关闭，提示用户重试「完成」或取消，
+  不会把读取失败当作 0 个；一个 Cookie 也没读到时给出提示。同步后清空该页面的 Cookie，页面 pop 后
+  再等其销毁、清空全局存储一次，退出动画中的旧页面之后的写入不会留给下一个源。
+- **Cookie 同步**：页面关闭前对「`baseUrl`、`allowedHosts` 中的非通配主机、本次访问过的白名单内地址」逐个读取 WebView
+  中会发往该地址的 Cookie（含 HttpOnly），以**主机限定**（不带 Domain）、保留 Path / 过期时间 / Secure /
+  HttpOnly 的形式写入该源的 Cookie Jar（`SourceSession.importCookies`，非白名单地址一律拒绝）。
+  平台没给出的属性按收紧方向补全：Path 取读取时的地址路径，经 https 读到的视为 Secure
+  （Android 缺少 `GET_COOKIE_INFO` 时只返回 name / value）。`SourceSession` 的 Jar 包装为 `SecureCookieJar`，
+  修正 `cookie_jar` 会把 Secure Cookie 发往 http 的问题（每一跳重定向同样生效）。
+  Windows 上经该页面自己的 WebView2 调用 CDP `Network.getCookies` 读取（失败时报错）；不用插件的 `CookieManager`，
+  因为它经临时 WebView2 读取，页面销毁后常以 `ERROR_NOT_READY` 失败且只返回空列表（M3 手动测试中发现）。
+  同一主机上的同名、同 Path Cookie 只写入一次。
+  因为 WebView 的 Cookie 存储是全局的，**打开前与结束后都清空 WebView 的 Cookie**（Windows 上插件报告清空失败时不打开验证页；Android 的返回值只表示是否删掉了 Cookie，不作判断），
+  所以一个源的验证页看不到、也同步不到其他源留下的 Cookie。代价：每次打开验证页都从空白状态开始
+  （源 Cookie Jar 中已有的 Cookie 不会预先放进 WebView）；localStorage 等其他站点数据不清空。
+- **User-Agent**：清单 `headers` 设置了 `User-Agent` 时，WebView 使用同一个 UA；否则完成时读取 WebView 的
+  `navigator.userAgent` 记入会话，此后该源（含图片）未显式指定 UA 的请求都带上它
+  （优先级：请求 headers > 清单 headers > 会话 UA）。限制：只同步 UA 字符串，TLS / HTTP2 指纹、
+  `Sec-CH-UA` 等客户端提示仍与浏览器不同，部分站点的验证 Cookie 可能依然失效，此时只能放弃该站点，
+  客户端不做进一步的伪装。
+- **并发与节流**（`SourceVerifier` + `WebViewThrottle`）：同一时刻只显示一个验证页；同一源的并发请求共用
+  进行中的那一次。脚本发起的打开另有限制：应用不在前台、已有验证页打开、该源上次**由脚本打开的**验证页关闭后 30 s 内
+  （用户取消后为 2 min）都直接以 `E_CHALLENGE` 拒绝而不弹窗（用户主动打开的、未能显示的不计入冷却）；单次入口调用最多一次 `openWebView`（第二次 → `E_LIMIT`）。
+  用户点击「打开验证页」不受节流限制。`ui.toast` 每源每 2 s 最多一条，应用不在前台时丢弃。
+- **错误码**：用户取消 → `E_CHALLENGE`；平台不支持 WebView / 缺少 WebView2 Runtime → `E_UNSUPPORTED`。
+  `SourceErrorView` 对 `E_CHALLENGE` 与 `E_LOGIN_REQUIRED` 显示「打开验证页」，完成后自动调用重试回调；
+  搜索、详情、阅读器复用同一入口（`openSourceVerification`）。
+- **已知限制**：`openWebView` 的等待计入单次调用的 30 s 总时长（source-spec §4.4）。调用超时后验证页
+  仍保持打开，用户完成后 Cookie 照常写回，但这次调用已以 `E_LIMIT` 失败，需要用户重试；
+  需要较长时间的登录建议脚本直接抛出 `E_LOGIN_REQUIRED`，由界面引导用户打开验证页。
+  后续可让引擎在等待 `openWebView` 期间暂停总时长计时。
+- 测试中用假的 `WebViewLauncher` / `WebCookieStore`，不启动真实 WebView；手动验证用
+  `tool/mock_server` 的 `/challenge/page`、`/login` 与 `test/fixtures/sources/mock_comic_gated*.json`。
 
 ### 5.4 网络层（M1）
 
@@ -219,7 +298,7 @@ detail(id) → 章节/剧集/曲目列表 → content(itemId)
   白名单仍按真实主机名检查；手动调试：`dart run tool/mock_server/main.dart --port 8080`。
 
 已知限制：响应文本只识别 utf-8 / latin1 / ascii 字符集（其余按 utf-8 宽松解码），GBK 等需后续补充；
-Cookie Jar 默认在内存中，持久化（按源目录的 `PersistCookieJar`）由源管理在创建客户端时注入。
+Cookie Jar 在按源的 `SourceSession` 中（§5.3），目前只在内存中，持久化（按源目录的 `PersistCookieJar`）为后续工作。
 
 ### 5.5 脚本源（M1）
 
@@ -245,9 +324,10 @@ ScriptHost：http / storage / cookies ◀═ host 请求（脚本侧 Promise）�
   JS 层面的超限（CPU、总时长、内存）仍由 worker 内的 `QuickJsScriptRuntime` 自行中断与重建，worker 本身保留。
 - **每次调用的作用域**：`ScriptHost.begin()` 为每次入口调用建立 `ScriptCallScope`，`tsumugi.http.*` 据此计数（上限 50）
   并共享一个 `NetCancellation`；调用结束即取消未完成的请求。
-- `tsumugi.ui` 通过可注入的 `ScriptUi`（`scriptUiProvider`）实现，默认 `UnavailableScriptUi`（WebView → `E_UNSUPPORTED`）。
-  WebView 完成后由 UI 实现经 `WebViewRequest.cookies`（本源的 `SourceHttpClient`）回写 Cookie。
-- `ScriptSourceFactory` 默认为每个源创建内存 Cookie Jar 的 `DioSourceHttpClient`，存储用 `DriftSourceStorage`。
+- `tsumugi.ui` 通过可注入的 `ScriptUi`（`scriptUiProvider`）实现，默认 `UnavailableScriptUi`（WebView → `E_UNSUPPORTED`），
+  应用启动时覆盖为 `shared/webview/` 的 `WebViewScriptUi`。WebView 完成后经 `WebViewRequest.session`
+  （本源客户端的 `SourceSession`）回写 Cookie，见 §5.3。
+- `ScriptSourceFactory` 为每个源创建使用该源 `SourceSession`（§5.3，与图片加载共用 Cookie Jar）的 `DioSourceHttpClient`，存储用 `DriftSourceStorage`。
   创建出的 `ScriptSource` 由调用方 `dispose`（同时关闭其 HTTP 客户端与 worker）。
 
 ## 6. 风险与待验证项
@@ -330,8 +410,7 @@ CPU 预算跨 await 累计、总时长上限、内存上限、栈上限、超限
   根治需要给引擎打补丁（在这些循环中加入中断检查）或把脚本放进可被强制结束的独立进程；
   在此之前，恶意源最坏能卡死其所在的 worker。
 - 同一运行时上的调用**串行执行**（宿主 Promise 需要归属到具体调用）。如需单源并发，可按调用开多个运行时。
-- `ui.openWebView` 的等待时间计入单次调用的 30 s 总时长，用户登录可能来不及完成；接入 WebView 时需要
-  为这类等待单独计时（或让脚本抛出 `E_LOGIN_REQUIRED` 后由 UI 引导再重试）。
+- `ui.openWebView` 的等待时间计入单次调用的 30 s 总时长，用户登录可能来不及完成；M3 的处理与后续工作见 §5.3。
 - HTML 句柄的 DOM 不在 JS 堆内，只能靠句柄数与解析文本量的上限间接约束（source-spec §4.2.1）。
 - 源脚本**不支持顶层 await**（模块同步求值）；已写入 source-spec §4.1。
 - 移动端只验证到“能编译打包”，真机 / 模拟器上的运行时加载尚未自动化验证，M1 加 integration test。

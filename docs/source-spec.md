@@ -419,9 +419,16 @@ interface HtmlNode {
   配额检查与写入是原子的（并发的 `set`、同一源的多个实例都不能共同超额）。写操作绑定发起它的调用：
   调用结束后才轮到的写入 / 删除被丢弃。卸载源时一并删除。
 - `cookies`：只操作本源的 Cookie 域（与 `http` 共用）；`url` 可为相对地址，必须在白名单内（否则 `E_HOST_NOT_ALLOWED`）。
-- `ui.openWebView`：`url` 必须在白名单内；`doneWhenUrlMatches` 为正则字符串。客户端尚未接入 WebView 时
-  返回 `E_UNSUPPORTED`。WebView 的等待时间同样计入单次调用总时长（§4.4）。
+- `ui.openWebView`：`url` 必须在白名单内（否则 `E_HOST_NOT_ALLOWED`）；`doneWhenUrlMatches` 为正则字符串（最长 512 字符），
+  主框架地址匹配时自动完成，否则由用户点「完成」。Promise 在用户完成且 Cookie 已写回本源后 resolve；
+  用户取消 → `E_CHALLENGE`；平台不支持 WebView → `E_UNSUPPORTED`。WebView 中导航到白名单外的主机会被阻止，
+  只同步白名单内主机的 Cookie（含 HttpOnly）。清单未设置 `User-Agent` 时，之后本源的请求使用 WebView 的 UA。
+  **频率限制**：单次入口调用最多调用一次（第二次 → `E_LIMIT`）；应用不在前台、已有验证页打开、
+  本源上次由脚本打开的验证页关闭后 30 s 内（用户取消后 2 min 内）都直接以 `E_CHALLENGE` 拒绝，不弹窗。
+  WebView 的等待时间同样计入单次调用总时长（§4.4）；超时后验证页保持打开、Cookie 照常写回，但本次调用以 `E_LIMIT` 失败。
+  需要较长时间的登录建议直接抛出 `E_LOGIN_REQUIRED`，由界面引导用户打开验证页后重试。
 - `ui.toast` 与 `log.*` 为发出即忘，同步返回（返回值无意义）；参数中的非字符串值按 JSON 序列化，单条最长 4000 字符（超出截断）。
+  `ui.toast` 每个源每 2 s 最多显示一条，应用不在前台时丢弃。
 
 #### 4.2.1 `HtmlNode` 的跨边界表示
 
@@ -496,7 +503,8 @@ export async function search(keyword, page) {
 - 幂等请求（GET / HEAD / PUT / DELETE / OPTIONS）在连接错误或 5xx 时最多自动重试 2 次（指数退避），
   超时与非幂等请求（POST / PATCH）不重试。
 - 检测到人机验证页面（403 / 429 / 503 且带有验证页特征）时返回 `E_CHALLENGE`，不重试、不尝试绕过；
-  UI 引导用户在 WebView 中手动完成后再重试（见 architecture §5.3）。
+  UI 引导用户在 WebView 中手动完成后再重试（见 architecture §5.3）。`E_CHALLENGE` 与 `E_LOGIN_REQUIRED`
+  的错误界面都提供「打开验证页」；完成后 Cookie 写回本源的 Cookie 域（图片请求共用），并自动重试。
 - 单个响应体超过 20 MB → `E_LIMIT`。
 - 图片、音视频流的 headers 由内容结构中的 `headers` 字段携带给加载器/播放器。
 

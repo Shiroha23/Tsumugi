@@ -1,0 +1,19 @@
+{
+  "apiVersion": 1,
+  "id": "com.example.mock.comic.login",
+  "name": "Mock 漫画（需登录）",
+  "type": "comic",
+  "version": "1.0.0",
+  "author": "tsumugi",
+  "lang": "zh",
+  "description": "虚构脚本源（脚本内联自 test/fixtures/script/login/source.js）：搜索需要登录，未登录时用 tsumugi.ui.openWebView 打开 /login。手动验证 WebView 用。",
+  "baseUrl": "http://127.0.0.1:8080",
+  "allowedHosts": [
+    "img.example.com"
+  ],
+  "headers": {
+    "Referer": "http://127.0.0.1:8080/"
+  },
+  "engine": "script",
+  "script": "// 虚构脚本源：搜索需要登录（tool/mock_server 的 /members-only/…）。\n// 未登录时用 tsumugi.ui.openWebView 打开 /login，用户手动登录后自动完成并重试一次；\n// 用户取消或被频率限制时向界面报告 E_LOGIN_REQUIRED。\n\nasync function fetchSearch(keyword, page) {\n  return tsumugi.http.request({\n    url: `/members-only/comic/search?q=${encodeURIComponent(keyword)}&page=${page}`,\n  });\n}\n\nexport async function search(keyword, page) {\n  let r = await fetchSearch(keyword, page);\n  if (r.status === 401) {\n    try {\n      await tsumugi.ui.openWebView('/login', {\n        title: '登录 Mock 站点',\n        doneWhenUrlMatches: '/members$',\n      });\n    } catch (e) {\n      throw { code: 'E_LOGIN_REQUIRED', message: '需要登录：' + (e.message || e.code) };\n    }\n    tsumugi.ui.toast('登录成功');\n    r = await fetchSearch(keyword, page);\n  }\n  if (r.status !== 200) throw { code: 'E_HTTP', status: r.status, message: 'search failed' };\n  const doc = tsumugi.html.parse(r.body);\n  return {\n    items: doc.select('.result-item').map((n) => ({\n      id: n.selectFirst('a').attr('href'),\n      title: n.selectFirst('.title').text(),\n      cover: n.selectFirst('img')?.absUrl('data-src'),\n    })),\n    hasMore: doc.selectFirst('.pagination .next') != null,\n  };\n}\n\nexport async function detail(id) {\n  const doc = tsumugi.html.parse(await tsumugi.http.get(id));\n  const units = doc\n    .xpath(\"//ul[@class='chapter-list']/li/a\")\n    .map((a) => ({ id: a.attr('href'), title: a.text() }))\n    .reverse()\n    .map((u, i) => ({ ...u, index: i }));\n  return { id, title: doc.selectFirst('h1').text(), units };\n}\n\nexport async function content(unitId) {\n  const doc = tsumugi.html.parse(await tsumugi.http.get(unitId));\n  return { images: doc.select('.page img').map((img) => ({ url: img.absUrl('data-src') })) };\n}\n"
+}

@@ -9,9 +9,11 @@ import 'package:tsumugi/features/comic/reader/reader_preferences.dart';
 import 'package:tsumugi/features/novel/reader/novel_reader_preferences.dart';
 import 'package:tsumugi/shared/image/image_cache.dart';
 import 'package:tsumugi/shared/image/image_providers.dart';
+import 'package:tsumugi/shared/webview/providers.dart';
 import 'package:tsumugi/sources/registry/providers.dart';
 
 import '../core/storage/test_database.dart';
+import '../shared/webview/webview_fakes.dart';
 import '../sources/runtime/runtime_support.dart';
 
 /// 用真实路由（[routerProvider]）、内存数据库与 [FakeFactory] 启动整个应用。
@@ -23,6 +25,9 @@ class AppHarness {
            novelPreferences ?? MemoryNovelReaderPreferencesStore();
 
   final FakeFactory factory;
+
+  /// 「打开验证页」不启动真实 WebView。
+  final verification = FakeSourceVerification();
 
   /// 小说阅读器偏好（内存）。
   final MemoryNovelReaderPreferencesStore novelPreferences;
@@ -39,6 +44,7 @@ class AppHarness {
       readerPreferencesStoreProvider.overrideWithValue(
         MemoryReaderPreferencesStore(),
       ),
+      sourceVerificationProvider.overrideWithValue(verification),
       novelReaderPreferencesStoreProvider.overrideWithValue(novelPreferences),
     ],
   );

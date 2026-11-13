@@ -10,6 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../shared/image/image_providers.dart';
 import '../../../shared/image/source_image_loader.dart';
 import '../../../shared/image/source_image_provider.dart';
+import '../../../shared/webview/providers.dart';
 import '../../../sources/model/common.dart';
 import '../../../sources/model/content.dart';
 import '../../../sources/source.dart';
@@ -570,6 +571,7 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
         AsyncData(:final value) => _buildReader(prefs, value.images),
         AsyncError(:final error) => _ErrorView(
           error: error,
+          sourceId: _sourceId,
           onRetry: () =>
               ref.invalidate(comicReaderChapterProvider(_sourceId, _unitId)),
         ),
@@ -785,17 +787,29 @@ class _Loading extends StatelessWidget {
       const Center(child: CircularProgressIndicator(color: Colors.white54));
 }
 
-class _ErrorView extends StatelessWidget {
-  const _ErrorView({required this.error, required this.onRetry});
+class _ErrorView extends ConsumerWidget {
+  const _ErrorView({
+    required this.error,
+    required this.sourceId,
+    required this.onRetry,
+  });
 
   final Object error;
+  final String sourceId;
   final VoidCallback onRetry;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final needsVerification = switch (error) {
+      SourceException(
+        code: SourceErrorCode.challenge || SourceErrorCode.loginRequired,
+      ) =>
+        true,
+      _ => false,
+    };
     final message = switch (error) {
       SourceException(code: SourceErrorCode.challenge) =>
-        '站点要求人机验证，请稍后在源的网页中手动完成后重试',
+        '站点要求人机验证，请打开验证页手动完成后重试',
       SourceException(code: SourceErrorCode.loginRequired) => '需要登录',
       SourceException(code: SourceErrorCode.hostNotAllowed) => '源请求了白名单外的地址',
       SourceException(:final message?) => message,
@@ -815,7 +829,30 @@ class _ErrorView extends StatelessWidget {
               style: const TextStyle(color: Colors.white70),
             ),
             const SizedBox(height: 16),
-            FilledButton.tonal(onPressed: onRetry, child: const Text('重试')),
+            Wrap(
+              spacing: 8,
+              children: [
+                if (needsVerification)
+                  FilledButton.tonal(
+                    onPressed: () async {
+                      try {
+                        final done = await ref
+                            .read(sourceVerificationProvider)
+                            .verifySource(sourceId);
+                        if (done && context.mounted) onRetry();
+                      } on Object catch (e) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                            SnackBar(content: Text('无法打开验证页：$e')),
+                          );
+                        }
+                      }
+                    },
+                    child: const Text('打开验证页'),
+                  ),
+                FilledButton.tonal(onPressed: onRetry, child: const Text('重试')),
+              ],
+            ),
           ],
         ),
       ),
