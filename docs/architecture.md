@@ -264,7 +264,26 @@ tsumugi.ui.openWebView ────────┘   （单飞 / 节流） └�
 - **按源会话** `SourceSession`（`core/network/source_session.dart`）：一个源的 Cookie Jar、
   WebView 同步来的 User-Agent、最近一次检测到挑战的地址。`SourceSessions`（`sources/session/`）
   按 sourceId 提供同一个会话，**源实例（声明式 / 脚本）与图片加载器的客户端共用它**，因此登录 / 验证
-  Cookie 对图片同样有效。源被删除时丢弃其会话。会话目前只在内存中，重启后需重新验证（后续工作，[#21](https://github.com/Shiroha23/Tsumugi/issues/21)）。
+  Cookie 对图片同样有效。源被删除时丢弃其会话。会话按源持久化，重启后登录 / 验证状态仍有效，见下方「会话持久化」。
+- **会话持久化**（[#21](https://github.com/Shiroha23/Tsumugi/issues/21)）：`SessionPersistence`（`core/network/session_persistence.dart`）
+  把每个源的 Cookie 与 WebView 同步来的 User-Agent 存为**一个源一个文件**：
+  `<应用支持目录>/source_sessions/<sourceId 的 UTF-8 十六进制>.json`（应用支持目录不会被系统当作缓存清理；
+  文件名用十六进制编码，避免 `..`、Windows 保留名与大小写不敏感的文件系统带来的冲突）。
+  - 选型：不用 `cookie_jar` 自带的 `PersistCookieJar`——它按主机分多个文件、非原子写入、并发写可能交错，
+    读到损坏文件时抛异常；也不放进 drift，Cookie 读写频繁且与业务数据无关，单独的小文件更易隔离与删除。
+    内存中仍是 `cookie_jar` 的 `DefaultCookieJar`，外面依次包 `PersistingCookieJar`（读写前等待加载、写后落盘、
+    读取时剔除并清理已过期的 Cookie）与 `SecureCookieJar`（Secure Cookie 不经 http 发送）。
+  - 隔离：每个 `SourceSession` 只读写自己 sourceId 对应的文件，Jar 实例不共享；WebView 同步
+    （`importCookies`）与响应 `Set-Cookie`、`tsumugi.cookies.set` 都经同一个 Jar，因此都会持久化。
+  - 写入：每次变更后把**整个会话的当前快照**写到临时文件再重命名替换（原子写）。同一源的读、写、删除
+    在一个队列里串行执行；排队中的写入合并为一次，执行时取最新快照，所以并发写入不会丢数据。
+    写入失败只记日志，不让请求失败。
+  - 内容：会话 Cookie（无过期时间）也持久化（登录 Cookie 常是会话 Cookie）；`Max-Age` 落盘时换算为绝对过期时间；
+    已过期的 Cookie 在加载、读取与写入时都会被丢弃。
+  - 损坏：文件无法解析时删除该文件、记录日志并从空会话开始；单个无效 Cookie 只跳过该条。
+  - 生命周期：源被删除时关闭其会话（之后的写入被忽略）并删除文件；应用启动后第一次读到已安装源列表时，
+    清理不属于任何已安装源的文件（及残留的临时文件）。源升级 / 覆盖安装不改变 sourceId，会话保留。
+    源页面每个源的菜单提供「清除 Cookie 与登录状态」：清空该源的 Cookie、UA 与最近挑战地址并删除文件。
 - **打开**：地址必须在该源的 `HostPolicy` 白名单内。`SourceErrorView` 打开的是最近一次触发挑战的地址
   （网络层检测到挑战时记录在会话中），没有时为 `baseUrl`；脚本打开的是它给出的地址。
 - **导航限制**：主框架导航到白名单外（或非 http(s)）的地址时取消导航，页面顶部提示被阻止的主机；
@@ -334,7 +353,7 @@ tsumugi.ui.openWebView ────────┘   （单飞 / 节流） └�
   Windows 防火墙首次会询问是否允许 dart 接受入站连接。
 
 已知限制：响应文本只识别 utf-8 / latin1 / ascii 字符集（其余按 utf-8 宽松解码），GBK 等需后续补充（[#22](https://github.com/Shiroha23/Tsumugi/issues/22)）；
-Cookie Jar 在按源的 `SourceSession` 中（§5.3），目前只在内存中，持久化（按源目录的 `PersistCookieJar`）为后续工作（[#21](https://github.com/Shiroha23/Tsumugi/issues/21)）。
+Cookie Jar 在按源的 `SourceSession` 中，按源持久化在应用支持目录（§5.3「会话持久化」）。
 
 ### 5.5 脚本源（M1）
 
