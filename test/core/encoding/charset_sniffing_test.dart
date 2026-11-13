@@ -127,6 +127,35 @@ void main() {
       );
     });
 
+    test('属性值中的 > 与 <meta 不影响扫描（按引号解析）', () {
+      expect(
+        detect(page('<meta name="description" content="a > b" charset="gbk">'))
+            .encoding,
+        'gb18030',
+      );
+      expect(
+        detect(
+          page(
+            '<link title="<meta charset=big5>" rel="alternate">'
+            '<meta charset="gbk">',
+          ),
+        ).encoding,
+        'gb18030',
+      );
+      expect(
+        detect(page("<script src='x>y'></script><meta charset=big5>")).encoding,
+        'big5',
+      );
+    });
+
+    test('<!doctype>、<?…?> 与结束标签被跳过', () {
+      expect(
+        detect(page('<?php "<meta charset=big5>" ?></title><meta charset=gbk>'))
+            .encoding,
+        'gb18030',
+      );
+    });
+
     test('注释中的 meta 被忽略', () {
       expect(
         detect(page('<!-- <meta charset="big5"> --><meta charset="gbk">'))

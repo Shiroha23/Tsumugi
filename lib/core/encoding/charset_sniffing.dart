@@ -126,19 +126,19 @@ String _unquote(String s) {
   return s;
 }
 
-final _comment = RegExp(r'<!--[\s\S]*?(-->|$)');
-final _meta = RegExp(r'<meta(?=[\s/])([^>]*)>?', caseSensitive: false);
-final _attr = RegExp(r'''([^\s"'=/>]+)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s>]+))?''');
 final _charsetInContent = RegExp(
-  r'''charset\s*=\s*["']?\s*([^\s"';]+)''',
+  r"""charset\s*=\s*["']?\s*([^\s"';]+)""",
   caseSensitive: false,
 );
 final _xmlDecl = RegExp(
-  r'''^<\?xml\s[^>]*?encoding\s*=\s*["']([^"']+)["']''',
+  r"""^<\?xml\s[^>]*?encoding\s*=\s*["']([^"']+)["']""",
   caseSensitive: false,
 );
 
 /// 依次给出文档开头声明的候选 charset 标签（XML 声明，再按出现顺序的 `<meta>`）。
+///
+/// 按 HTML 规范的预扫描算法逐个读取标签：注释、`<!` / `<?` 声明整体跳过，其他标签的属性按引号
+/// 解析后丢弃，因此属性值中的 `>` 或 `<meta` 不会被误认。
 Iterable<String> _prescan(List<int> bytes) sync* {
   final head = latin1.decode(
     bytes.length > metaPrescanBytes
@@ -146,19 +146,128 @@ Iterable<String> _prescan(List<int> bytes) sync* {
         : bytes,
   );
   if (_xmlDecl.firstMatch(head.trimLeft()) case final m?) yield m.group(1)!;
-  for (final m in _meta.allMatches(head.replaceAll(_comment, ''))) {
-    final attrs = <String, String>{};
-    for (final a in _attr.allMatches(m.group(1)!)) {
-      final name = a.group(1)!.toLowerCase();
-      attrs.putIfAbsent(name, () => _unquote(a.group(2) ?? ''));
-    }
-    if (attrs['charset'] case final c? when c.isNotEmpty) {
-      yield c;
-    } else if (attrs['http-equiv']?.toLowerCase() == 'content-type' &&
+  final scanner = _TagScanner(head);
+  for (var tag = scanner.nextTag(); tag != null; tag = scanner.nextTag()) {
+    if (tag.name != 'meta') continue;
+    final attrs = tag.attributes;
+    if (attrs['charset'] case final c? when c.trim().isNotEmpty) {
+      yield c.trim();
+    } else if (attrs['http-equiv']?.trim().toLowerCase() == 'content-type' &&
         attrs['content'] != null) {
       if (_charsetInContent.firstMatch(attrs['content']!) case final c?) {
         yield _unquote(c.group(1)!);
       }
     }
+  }
+}
+
+class _Tag {
+  _Tag(this.name, this.attributes);
+
+  /// 小写标签名；结束标签以 `/` 开头。
+  final String name;
+
+  /// 小写属性名 → 值，同名属性只保留第一个。
+  final Map<String, String> attributes;
+}
+
+/// 简化的 HTML 标签扫描器（只用于编码预扫描）。
+class _TagScanner {
+  _TagScanner(this._s);
+
+  final String _s;
+  var _i = 0;
+
+  bool _isSpace(int c) =>
+      c == 0x20 || c == 0x09 || c == 0x0A || c == 0x0C || c == 0x0D;
+
+  bool _isAlpha(int c) => (c | 0x20) >= 0x61 && (c | 0x20) <= 0x7A;
+
+  /// 下一个开始 / 结束标签；到达末尾返回 null。
+  _Tag? nextTag() {
+    final s = _s;
+    while (true) {
+      final lt = s.indexOf('<', _i);
+      if (lt < 0 || lt + 1 >= s.length) {
+        _i = s.length;
+        return null;
+      }
+      _i = lt + 1;
+      if (s.startsWith('!--', _i)) {
+        final end = s.indexOf('-->', _i + 3);
+        _i = end < 0 ? s.length : end + 3;
+        continue;
+      }
+      final c = s.codeUnitAt(_i);
+      final closing = c == 0x2F; // '/'
+      if (closing && _i + 1 < s.length && _isAlpha(s.codeUnitAt(_i + 1))) {
+        _i++;
+      } else if (!_isAlpha(c)) {
+        if (c == 0x21 || c == 0x3F || closing) {
+          // <!…>、<?…>、</非字母…>：跳到下一个 '>'。
+          final end = s.indexOf('>', _i);
+          _i = end < 0 ? s.length : end + 1;
+        }
+        continue;
+      }
+      final nameStart = _i;
+      while (_i < s.length &&
+          !_isSpace(s.codeUnitAt(_i)) &&
+          s.codeUnitAt(_i) != 0x2F &&
+          s.codeUnitAt(_i) != 0x3E) {
+        _i++;
+      }
+      final name = s.substring(nameStart, _i).toLowerCase();
+      final attrs = <String, String>{};
+      for (var a = _attribute(); a != null; a = _attribute()) {
+        attrs.putIfAbsent(a.$1, () => a!.$2);
+      }
+      return _Tag(closing ? '/$name' : name, attrs);
+    }
+  }
+
+  /// 读取一个属性；遇到 '>' 或末尾时返回 null（并越过 '>'）。
+  (String, String)? _attribute() {
+    final s = _s;
+    while (_i < s.length &&
+        (_isSpace(s.codeUnitAt(_i)) || s.codeUnitAt(_i) == 0x2F)) {
+      _i++;
+    }
+    if (_i >= s.length) return null;
+    if (s.codeUnitAt(_i) == 0x3E) {
+      _i++;
+      return null;
+    }
+    final nameStart = _i;
+    while (_i < s.length) {
+      final c = s.codeUnitAt(_i);
+      if (_isSpace(c) || c == 0x2F || c == 0x3E) break;
+      if (c == 0x3D && _i > nameStart) break; // '='（名称首字符可以是 '='）
+      _i++;
+    }
+    final name = s.substring(nameStart, _i).toLowerCase();
+    while (_i < s.length && _isSpace(s.codeUnitAt(_i))) {
+      _i++;
+    }
+    if (_i >= s.length || s.codeUnitAt(_i) != 0x3D) return (name, '');
+    _i++; // '='
+    while (_i < s.length && _isSpace(s.codeUnitAt(_i))) {
+      _i++;
+    }
+    if (_i >= s.length) return (name, '');
+    final q = s.codeUnitAt(_i);
+    if (q == 0x22 || q == 0x27) {
+      final end = s.indexOf(String.fromCharCode(q), _i + 1);
+      final value = s.substring(_i + 1, end < 0 ? s.length : end);
+      _i = end < 0 ? s.length : end + 1;
+      return (name, value);
+    }
+    final valueStart = _i;
+    while (_i < s.length &&
+        !_isSpace(s.codeUnitAt(_i)) &&
+        s.codeUnitAt(_i) != 0x3E) {
+      _i++;
+    }
+    return (name, s.substring(valueStart, _i));
   }
 }
