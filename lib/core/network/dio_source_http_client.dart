@@ -70,6 +70,7 @@ class DioSourceHttpClient implements SourceHttpClient {
         e.key.toLowerCase(): e.value,
       for (final e in request.headers.entries) e.key.toLowerCase(): e.value,
     };
+    await session.ready; // 持久化会话（含 UA）加载完成
     if (session.userAgent case final ua? when ua.isNotEmpty) {
       headers.putIfAbsent('user-agent', () => ua);
     }

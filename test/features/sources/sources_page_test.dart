@@ -5,10 +5,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tsumugi/core/network/session_persistence.dart';
+import 'package:tsumugi/core/network/source_session.dart';
 import 'package:tsumugi/core/storage/app_database.dart';
 import 'package:tsumugi/features/sources/manifest_file_picker.dart';
 import 'package:tsumugi/features/sources/sources_page.dart';
 import 'package:tsumugi/sources/registry/providers.dart';
+import 'package:tsumugi/sources/session/source_sessions.dart';
 
 import '../../core/storage/test_database.dart';
 
@@ -39,7 +42,10 @@ void main() {
   });
   tearDown(() => db.close());
 
-  Future<void> pumpPage(WidgetTester tester) async {
+  Future<void> pumpPage(
+    WidgetTester tester, {
+    SessionPersistence? persistence,
+  }) async {
     tester.view.physicalSize = const Size(800, 1000);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -47,6 +53,7 @@ void main() {
       ProviderScope(
         overrides: [
           appDatabaseProvider.overrideWithValue(db),
+          sessionPersistenceProvider.overrideWithValue(persistence),
           manifestFilePickerProvider.overrideWithValue(picker),
         ],
         child: const MaterialApp(home: SourcesPage()),
@@ -240,20 +247,95 @@ void main() {
     await unmount(tester);
   });
 
+  Future<void> openMenuItem(WidgetTester tester, String item) async {
+    await tester.tap(find.byTooltip('源菜单'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(item).last);
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('源菜单清除该源的 Cookie 与登录状态（需要确认）', (tester) async {
+    await registry.importText(fixture('declarative_comic.json'));
+    await pumpPage(tester);
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(SourcesPage)),
+    );
+    final session = container
+        .read(sourceSessionsProvider)
+        .of('com.example.comic');
+    final site = Uri.parse('https://example.com/');
+    await tester.runAsync(() async {
+      await session.cookieJar.saveFromResponse(site, [Cookie('session', 'ok')]);
+    });
+    session.userAgent = 'UA';
+
+    await openMenuItem(tester, '清除 Cookie 与登录状态');
+    expect(find.textContaining('确定清除「示例漫画」'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(session.userAgent, 'UA');
+
+    await openMenuItem(tester, '清除 Cookie 与登录状态');
+    await tester.tap(find.widgetWithText(FilledButton, '清除'));
+    await tester.pumpAndSettle();
+    expect(find.text('已清除「示例漫画」的 Cookie 与登录状态'), findsOneWidget);
+    expect(session.userAgent, isNull);
+    final left = await tester.runAsync(
+      () => session.cookieJar.loadForRequest(site),
+    );
+    expect(left, isEmpty);
+    // 源仍然安装着。
+    expect(await registry.get('com.example.comic'), isNotNull);
+    await unmount(tester);
+  });
+
+  testWidgets('删除源时立即删除其 Cookie 文件（会话管理器此前未创建也一样）', (tester) async {
+    const id = 'com.example.comic';
+    await registry.importText(fixture('declarative_comic.json'));
+    final dir = (await tester.runAsync(
+      () => Directory.systemTemp.createTemp('tsumugi_sessions_'),
+    ))!;
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final persistence = SessionPersistence.at(dir);
+    final file = File('${dir.path}/${SessionPersistence.fileNameFor(id)}');
+    // 上次运行登录留下的会话文件。
+    await tester.runAsync(() async {
+      final previous = SourceSession.persistent(id, SessionPersistence.at(dir));
+      await previous.cookieJar.saveFromResponse(
+        Uri.parse('https://example.com/'),
+        [Cookie('session', 'ok')],
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
+    expect(file.existsSync(), isTrue);
+
+    await pumpPage(tester, persistence: persistence);
+    await openMenuItem(tester, '删除');
+    await tester.tap(find.widgetWithText(FilledButton, '删除'));
+    await tester.pumpAndSettle();
+    // 删除在 fake async 区域中排队：交替让真实 IO 完成并推进 fake 时间。
+    for (var i = 0; i < 50 && file.existsSync(); i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+      await tester.pump();
+    }
+    expect(file.existsSync(), isFalse);
+    await unmount(tester);
+  });
+
   testWidgets('删除需要确认', (tester) async {
     await registry.importText(fixture('declarative_comic.json'));
     await pumpPage(tester);
 
-    await tester.tap(find.byTooltip('删除'));
-    await tester.pumpAndSettle();
+    await openMenuItem(tester, '删除');
     expect(find.text('确定删除「示例漫画」吗？此操作不可撤销。'), findsOneWidget);
 
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
     expect(find.text('示例漫画'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('删除'));
-    await tester.pumpAndSettle();
+    await openMenuItem(tester, '删除');
     await tester.tap(find.widgetWithText(FilledButton, '删除'));
     await tester.pumpAndSettle();
 

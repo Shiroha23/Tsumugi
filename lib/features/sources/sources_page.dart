@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../shared/widgets/empty_state.dart';
 import '../../sources/model/common.dart';
 import '../../sources/registry/providers.dart';
+import '../../sources/session/source_sessions.dart';
 import 'import_source_dialog.dart';
 import 'labels.dart';
 
@@ -45,7 +46,42 @@ class _SourcesPageState extends ConsumerState<SourcesPage> {
       ),
     );
     if (ok != true) return;
+    // 先取会话管理器：即使它此前尚未创建，删除也会立即清理该源的 Cookie 文件，
+    // 不依赖之后的 registry 推送。
+    final sessions = ref.read(sourceSessionsProvider);
     await ref.read(sourceRegistryProvider).remove(source.id);
+    sessions.remove(source.id);
+  }
+
+  Future<void> _confirmClearSession(InstalledSource source) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('清除 Cookie 与登录状态'),
+        content: Text(
+          '确定清除「${source.name}」保存的 Cookie 与登录 / 验证状态吗？'
+          '之后访问需要登录或验证的内容时需重新完成。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('清除'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await ref.read(sourceSessionsProvider).clear(source.id);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(content: Text('已清除「${source.name}」的 Cookie 与登录状态')),
+      );
   }
 
   void _reorder(MediaType type, List<InstalledSource> group, int from, int to) {
@@ -146,6 +182,7 @@ class _SourcesPageState extends ConsumerState<SourcesPage> {
           onEnabledChanged: (v) =>
               ref.read(sourceRegistryProvider).setEnabled(s.id, v),
           onRemove: () => _confirmRemove(s),
+          onClearSession: () => _confirmClearSession(s),
         );
       },
     );
@@ -180,12 +217,14 @@ class _SourceTile extends StatelessWidget {
     required this.source,
     required this.onEnabledChanged,
     required this.onRemove,
+    required this.onClearSession,
   });
 
   final int index;
   final InstalledSource source;
   final ValueChanged<bool> onEnabledChanged;
   final VoidCallback onRemove;
+  final VoidCallback onClearSession;
 
   @override
   Widget build(BuildContext context) {
@@ -223,10 +262,28 @@ class _SourceTile extends StatelessWidget {
               value: source.enabled,
               onChanged: m == null ? null : onEnabledChanged,
             ),
-            IconButton(
-              onPressed: onRemove,
-              tooltip: '删除',
-              icon: const Icon(Icons.delete_outline),
+            PopupMenuButton<_SourceAction>(
+              tooltip: '源菜单',
+              onSelected: (action) => switch (action) {
+                _SourceAction.clearSession => onClearSession(),
+                _SourceAction.remove => onRemove(),
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem(
+                  value: _SourceAction.clearSession,
+                  child: ListTile(
+                    leading: Icon(Icons.cookie_outlined),
+                    title: Text('清除 Cookie 与登录状态'),
+                  ),
+                ),
+                PopupMenuItem(
+                  value: _SourceAction.remove,
+                  child: ListTile(
+                    leading: Icon(Icons.delete_outline),
+                    title: Text('删除'),
+                  ),
+                ),
+              ],
             ),
             ReorderableDragStartListener(
               index: index,
@@ -241,3 +298,5 @@ class _SourceTile extends StatelessWidget {
     );
   }
 }
+
+enum _SourceAction { clearSession, remove }

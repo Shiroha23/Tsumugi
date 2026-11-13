@@ -498,7 +498,8 @@ export async function search(keyword, page) {
 
 ## 5. 网络行为（两种引擎共同遵守）
 
-- 每个源有独立的 Cookie 域、限速队列与默认 headers。
+- 每个源有独立的 Cookie 域、限速队列与默认 headers。Cookie 域按源持久化（含会话 Cookie），重启应用后仍在；
+  源被删除或用户在源菜单中清除登录状态时一并删除，升级源时保留。
 - 请求目标主机不在 `baseUrl` 主机或 `allowedHosts` 中时，拒绝请求并返回 `E_HOST_NOT_ALLOWED`。
   **重定向的每一跳**同样检查；`followRedirects: false` 时直接返回 3xx 响应，由源自行处理。
   跨主机重定向时不转发源显式设置的 `Authorization` / `Cookie` 头（Cookie 域中的 Cookie 照常按主机附加）。

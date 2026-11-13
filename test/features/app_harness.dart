@@ -12,6 +12,7 @@ import 'package:tsumugi/shared/image/image_cache.dart';
 import 'package:tsumugi/shared/image/image_providers.dart';
 import 'package:tsumugi/shared/webview/providers.dart';
 import 'package:tsumugi/sources/registry/providers.dart';
+import 'package:tsumugi/sources/session/source_sessions.dart';
 
 import '../core/storage/test_database.dart';
 import '../shared/webview/webview_fakes.dart';
@@ -41,6 +42,7 @@ class AppHarness {
   late final ProviderContainer container = ProviderContainer(
     overrides: [
       appDatabaseProvider.overrideWithValue(db),
+      sessionPersistenceProvider.overrideWithValue(null),
       sourceFactoriesProvider.overrideWithValue(SourceFactories([factory])),
       // 图片不走网络与磁盘：封面 / 漫画页显示失败占位即可。
       diskImageCacheProvider.overrideWithValue(const NoDiskImageCache()),
