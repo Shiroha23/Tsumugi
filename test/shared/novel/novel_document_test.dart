@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tsumugi/features/novel/content/novel_document.dart';
+import 'package:tsumugi/shared/novel/novel_document.dart';
 import 'package:tsumugi/sources/model/content.dart';
 
 const _base = 'https://novel.example.com/book/1/';
@@ -60,8 +60,8 @@ void main() {
         NovelSpan('斜', italic: true),
         NovelSpan('下', underline: true),
         NovelSpan('删', strike: true),
-        NovelSpan('漢'),
-        NovelSpan('かん', annotation: true),
+        NovelSpan('漢', ruby: 0),
+        NovelSpan('かん', annotation: true, ruby: 0),
         NovelSpan('。'),
       ]);
       expect(p.plainText, '一粗体斜下删漢かん。');

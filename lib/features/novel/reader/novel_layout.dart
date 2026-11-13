@@ -2,7 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/painting.dart';
 
-import '../content/novel_document.dart';
+import '../../../shared/novel/novel_document.dart';
 import 'novel_reader_preferences.dart';
 
 /// 段首缩进（两个全角空格）。正文与引用段落的第一个片段带缩进，标题不缩进。

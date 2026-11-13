@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../shared/export/export_models.dart' show unitGroupsOf;
 import '../../../shared/history/providers.dart';
 import '../../../shared/image/source_image.dart';
 import '../../../shared/library/providers.dart';
@@ -17,6 +18,13 @@ typedef ReaderLocationBuilder = String Function(
   ItemProgress? resume,
 );
 
+/// 各媒体额外的操作按钮（如小说的“导出”），显示在“开始阅读”之后。
+typedef DetailActionsBuilder = List<Widget> Function(
+  BuildContext context,
+  Detail detail,
+  Headers? coverHeaders,
+);
+
 /// 作品详情（漫画 / 小说共用）：封面、标题、作者、简介、标签、状态、章节列表（多线路、正序 / 倒序）、
 /// 加入书架、继续 / 开始阅读、已读与“上次读到”标记。
 class MediaDetailPage extends ConsumerStatefulWidget {
@@ -28,6 +36,7 @@ class MediaDetailPage extends ConsumerStatefulWidget {
     required this.readerLocation,
     required this.progressLabel,
     this.preview,
+    this.extraActions,
   });
 
   final String sourceId;
@@ -40,6 +49,8 @@ class MediaDetailPage extends ConsumerStatefulWidget {
 
   /// 从搜索结果进入时带上的条目，用于加载期间先显示标题，并提供封面 headers。
   final SearchItem? preview;
+
+  final DetailActionsBuilder? extraActions;
 
   @override
   ConsumerState<MediaDetailPage> createState() => _MediaDetailPageState();
@@ -117,6 +128,7 @@ class _MediaDetailPageState extends ConsumerState<MediaDetailPage> {
               mediaType: widget.mediaType,
               readerLocation: widget.readerLocation,
               progressLabel: widget.progressLabel,
+              extraActions: widget.extraActions,
             ),
           ),
         ),
@@ -193,11 +205,7 @@ class _MediaDetailPageState extends ConsumerState<MediaDetailPage> {
   }
 
   /// 有 `groups`（多线路）时按线路展示，否则把 `units` 视为唯一一组。
-  static List<UnitGroup> _groupsOf(Detail detail) {
-    final groups = detail.groups;
-    if (groups != null && groups.isNotEmpty) return groups;
-    return [UnitGroup(name: '默认', units: detail.units)];
-  }
+  static List<UnitGroup> _groupsOf(Detail detail) => unitGroupsOf(detail);
 }
 
 /// 加载中 / 出错时的页面骨架。
@@ -334,6 +342,7 @@ class _Actions extends ConsumerWidget {
     required this.mediaType,
     required this.readerLocation,
     required this.progressLabel,
+    this.extraActions,
   });
 
   final String sourceId;
@@ -343,6 +352,7 @@ class _Actions extends ConsumerWidget {
   final MediaType mediaType;
   final ReaderLocationBuilder readerLocation;
   final String Function(ItemProgress progress) progressLabel;
+  final DetailActionsBuilder? extraActions;
 
   LibraryItem get _item => LibraryItem(
     sourceId: sourceId,
@@ -399,6 +409,7 @@ class _Actions extends ConsumerWidget {
               label: Text(progress != null ? '继续阅读' : '开始阅读'),
               onPressed: read,
             ),
+            ...?extraActions?.call(context, detail, coverHeaders),
           ],
         ),
         if (progress != null) ...[
