@@ -299,7 +299,7 @@ tsumugi.ui.openWebView ────────┘   （单飞 / 节流） └�
 - **明文 http**：Android（`android:usesCleartextTraffic="true"`）与 iOS（`NSAllowsArbitraryLoads`）
   均允许 http，因为不少源站点只提供 http；访问范围仍由每个源的 `HostPolicy` 白名单限制，
   安全边界不依赖传输层。Secure Cookie 不会经 http 发送（`SecureCookieJar`，§5.3）。
-- **真机调试**：`dart run tool/mock_server/main.dart --host 0.0.0.0` 监听局域网并打印本机地址；
+- **真机调试**：`dart run tool/mock_server/main.dart --host 0.0.0.0` 监听局域网，并只打印实际访问得通的本机地址（排除已断开网卡的残留地址与代理虚拟网卡 198.18.0.0/15）；
   手机浏览器打开 `http://<电脑局域网 IP>:8080/sources/`，复制虚构源 JSON 导入应用——
   `/sources/<文件名>` 会把虚构源里的 `http://127.0.0.1:8080` 换成请求所用的地址；命令行启动的服务器
   还会把页面 / JSON 中虚构的图片主机 `http://img.example.com` 换成请求地址，封面与漫画页才能显示

@@ -7,6 +7,7 @@
 // 复制虚构源 JSON（地址已换成局域网 IP）粘贴到应用中导入。
 import 'dart:io';
 
+import 'lan.dart';
 import 'mock_server.dart';
 
 Future<void> main(List<String> args) async {
@@ -33,16 +34,13 @@ Future<void> main(List<String> args) async {
   );
   stdout.writeln('mock server listening on ${server.origin}');
   if (host != null && host != '127.0.0.1') {
-    // 列出局域网地址，方便手机访问；Windows 防火墙首次可能会询问是否允许。
-    for (final iface in await NetworkInterface.list(
-      type: InternetAddressType.IPv4,
-    )) {
-      for (final a in iface.addresses) {
-        if (a.isLoopback) continue;
-        stdout.writeln(
-          '  ${iface.name}: http://${a.address}:${server.port}/sources/',
-        );
-      }
+    // 只列出实际访问得通的局域网地址（排除已断开网卡的残留地址与代理虚拟网卡）。
+    final urls = await reachableLanUrls(server);
+    if (urls.isEmpty) {
+      stdout.writeln('  （没有找到可访问的局域网地址：检查网络连接与 Windows 防火墙）');
+    }
+    for (final u in urls) {
+      stdout.writeln('  ${u.interface}: ${u.url}');
     }
   }
   stdout.writeln(
@@ -50,7 +48,8 @@ Future<void> main(List<String> args) async {
   );
 
   final requests = server.requests;
-  var printed = 0;
+  // 跳过启动时探测局域网地址产生的请求。
+  var printed = requests.length;
   // 简单的访问日志。
   Stream.periodic(const Duration(milliseconds: 200)).listen((_) {
     while (printed < requests.length) {
