@@ -184,7 +184,7 @@ detail(id) → 章节/剧集/曲目列表 → content(itemId)
 键 = sha256(sourceId + url)）→ 该源的 `SourceHttpClient`（因此遵守白名单、限速、默认 headers；
 `ImageRef.headers` 随请求发送）。同一图片的并发请求合并，全局并发上限 6；超时 / 连接错误额外重试 1 次，
 字节无法解码时清除缓存条目。界面使用 `SourceImageProvider`（`ImageProvider`）或 `SourceImage` / `CoverImage` 组件，
-不直接使用 `Image.network`。图片客户端与源实例共用该源的 `SourceSession`（Cookie 与 UA，§5.3）。已知限制：网络层只在响应读完后返回，下载进度目前为不确定进度。
+不直接使用 `Image.network`。图片客户端与源实例共用该源的 `SourceSession`（Cookie 与 UA，§5.3）。已知限制：网络层只在响应读完后返回，下载进度目前为不确定进度（[#26](https://github.com/Shiroha23/Tsumugi/issues/26)）。
 
 **漫画阅读器（M2，`features/comic/reader/`）**：路由 `/comic/:sourceId/:itemId/read/:unitId?page=N`
 （详情路由的子路由；各段 URL 编码，用 `ComicRoutes.reader` / `comicReaderLocation` 生成，`page` 从 0 开始）；纵向滚动 / 左→右 / 右→左三种模式（偏好存于应用支持目录
@@ -234,7 +234,7 @@ detail(id) → 章节/剧集/曲目列表 → content(itemId)
 使用 beta 的原因：最新稳定版 6.1.5（2024-10）在当前工具链上无法构建——Android 插件使用了新版 AGP 已拒绝的
 `proguard-android.txt`，6.2.0-beta.3（2026-02）已改为 `proguard-android-optimize.txt`。Windows 上插件经 C++/WinRT
 引入 `<experimental/coroutine>`，VS 2026 默认报错 STL1011，`windows/CMakeLists.txt` 按 MSVC 提示定义了
-`_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS`。上游发布含这些修复的稳定版后应切换回去。
+`_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS`。上游发布含这些修复的稳定版后应切换回去（[#27](https://github.com/Shiroha23/Tsumugi/issues/27)）。
 
 | 包 | Win / Android / iOS | 读取 HttpOnly Cookie | 拦截主框架导航 | 自定义 UA | 许可证 | 结论 |
 |---|---|---|---|---|---|---|
@@ -264,7 +264,7 @@ tsumugi.ui.openWebView ────────┘   （单飞 / 节流） └�
 - **按源会话** `SourceSession`（`core/network/source_session.dart`）：一个源的 Cookie Jar、
   WebView 同步来的 User-Agent、最近一次检测到挑战的地址。`SourceSessions`（`sources/session/`）
   按 sourceId 提供同一个会话，**源实例（声明式 / 脚本）与图片加载器的客户端共用它**，因此登录 / 验证
-  Cookie 对图片同样有效。源被删除时丢弃其会话。会话目前只在内存中，重启后需重新验证（后续工作）。
+  Cookie 对图片同样有效。源被删除时丢弃其会话。会话目前只在内存中，重启后需重新验证（后续工作，[#21](https://github.com/Shiroha23/Tsumugi/issues/21)）。
 - **打开**：地址必须在该源的 `HostPolicy` 白名单内。`SourceErrorView` 打开的是最近一次触发挑战的地址
   （网络层检测到挑战时记录在会话中），没有时为 `baseUrl`；脚本打开的是它给出的地址。
 - **导航限制**：主框架导航到白名单外（或非 http(s)）的地址时取消导航，页面顶部提示被阻止的主机；
@@ -303,7 +303,7 @@ tsumugi.ui.openWebView ────────┘   （单飞 / 节流） └�
 - **已知限制**：`openWebView` 的等待计入单次调用的 30 s 总时长（source-spec §4.4）。调用超时后验证页
   仍保持打开，用户完成后 Cookie 照常写回，但这次调用已以 `E_LIMIT` 失败，需要用户重试；
   需要较长时间的登录建议脚本直接抛出 `E_LOGIN_REQUIRED`，由界面引导用户打开验证页。
-  后续可让引擎在等待 `openWebView` 期间暂停总时长计时。
+  后续可让引擎在等待 `openWebView` 期间暂停总时长计时（[#23](https://github.com/Shiroha23/Tsumugi/issues/23)）。
 - 测试中用假的 `WebViewLauncher` / `WebCookieStore`，不启动真实 WebView；手动验证用
   `tool/mock_server` 的 `/challenge/page`、`/login` 与 `test/fixtures/sources/mock_comic_gated*.json`。
 
@@ -333,8 +333,8 @@ tsumugi.ui.openWebView ────────┘   （单飞 / 节流） └�
   （`MockServer.rewriteFictionalHosts`，单元测试不开启）。
   Windows 防火墙首次会询问是否允许 dart 接受入站连接。
 
-已知限制：响应文本只识别 utf-8 / latin1 / ascii 字符集（其余按 utf-8 宽松解码），GBK 等需后续补充；
-Cookie Jar 在按源的 `SourceSession` 中（§5.3），目前只在内存中，持久化（按源目录的 `PersistCookieJar`）为后续工作。
+已知限制：响应文本只识别 utf-8 / latin1 / ascii 字符集（其余按 utf-8 宽松解码），GBK 等需后续补充（[#22](https://github.com/Shiroha23/Tsumugi/issues/22)）；
+Cookie Jar 在按源的 `SourceSession` 中（§5.3），目前只在内存中，持久化（按源目录的 `PersistCookieJar`）为后续工作（[#21](https://github.com/Shiroha23/Tsumugi/issues/21)）。
 
 ### 5.5 脚本源（M1）
 
@@ -436,7 +436,7 @@ CPU 预算跨 await 累计、总时长上限、内存上限、栈上限、超限
   `Maximum call stack size exceeded`；反方向时栈检查会失效。`qjs` 未暴露 `JS_UpdateStackTop`，
   `core/engine/script/native_stack.dart` 经 native asset 直接调用它（读取 `JSRuntime.ptr` 的第一个字段，
   该成员在 qjs 中标为 `@internal`），在每次从 Dart 同步进入 JS（调用、resolve 宿主 Promise、建引擎、释放）前更新。
-  升级 qjs 时需复查结构布局；应向上游报告，修复后删除此文件。
+  升级 qjs 时需复查结构布局；应向上游报告，修复后删除此文件（[#28](https://github.com/Shiroha23/Tsumugi/issues/28)）。
 - **worker 无法被强制终止**：不能用 `Isolate.kill(priority: immediate)`——worker 往往正处于 QuickJS → Dart 的
   FFI 回调中，在那里被强制终止会让整个进程崩溃（已实测）。因此看门狗只做 `kill(beforeNextEvent)`：worker 回到事件循环时退出，
   一直卡住的 worker 只能放弃（占用一个线程直到进程退出）。
@@ -444,12 +444,13 @@ CPU 预算跨 await 累计、总时长上限、内存上限、栈上限、超限
   `length` 极大的类数组对象）在 C 循环中不检查中断，CPU / 总时长限制对其无效，可能长时间无法返回
   （未实测，依据引擎源码判断）。放进 worker isolate 也不够：isolate 卡在原生代码中时 Dart 无法终止它。
   根治需要给引擎打补丁（在这些循环中加入中断检查）或把脚本放进可被强制结束的独立进程；
-  在此之前，恶意源最坏能卡死其所在的 worker。
+  在此之前，恶意源最坏能卡死其所在的 worker（[#29](https://github.com/Shiroha23/Tsumugi/issues/29)）。
 - 同一运行时上的调用**串行执行**（宿主 Promise 需要归属到具体调用）。如需单源并发，可按调用开多个运行时。
-- `ui.openWebView` 的等待时间计入单次调用的 30 s 总时长，用户登录可能来不及完成；M3 的处理与后续工作见 §5.3。
+- `ui.openWebView` 的等待时间计入单次调用的 30 s 总时长，用户登录可能来不及完成；M3 的处理与后续工作见 §5.3（[#23](https://github.com/Shiroha23/Tsumugi/issues/23)）。
 - HTML 句柄的 DOM 不在 JS 堆内，只能靠句柄数与解析文本量的上限间接约束（source-spec §4.2.1）。
 - 源脚本**不支持顶层 await**（模块同步求值）；已写入 source-spec §4.1。
-- 移动端只验证到“能编译打包”，真机 / 模拟器上的运行时加载尚未自动化验证，M1 加 integration test。
+- 移动端：Android 已在真机上手动验证（2026-11，漫画 / 小说 / 脚本源 / WebView）；iOS 仍只验证到能编译（[#31](https://github.com/Shiroha23/Tsumugi/issues/31)）；
+  移动端自动化集成测试尚未建立（[#32](https://github.com/Shiroha23/Tsumugi/issues/32)）。
 - `qjs` 的 build hook 默认从其 GitHub Release 下载预编译库（sha256 写死在包内并校验），失败时回落到
   本地用 `native_toolchain_c` 编译源码。需要可复现构建时可在 M1 评估改为强制源码编译。
 - `qjs` 为单人维护的新库（风险：维护中断）。缓解：引擎细节全部隔离在 `QuickJsScriptRuntime` 一个文件内，
