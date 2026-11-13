@@ -1,0 +1,43 @@
+{
+  "apiVersion": 1,
+  "id": "com.example.mock.novel.gbk",
+  "name": "Mock 小说（GBK 编码）",
+  "type": "novel",
+  "version": "1.0.0",
+  "author": "tsumugi",
+  "lang": "zh",
+  "description": "虚构源：页面为 GBK 编码，配合 tool/mock_server 验证非 UTF-8 网页的解码。",
+  "baseUrl": "http://127.0.0.1:8080",
+  "engine": "declarative",
+  "rules": {
+    "search": {
+      "request": {
+        "url": "/gbk/search?q={{keyword}}"
+      },
+      "list": "css:.book",
+      "fields": {
+        "id": "css:h3 a@href",
+        "title": "css:h3 a@text",
+        "subtitle": "css:.writer@text",
+        "tags": "css:.state@text[]"
+      }
+    },
+    "detail": {
+      "fields": {
+        "title": "css:h1@text",
+        "author": "css:.writer@text",
+        "description": "css:#intro@text"
+      },
+      "units": {
+        "list": "css:.catalog dd",
+        "fields": {
+          "id": "css:a@href",
+          "title": "css:a@text"
+        }
+      }
+    },
+    "content": {
+      "text": "css:#content p@text[]"
+    }
+  }
+}

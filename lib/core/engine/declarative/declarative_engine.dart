@@ -292,6 +292,7 @@ class DeclarativeEngine {
       method: rule.method,
       headers: reqHeaders,
       body: body,
+      charset: rule.charset,
     );
     final FetchResponse response;
     try {

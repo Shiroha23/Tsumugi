@@ -173,7 +173,8 @@ interface MusicContent {
       "url": "/search?q={{keyword}}&page={{page}}",
       "method": "GET",                 // GET | POST
       "body": null,                    // POST 时的模板字符串
-      "headers": {}
+      "headers": {},
+      "charset": null                  // 可选：强制按此字符集解码响应，如 "gbk"（§5）
     },
     "list": "css:.result-item",        // 列表节点
     "fields": {                        // 对每个列表节点求值
@@ -224,6 +225,8 @@ interface MusicContent {
 - 列表条目缺少 `id` 或 `title` 时跳过该条目；unit 缺少 `id` 时跳过。unit 的 `index` 为（反转后的）序号，从 0 开始。
 - `hasMore`：结果非空即为 true（匹配到的节点即使没有文本也算），但单个值 `false` / `0` 视为 false（便于 JSON 接口）。省略时为 false。
 - `explore` 分类的 id 为其在数组中的下标（`"0"`、`"1"`…）。
+- `request.charset` 可选，用于 `Content-Type` / `<meta>` 缺失或声明错误的站点；必须是 §5 支持的字符集标签，
+  否则创建源时报 `E_PARSE`。
 - `POST` 且规则未给出 `Content-Type` 时：`body` 以 `{` 或 `[` 开头按 `application/json`，否则按
   `application/x-www-form-urlencoded`。
 - 清单 `headers` 会合并到每个请求，并附在封面（`coverHeaders`）、图片与流的 `headers` 上（§5）。
@@ -344,6 +347,7 @@ declare const tsumugi: {
       body?: string | Record<string, unknown>; // 对象时按 JSON 发送
       form?: Record<string, string>;     // application/x-www-form-urlencoded
       responseType?: "text" | "json" | "bytes";
+      charset?: string;                  // 强制按此字符集解码 text / json（如 "gbk"），默认自动识别（§5）
       followRedirects?: boolean;         // 默认 true
     }): Promise<{ status: number; headers: Headers; url: string; body: any }>;
     get(url: string, headers?: Headers): Promise<string>;   // 便捷方法，返回文本
@@ -404,7 +408,8 @@ interface HtmlNode {
 - `http.request`：`method` 不区分大小写，只允许上面列出的五种；`body` 为字符串时按 `text/plain` 发送，
   为对象 / 数组时按 JSON 发送；`body` 与 `form` 不能同时给出。非 2xx 响应**不抛出**，由脚本检查 `status`；
   `headers` 的名称为小写。`responseType: "json"` 时 `body` 为解析后的值（空响应体为 `null`，解析失败 → `E_PARSE`），
-  `"bytes"` 时为 **base64 字符串**。
+  `"bytes"` 时为 **base64 字符串**。`charset` 只影响 `text` / `json`，必须是 §5 支持的标签，否则抛出普通异常；
+  `http.get` / `http.getJson` 总是自动识别。
 - `http.get` / `http.getJson`：非 2xx 抛出 `E_HTTP`（带 `status`），`getJson` 解析失败 → `E_PARSE`。
 - 所有 `http.*` 的错误码见 §6：网络错误 / 超时 → `E_NETWORK`，白名单外（含重定向）→ `E_HOST_NOT_ALLOWED`，
   人机验证页 → `E_CHALLENGE`，响应体过大 → `E_LIMIT`。
@@ -507,6 +512,21 @@ export async function search(keyword, page) {
   UI 引导用户在 WebView 中手动完成后再重试（见 architecture §5.3）。`E_CHALLENGE` 与 `E_LOGIN_REQUIRED`
   的错误界面都提供「打开验证页」；完成后 Cookie 写回本源的 Cookie 域（图片请求共用），并自动重试。
 - 单个响应体超过 20 MB → `E_LIMIT`。
+- **响应文本解码**（声明式规则、`http.request` 的 `text` / `json`、`http.get` / `getJson`）按以下顺序确定字符集：
+  1. 规则 `request.charset` / 脚本 `charset`（显式指定）；
+  2. BOM（UTF-8 / UTF-16LE / UTF-16BE）；
+  3. `Content-Type` 头的 `charset` 参数；
+  4. HTML 文档（`Content-Type` 含 `html` / `xml` 或缺失时）前 4 KB 内第一个可识别的
+     `<meta charset>` / `<meta http-equiv="Content-Type" content="…; charset=…">`，或 XML 声明的 `encoding`；
+  5. UTF-8。
+
+  字符集名称按 [WHATWG Encoding Standard](https://encoding.spec.whatwg.org/#names-and-labels) 的标签规范化，
+  不区分大小写：`gb2312` / `gbk` / `x-gbk` 等按 GB18030 解码，`iso-8859-1` / `latin1` / `ascii` 按 windows-1252，
+  `big5-hkscs` 按 Big5，`sjis` / `windows-31j` 按 Shift_JIS，`ks_c_5601-1987` / `windows-949` 按 EUC-KR；
+  另支持 UTF-16 与全部 WHATWG 单字节编码（iso-8859-*、windows-125*、koi8-* 等）。
+  不支持 EUC-JP / ISO-2022-JP。不认识的名称跳过，继续下一步（最终按 UTF-8），并记录调试日志。
+  非法字节一律替换为 U+FFFD，不会导致请求失败。`responseType: "bytes"` 与图片、音视频不经过解码。
+  请求方向（URL 模板、表单、请求体）始终按 UTF-8 编码。
 - 图片、音视频流的 headers 由内容结构中的 `headers` 字段携带给加载器/播放器。
 
 ## 6. 错误码

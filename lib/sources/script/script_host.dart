@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import '../../core/encoding/text_decoding.dart';
 import '../../core/engine/script/script_runtime.dart';
 import '../../core/network/network_exception.dart';
 import '../../core/network/source_http_client.dart';
@@ -242,6 +243,11 @@ class ScriptHost {
     if (!const {'text', 'json', 'bytes'}.contains(responseType)) {
       throw ScriptException('Unsupported responseType "$responseType".');
     }
+    final charset = opts['charset'];
+    if (charset != null &&
+        (charset is! String || normalizeCharset(charset) == null)) {
+      throw ScriptException('Unsupported charset "$charset".');
+    }
     final follow = opts['followRedirects'] ?? true;
     if (follow is! bool) {
       throw const ScriptException('"followRedirects" must be a boolean.');
@@ -261,9 +267,9 @@ class ScriptHost {
       'headers': r.headers,
       'url': r.url.toString(),
       'body': switch (responseType) {
-        'json' => r.bytes.isEmpty ? null : r.json(),
+        'json' => r.bytes.isEmpty ? null : r.json(charset: charset as String?),
         'bytes' => base64.encode(r.bytes),
-        _ => r.text,
+        _ => r.decodeText(charset: charset as String?),
       },
     };
   }
