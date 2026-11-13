@@ -11,6 +11,7 @@ class FetchRequest {
     this.method = 'GET',
     this.headers = const {},
     this.body,
+    this.charset,
   });
 
   final Uri url;
@@ -19,6 +20,9 @@ class FetchRequest {
   final String method;
   final Map<String, String> headers;
   final String? body;
+
+  /// 强制按此字符集（WHATWG 标签）解码响应；null 时由网络层自动识别。
+  final String? charset;
 
   @override
   String toString() => '$method $url';

@@ -353,5 +353,46 @@ void main() {
       );
       expect(text, contains('第二章 雨季\n\n　　雨季来的时候'));
     }, timeout: const Timeout(Duration(seconds: 30)));
+
+    test('GBK 编码的站点：导出得到正确的中文', () async {
+      final db = openTestDatabase();
+      addTearDown(db.close);
+      final registry = SourceRegistry(db);
+      await registry.importText(
+        File('test/fixtures/sources/mock_novel_gbk.json').readAsStringSync(),
+      );
+      final runtime = SourceRuntime(registry, mockFactories(server));
+      addTearDown(runtime.dispose);
+      const id = 'com.example.mock.novel.gbk';
+      final source = await runtime.get(id);
+      final detail = await source.detail('/gbk/book/1');
+
+      final file = await NovelExportJob(
+        request: NovelExportRequest(
+          sourceId: id,
+          itemId: '/gbk/book/1',
+          detail: detail,
+          units: detail.units,
+          format: ExportFormat.txt,
+        ),
+        sourceFor: runtime.get,
+        clock: () => DateTime(2026, 11, 13),
+        buildInIsolate: false,
+      ).run();
+
+      final text = utf8.decode(file!.bytes);
+      expect(text, contains('雾港旧事'));
+      expect(text, contains('作者：虚构作者堃'));
+      expect(
+        text,
+        contains(
+          '第一章 无名信\n\n'
+          '　　雾从海面漫上来，把整座港口裹进一团灰白里。\n'
+          '　　看守人老堃在台阶上捡到一封信，信封上一个字也没有。\n',
+        ),
+      );
+      expect(text, contains('第二章 灯塔\n\n　　灯塔的光一圈一圈扫过海面。'));
+      expect(text, isNot(contains('�')));
+    });
   });
 }

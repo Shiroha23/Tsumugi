@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# 非 UTF-8 编码的测试页面按字节保存，不做换行转换
+test/fixtures/mock_site/encoding/** -text

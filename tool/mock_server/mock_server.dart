@@ -17,6 +17,12 @@
 /// | `GET /novel/book/1/chapter/2` | 小说章节（无分页） |
 /// | `GET /api/search?q=&page=` | JSON 搜索 API（分页） |
 /// | `GET /api/book/b101` | JSON 详情 API |
+/// | `GET /gbk/search?q=` | GBK 编码的小说搜索页：`Content-Type` 不带 charset，只靠 `<meta http-equiv>`（gb2312） |
+/// | `GET /gbk/book/1` | GBK 小说详情：不带 charset，只靠 `<meta charset="gbk">` |
+/// | `GET /gbk/book/1/chapter/1\|2` | GBK 章节：`Content-Type: text/html; charset=GBK` |
+/// | `GET /gbk/mislabeled/chapter/1` | 同第 1 章，但响应头错误地声明 `charset=utf-8`（测试显式 `charset`） |
+/// | `GET /big5/book/1` | Big5 小说详情：`Content-Type: text/html; charset=Big5` |
+/// | `GET /big5/book/1/meta-only` | 同上，但不带 charset，只靠 `<meta charset="big5">` |
 /// | `GET /static/*`、`GET /covers/*`、`GET /pages/*` | 1×1 PNG |
 /// | `* /echo` | 以 JSON 返回 method / host / path / query / headers / cookies / body |
 /// | `POST /login`（form：user、pass=secret） | 成功时 `Set-Cookie: session=…` 并 303 到 `/members` |
@@ -250,6 +256,23 @@ class MockServer {
         return _file(res, 'api/search_$page.json', ContentType.json);
       case '/api/book/b101':
         return _file(res, 'api/book_b101.json', ContentType.json);
+      // 非 UTF-8 编码的虚构页面（原样发送字节，不做模板替换与主机改写）。
+      case '/gbk/search':
+        return _encoded(res, 'gbk/search.html', 'text/html');
+      case '/gbk/book/1':
+        return _encoded(res, 'gbk/book_1.html', 'text/html');
+      case '/gbk/book/1/chapter/1' || '/gbk/book/1/chapter/2':
+        return _encoded(
+          res,
+          'gbk/chapter_${segments.last}.html',
+          'text/html; charset=GBK',
+        );
+      case '/gbk/mislabeled/chapter/1':
+        return _encoded(res, 'gbk/chapter_1.html', 'text/html; charset=utf-8');
+      case '/big5/book/1':
+        return _encoded(res, 'big5/book_1.html', 'text/html; charset=Big5');
+      case '/big5/book/1/meta-only':
+        return _encoded(res, 'big5/book_1.html', 'text/html');
       case '/echo':
         return _json(res, {
           'method': req.method,
@@ -392,6 +415,13 @@ class MockServer {
     } else {
       await res.addStream(file.openRead());
     }
+    return res.close();
+  }
+
+  /// 原样发送 `encoding/` 下的字节，[contentType] 原样写入响应头。
+  Future<void> _encoded(HttpResponse res, String name, String contentType) {
+    res.headers.set(HttpHeaders.contentTypeHeader, contentType);
+    res.add(File('${fixturesDir.path}/encoding/$name').readAsBytesSync());
     return res.close();
   }
 

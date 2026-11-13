@@ -3,6 +3,8 @@
 /// 只做结构校验；表达式本身的语法错误在求值时记录日志（§3.3）。
 library;
 
+import '../../encoding/text_decoding.dart';
+
 /// `request` 对象。
 class RequestRule {
   const RequestRule({
@@ -10,6 +12,7 @@ class RequestRule {
     this.method = 'GET',
     this.body,
     this.headers = const {},
+    this.charset,
   });
 
   factory RequestRule.fromJson(Object? json, String path) {
@@ -18,11 +21,16 @@ class RequestRule {
     if (method != 'GET' && method != 'POST') {
       throw FormatException('$path.method 只能是 GET 或 POST: $method');
     }
+    final charset = _optString(map, 'charset', path);
+    if (charset != null && normalizeCharset(charset) == null) {
+      throw FormatException('$path.charset 不是支持的字符集: $charset');
+    }
     return RequestRule(
       url: _string(map, 'url', path),
       method: method,
       body: _optString(map, 'body', path),
       headers: _stringMap(map['headers'], '$path.headers'),
+      charset: charset,
     );
   }
 
@@ -30,6 +38,9 @@ class RequestRule {
   final String method;
   final String? body;
   final Map<String, String> headers;
+
+  /// 强制按此字符集解码响应（WHATWG 标签，如 `gbk`）；null 时自动识别（§5）。
+  final String? charset;
 }
 
 /// 列表页规则：search 与 explore 的每个分类。

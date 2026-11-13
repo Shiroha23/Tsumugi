@@ -401,6 +401,48 @@ void main() {
     );
   });
 
+  test('http decodes non-UTF-8 pages; charset overrides detection', () async {
+    final source = await open(_hostManifest());
+    // 只靠 <meta> 声明的 GBK 页面：自动识别。
+    final gbk = await source.debugCall('rawRequest', [
+      {'url': '/gbk/book/1'},
+    ]) as Map;
+    expect(gbk['body'], contains('<h1>雾港旧事</h1>'));
+    final big5 = await source.debugCall('rawRequest', [
+      {'url': '/big5/book/1'},
+    ]) as Map;
+    expect(big5['body'], contains('霧港舊事'));
+
+    // 响应头错误声明 utf-8：显式 charset 覆盖。
+    final wrong = await source.debugCall('rawRequest', [
+      {'url': '/gbk/mislabeled/chapter/1'},
+    ]) as Map;
+    expect(wrong['body'], contains('�'));
+    final fixed = await source.debugCall('rawRequest', [
+      {'url': '/gbk/mislabeled/chapter/1', 'charset': 'gb2312'},
+    ]) as Map;
+    expect(fixed['body'], contains('雾从海面漫上来'));
+
+    // bytes 不受 charset 影响。
+    final bytes = await source.debugCall('rawRequest', [
+      {'url': '/gbk/book/1', 'responseType': 'bytes', 'charset': 'big5'},
+    ]) as Map;
+    expect(
+      base64.decode(bytes['body'] as String),
+      File('test/fixtures/mock_site/encoding/gbk/book_1.html')
+          .readAsBytesSync(),
+    );
+
+    for (final bad in ['euc-jp', 42]) {
+      await expectLater(
+        source.debugCall('rawRequest', [
+          {'url': '/gbk/book/1', 'charset': bad},
+        ]),
+        throwsA(_sourceError(SourceErrorCode.parse)),
+      );
+    }
+  });
+
   test('at most 50 HTTP requests per entry call', () async {
     final source = await open(_hostManifest());
     final before = server.hits('/echo');
