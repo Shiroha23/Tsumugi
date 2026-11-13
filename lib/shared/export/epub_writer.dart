@@ -288,27 +288,45 @@ String _block(NovelBlock block) => switch (block) {
   NovelDivider() => '<hr/>',
 };
 
-/// 行内片段：粗 / 斜 / 下划线 / 删除线分别为 `b` / `i` / `u` / `s`；
-/// `ruby` 基字与其后紧跟的 `rt` 注音还原为 `<ruby>基字<rp>（</rp><rt>注音</rt><rp>）</rp></ruby>`，
-/// 没有基字的注音以括号内文字输出。
+/// 行内片段：粗 / 斜 / 下划线 / 删除线分别为 `b` / `i` / `u` / `s`。
+/// 同一 `ruby` 分组（[NovelSpan.ruby]）的全部片段整体还原为一个 `<ruby>`：其中每段连续的基字后接
+/// `<rp>（</rp><rt>注音</rt><rp>）</rp>`，基字或注音内的样式不会改变注音与基字的对应关系。
 String _spans(List<NovelSpan> spans) {
   final out = StringBuffer();
-  for (var i = 0; i < spans.length; i++) {
-    final s = spans[i];
-    if (s.annotation) {
-      out.write('（${_styled(s)}）');
+  var i = 0;
+  while (i < spans.length) {
+    final group = spans[i].ruby;
+    if (group == null) {
+      final s = spans[i++];
+      // 不在 ruby 中的注音（清洗器不会产生，保险起见）以括号文字输出。
+      out.write(s.annotation ? '（${_styled(s)}）' : _styled(s));
       continue;
     }
-    final next = i + 1 < spans.length ? spans[i + 1] : null;
-    if (s.rubyBase && next != null && next.annotation) {
-      out.write(
-        '<ruby>${_styled(s)}<rp>（</rp><rt>${_styled(next)}</rt><rp>）</rp></ruby>',
-      );
-      i++;
-    } else {
-      out.write(_styled(s));
+    var j = i;
+    while (j < spans.length && spans[j].ruby == group) {
+      j++;
     }
+    out.write(_ruby(spans.sublist(i, j)));
+    i = j;
   }
+  return out.toString();
+}
+
+String _ruby(List<NovelSpan> group) {
+  final out = StringBuffer('<ruby>');
+  var k = 0;
+  while (k < group.length) {
+    while (k < group.length && !group[k].annotation) {
+      out.write(_styled(group[k++]));
+    }
+    if (k == group.length) break;
+    final rt = StringBuffer();
+    while (k < group.length && group[k].annotation) {
+      rt.write(_styled(group[k++]));
+    }
+    out.write('<rp>（</rp><rt>$rt</rt><rp>）</rp>');
+  }
+  out.write('</ruby>');
   return out.toString();
 }
 

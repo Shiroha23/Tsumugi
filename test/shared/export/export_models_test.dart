@@ -19,6 +19,10 @@ void main() {
       expect(safeFileStem('CON'), '_CON');
       expect(safeFileStem('lpt1'), '_lpt1');
       expect(safeFileStem('console'), 'console');
+      expect(safeFileStem('CON.notes'), '_CON.notes');
+      expect(safeFileStem('LPT1.backup'), '_LPT1.backup');
+      expect(safeFileStem('nul .txt'), '_nul .txt');
+      expect(safeFileStem('aux-notes.v2'), 'aux-notes.v2');
     });
 
     test('限制长度且不拆开代理对', () {

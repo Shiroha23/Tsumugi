@@ -5,6 +5,7 @@ import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tsumugi/shared/export/epub_writer.dart';
 import 'package:tsumugi/shared/export/export_models.dart';
+import 'package:tsumugi/shared/novel/novel_document.dart';
 import 'package:xml/xml.dart';
 
 import 'export_fixtures.dart';
@@ -197,6 +198,37 @@ void main() {
     expect(c2, contains('<p>控制字符与 &lt;script&gt; 文本</p>'));
     expect(c2, isNot(contains('tracker')));
     expect(c2, isNot(contains('onload')));
+  });
+
+  test('ruby 分组完整保留：基字 / 注音内的样式不改变对应关系，相邻 ruby 各自成组', () {
+    final book = ExportBook(
+      info: sampleBook().info,
+      chapters: [
+        ExportedChapter(
+          unitId: 'r',
+          title: 'ruby',
+          content: NovelChapter(
+            sanitizeNovelHtml(
+              '<p><ruby><b>漢</b>字<rt>かん<i>じ</i></rt></ruby>'
+              '<ruby>灯<rt>ひ</rt></ruby>'
+              '<ruby>甲<rt>こう</rt>乙<rt>おつ</rt></ruby></p>',
+            ),
+          ),
+        ),
+      ],
+    );
+    final a = ZipDecoder().decodeBytes(buildNovelEpub(book));
+    final c = _entry(a, 'OEBPS/chapter-0001.xhtml');
+    expect(
+      c,
+      contains(
+        '<p><ruby><b>漢</b>字<rp>（</rp><rt>かん<i>じ</i></rt><rp>）</rp></ruby>'
+        '<ruby>灯<rp>（</rp><rt>ひ</rt><rp>）</rp></ruby>'
+        '<ruby>甲<rp>（</rp><rt>こう</rt><rp>）</rp>'
+        '乙<rp>（</rp><rt>おつ</rt><rp>）</rp></ruby></p>',
+      ),
+    );
+    XmlDocument.parse(c);
   });
 
   test('书名页列出元数据与跳过的章节；封面图片识别失败时不放封面', () {

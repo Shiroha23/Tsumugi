@@ -150,9 +150,10 @@ final class ExportFile {
 /// Windows / Android / iOS 文件名中不允许的字符与控制字符。
 final _illegalFileChars = RegExp(r'[\\/:*?"<>|\x00-\x1F\x7F]');
 
-/// Windows 的保留设备名（不区分大小写，带扩展名也不行）。
+/// Windows 的保留设备名（不区分大小写；后面带扩展名也不行，如 `CON.notes.txt`，
+/// 因此检查第一个点之前的部分，并忽略其后的空格）。
 final _reservedNames = RegExp(
-  r'^(con|prn|aux|nul|com[0-9]|lpt[0-9])$',
+  r'^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]) *(\.|$)',
   caseSensitive: false,
 );
 

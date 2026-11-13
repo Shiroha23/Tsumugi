@@ -29,7 +29,8 @@ enum NovelParagraphKind {
 }
 
 /// 行内片段。[annotation] 为 true 时是 `rt` 注音，以小号字紧随基字显示。
-/// [rubyBase] 为 true 时是 `ruby` 中被注音的基字（阅读器不区分，导出 EPUB 时据此还原 `<ruby>`）。
+/// [ruby] 不为 null 时片段位于第 [ruby] 个 `ruby` 元素内（基字或 `rt` 注音）；同一 `ruby` 的片段编号相同，
+/// 阅读器不区分，导出 EPUB 时据此按原分组还原 `<ruby>`。
 final class NovelSpan {
   const NovelSpan(
     this.text, {
@@ -38,7 +39,7 @@ final class NovelSpan {
     this.underline = false,
     this.strike = false,
     this.annotation = false,
-    this.rubyBase = false,
+    this.ruby,
   });
 
   final String text;
@@ -47,7 +48,7 @@ final class NovelSpan {
   final bool underline;
   final bool strike;
   final bool annotation;
-  final bool rubyBase;
+  final int? ruby;
 
   bool sameStyle(NovelSpan o) =>
       o.bold == bold &&
@@ -55,7 +56,7 @@ final class NovelSpan {
       o.underline == underline &&
       o.strike == strike &&
       o.annotation == annotation &&
-      o.rubyBase == rubyBase;
+      o.ruby == ruby;
 
   NovelSpan withText(String text) => NovelSpan(
     text,
@@ -64,7 +65,7 @@ final class NovelSpan {
     underline: underline,
     strike: strike,
     annotation: annotation,
-    rubyBase: rubyBase,
+    ruby: ruby,
   );
 
   @override
@@ -73,7 +74,7 @@ final class NovelSpan {
 
   @override
   int get hashCode =>
-      Object.hash(text, bold, italic, underline, strike, annotation, rubyBase);
+      Object.hash(text, bold, italic, underline, strike, annotation, ruby);
 
   @override
   String toString() {
@@ -83,7 +84,7 @@ final class NovelSpan {
       if (underline) 'u',
       if (strike) 's',
       if (annotation) 'rt',
-      if (rubyBase) 'rb',
+      if (ruby != null) 'ruby$ruby',
     ];
     return flags.isEmpty ? '"$text"' : '"$text"[${flags.join(',')}]';
   }
@@ -338,7 +339,7 @@ final class _Style {
     this.underline = false,
     this.strike = false,
     this.annotation = false,
-    this.rubyBase = false,
+    this.ruby,
     this.kind = NovelParagraphKind.body,
   });
 
@@ -347,7 +348,7 @@ final class _Style {
   final bool underline;
   final bool strike;
   final bool annotation;
-  final bool rubyBase;
+  final int? ruby;
   final NovelParagraphKind kind;
 
   _Style copyWith({
@@ -356,7 +357,7 @@ final class _Style {
     bool? underline,
     bool? strike,
     bool? annotation,
-    bool? rubyBase,
+    int? ruby,
     NovelParagraphKind? kind,
   }) => _Style(
     bold: bold ?? this.bold,
@@ -364,7 +365,7 @@ final class _Style {
     underline: underline ?? this.underline,
     strike: strike ?? this.strike,
     annotation: annotation ?? this.annotation,
-    rubyBase: rubyBase ?? this.rubyBase,
+    ruby: ruby ?? this.ruby,
     kind: kind ?? this.kind,
   );
 }
@@ -376,6 +377,9 @@ class _HtmlWalker {
   final blocks = <NovelBlock>[];
   final _spans = <NovelSpan>[];
   NovelParagraphKind _kind = NovelParagraphKind.body;
+
+  /// 已遇到的 `ruby` 元素个数（作为分组编号）。
+  int _rubyCount = 0;
 
   /// 防御极深的嵌套（解析器本身不限制深度）。
   static const _maxDepth = 256;
@@ -414,12 +418,9 @@ class _HtmlWalker {
           case 's' || 'del' || 'strike':
             walkChildren(node, style.copyWith(strike: true));
           case 'rt':
-            walkChildren(
-              node,
-              style.copyWith(annotation: true, rubyBase: false),
-            );
+            walkChildren(node, style.copyWith(annotation: true));
           case 'ruby':
-            walkChildren(node, style.copyWith(rubyBase: true));
+            walkChildren(node, style.copyWith(ruby: _rubyCount++));
           default:
             if (_blockContainers.contains(tag)) {
               final kind = switch (tag) {
@@ -459,7 +460,7 @@ class _HtmlWalker {
       underline: style.underline,
       strike: style.strike,
       annotation: style.annotation,
-      rubyBase: style.rubyBase && !style.annotation,
+      ruby: style.ruby,
     );
     if (_spans.isNotEmpty && _spans.last.sameStyle(span)) {
       final last = _spans.removeLast();

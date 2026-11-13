@@ -196,8 +196,8 @@ detail(id) → 章节/剧集/曲目列表 → content(itemId)
 
 - 正文：`novelReaderChapterProvider` 经 `loadNovelChapter`（`shared/novel/novel_chapter_loader.dart`，导出共用）调用
   `content(unitId)` 并按 `nextPageId` 拼接章节内分页；纯文本与受限 HTML 都先转换为 `NovelChapter`（段落 / 图片 / 分隔线块，
-  `shared/novel/novel_document.dart`），HTML 按白名单清洗，不经任何 HTML 渲染器。`ruby` 中的基字带 `rubyBase` 标记，
-  阅读器不区分，导出 EPUB 时据此还原 `<ruby>`。
+  `shared/novel/novel_document.dart`），HTML 按白名单清洗，不经任何 HTML 渲染器。同一 `ruby` 元素内的片段（基字与 `rt`）带相同的分组编号，
+  阅读器不区分，导出 EPUB 时据此按原分组还原 `<ruby>`。
 - 排版：`novel_layout.dart` 中的 `NovelTextStyles` 统一构造文字（段首缩进两个全角空格），上下滚动模式逐块渲染，
   左右翻页模式用 `TextPainter` 按屏幕逐行分页（`paginateNovel`），改字号 / 窗口大小时重新分页并保持字符偏移。
 - 偏好（模式、字号、行距、段距、页边距、字体、主题）存于应用支持目录 `novel_reader.json`。

@@ -60,8 +60,8 @@ void main() {
         NovelSpan('斜', italic: true),
         NovelSpan('下', underline: true),
         NovelSpan('删', strike: true),
-        NovelSpan('漢', rubyBase: true),
-        NovelSpan('かん', annotation: true),
+        NovelSpan('漢', ruby: 0),
+        NovelSpan('かん', annotation: true, ruby: 0),
         NovelSpan('。'),
       ]);
       expect(p.plainText, '一粗体斜下删漢かん。');
