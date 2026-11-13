@@ -12,7 +12,7 @@ import '../../../shared/widgets/source_error_view.dart';
 import '../../../sources/model/common.dart';
 import '../../../sources/model/content.dart';
 import '../../common/reading_order.dart';
-import '../content/novel_document.dart';
+import '../../../shared/novel/novel_document.dart';
 import 'novel_layout.dart';
 import 'novel_reader_preferences.dart';
 import 'novel_reader_providers.dart';

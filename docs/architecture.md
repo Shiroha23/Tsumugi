@@ -33,6 +33,8 @@
 | 音视频 | media_kit（libmpv） | 视频与音乐共用 |
 | WebView | [`flutter_inappwebview`](https://pub.dev/packages/flutter_inappwebview) 6.2.0-beta.3（Apache-2.0） | M3 选定：登录 / 人机验证（用户手动完成），见 §5.3 |
 | 序列化 | freezed + json_serializable | |
+| 压缩 / ZIP | [`archive`](https://pub.dev/packages/archive)（MIT） | M3 选定：生成 EPUB（OCF ZIP 容器），纯 Dart，三平台一致，见 §5.2「小说导出」 |
+| 文件选择 / 保存 | [`file_picker`](https://pub.dev/packages/file_picker)（MIT） | M1 导入清单；M3 起 `saveFile` 用于保存导出文件 |
 
 依赖版本在引入时以 pub.dev 最新稳定版为准，并锁定在 `pubspec.lock`。
 
@@ -80,6 +82,10 @@ lib/
   shared/
     library/              # 书架
     history/              # 历史与进度
+    image/                # 统一图片加载（M2）
+    novel/                # 小说正文模型、HTML 白名单清洗、章节内分页拼接（阅读器与导出共用）
+    export/               # 小说导出 TXT / EPUB（M3）
+    webview/              # 人机验证 / 登录（M3）
     download/             # 下载管理
     sync/                 # WebDAV 同步
   features/
@@ -188,13 +194,34 @@ detail(id) → 章节/剧集/曲目列表 → content(itemId)
 **小说阅读器（M3，`features/novel/`）**：路由 `/novel/:sourceId/:itemId/read/:unitId?pos=N`（`NovelRoutes.reader`，
 `pos` 为章节内字符偏移，定义见 source-spec §2.2.1）。
 
-- 正文：`novelReaderChapterProvider` 调用 `content(unitId)` 并按 `nextPageId` 拼接章节内分页；纯文本与受限 HTML
-  都先转换为 `NovelChapter`（段落 / 图片 / 分隔线块，`features/novel/content/novel_document.dart`），HTML 按白名单清洗，
-  不经任何 HTML 渲染器。
+- 正文：`novelReaderChapterProvider` 经 `loadNovelChapter`（`shared/novel/novel_chapter_loader.dart`，导出共用）调用
+  `content(unitId)` 并按 `nextPageId` 拼接章节内分页；纯文本与受限 HTML 都先转换为 `NovelChapter`（段落 / 图片 / 分隔线块，
+  `shared/novel/novel_document.dart`），HTML 按白名单清洗，不经任何 HTML 渲染器。`ruby` 中的基字带 `rubyBase` 标记，
+  阅读器不区分，导出 EPUB 时据此还原 `<ruby>`。
 - 排版：`novel_layout.dart` 中的 `NovelTextStyles` 统一构造文字（段首缩进两个全角空格），上下滚动模式逐块渲染，
   左右翻页模式用 `TextPainter` 按屏幕逐行分页（`paginateNovel`），改字号 / 窗口大小时重新分页并保持字符偏移。
 - 偏好（模式、字号、行距、段距、页边距、字体、主题）存于应用支持目录 `novel_reader.json`。
 - 进度经 `novelReaderProgressSinkProvider` 节流写入 `HistoryRepository.recordProgress(position:)`，读到章节末尾时标记已读。
+
+**小说导出（M3，`shared/export/`）**：详情页「导出」（`features/novel/export/novel_export_dialog.dart`）选择格式
+（TXT / EPUB）、线路与范围（全部 / 起止章节，`ExportRange`），由 `NovelExportJob` 执行：
+
+- 取正文：逐章调用 `loadNovelChapter`（与阅读器同一套分页拼接与白名单清洗），**严格顺序**、一次只有一个 `content`
+  调用；源实例来自 `SourceRuntime`（与 `sourceInstanceProvider` 同一缓存实例），因此限速、白名单、Cookie 与默认 headers
+  都由该源的网络层执行。每章重新取实例，源被升级 / 禁用时拿到新状态。
+- 单章失败进入 `paused`：用户选择重试 / 跳过 / 跳过所有失败章节 / 取消；`E_CHALLENGE` / `E_LOGIN_REQUIRED` 总是暂停
+  （跳过只会让后续章节同样失败），对话框中的 `SourceErrorView` 提供「打开验证页」，完成后自动重试。
+  跳过的章节列在结果中，并写进 TXT 头部 / EPUB 书名页。取消立即生效，进行中请求的结果被丢弃。
+- 封面经统一图片加载器取得（按文件头识别 PNG / JPEG / GIF / WebP），失败或不认识则不放封面。
+- 文件在后台 isolate 中生成（`Isolate.run`），避免大部头卡住界面。
+- **TXT**：UTF-8（可选 BOM，兼容旧版 Windows 记事本），头部为书名 / 作者 / 来源源名 / 导出时间 / 简介，之后逐章
+  “标题 + 正文”；段落一行、段首两个全角空格，`rt` 注音丢弃（ruby 只取正文），图片为「［图片：alt］」占位。
+- **EPUB 3**：`mimetype` 为首个条目且不压缩（无扩展字段）→ `META-INF/container.xml` → `OEBPS/content.opf`
+  （`dc:identifier` 为由 sourceId + itemId 派生的稳定 UUID）、`nav.xhtml`、兼容 EPUB 2 的 `toc.ncx`、`style.css`、
+  可选封面页、书名页、每章一个 XHTML。正文由 `NovelChapter` 重新生成，`body` 内只使用 source-spec §2.2.1 白名单中的标签、
+  不带属性（封面 `img` 的 `src` / `alt` 除外）。正文图片暂以占位文字输出（TODO：经图片加载器下载后嵌入）。
+- **保存**：`ExportSaver`（默认 `file_picker` 的 `saveFile`）：桌面端为保存对话框；Android 为系统“创建文档”
+  （SAF）；iOS 为文件 App 导出界面。文件名由书名生成，替换 `\ / : * ? " < > |` 与控制字符、避开 Windows 保留名、限长 80。
 
 ### 5.3 人机验证 / 登录（M3）
 

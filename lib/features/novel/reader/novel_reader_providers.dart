@@ -5,15 +5,12 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../../../shared/history/providers.dart';
 import '../../../shared/library/library_item.dart';
 import '../../../sources/model/common.dart';
-import '../../../sources/model/content.dart';
 import '../../../sources/runtime/source_runtime.dart';
 import '../../../sources/source.dart';
-import '../content/novel_document.dart';
+import '../../../shared/novel/novel_chapter_loader.dart';
+import '../../../shared/novel/novel_document.dart';
 
 part 'novel_reader_providers.g.dart';
-
-/// 一章最多拼接的分页数（docs/source-spec.md §2.2.1）。
-const maxNovelChapterPages = 100;
 
 /// 阅读进度事件。[position] 为章节内字符偏移（§2.2.1），[length] 为章节总长度。
 final class NovelReadingProgress {
@@ -194,30 +191,12 @@ Future<NovelChapter> novelReaderChapter(
   ref.listen(detailProvider, (_, _) {});
   final unitIds = ref
       .read(detailProvider.future)
-      .then(
-        (d) => {
-          for (final u in d.units) u.id,
-          for (final g in d.groups ?? const <UnitGroup>[])
-            for (final u in g.units) u.id,
-        },
-        onError: (Object _) => const <String>{},
-      );
+      .then(novelUnitIdsOf, onError: (Object _) => const <String>{});
 
-  final baseUrl = source.manifest.baseUrl;
-  final blocks = <NovelBlock>[];
-  final seen = {unitId};
-  var id = unitId;
-  for (var page = 0; page < maxNovelChapterPages; page++) {
-    final content = await source.content(id);
-    if (content is! NovelContent) {
-      throw const SourceException(SourceErrorCode.parse, '不是小说内容');
-    }
-    blocks.addAll(novelBlocksFromContent(content, baseUrl: baseUrl));
-    final next = content.nextPageId?.trim();
-    if (next == null || next.isEmpty || !seen.add(next)) break;
-    if ((await unitIds).contains(next)) break;
-    if (!ref.mounted) break;
-    id = next;
-  }
-  return NovelChapter(blocks, imageHeaders: source.manifest.headers);
+  return loadNovelChapter(
+    source,
+    unitId,
+    unitIds: unitIds,
+    shouldStop: () => !ref.mounted,
+  );
 }

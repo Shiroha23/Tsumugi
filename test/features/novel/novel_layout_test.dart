@@ -1,6 +1,6 @@
 import 'package:flutter/painting.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tsumugi/features/novel/content/novel_document.dart';
+import 'package:tsumugi/shared/novel/novel_document.dart';
 import 'package:tsumugi/features/novel/reader/novel_layout.dart';
 import 'package:tsumugi/features/novel/reader/novel_reader_preferences.dart';
 

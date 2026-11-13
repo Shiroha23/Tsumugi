@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:tsumugi/app/router.dart';
@@ -21,10 +22,14 @@ class AppHarness {
   AppHarness(
     this.factory, {
     MemoryNovelReaderPreferencesStore? novelPreferences,
+    this.overrides = const [],
   }) : novelPreferences =
            novelPreferences ?? MemoryNovelReaderPreferencesStore();
 
   final FakeFactory factory;
+
+  /// 额外的 provider 覆盖（追加在默认覆盖之后）。
+  final List<Override> overrides;
 
   /// 「打开验证页」不启动真实 WebView。
   final verification = FakeSourceVerification();
@@ -46,6 +51,7 @@ class AppHarness {
       ),
       sourceVerificationProvider.overrideWithValue(verification),
       novelReaderPreferencesStoreProvider.overrideWithValue(novelPreferences),
+      ...overrides,
     ],
   );
 
