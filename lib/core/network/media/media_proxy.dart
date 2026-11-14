@@ -201,7 +201,7 @@ class MediaProxySession {
     _Rest? rest;
     try {
       if (entry.aes case final aes?) {
-        return await _serveDecrypted(req, upstream, aes, cancel);
+        return await _serveDecrypted(req, entry, upstream, aes);
       }
       final range = _forwardedRange(req, entry);
       final rangeStart = range == null ? 0 : _rangeStart(range);
@@ -311,68 +311,150 @@ class MediaProxySession {
   }
 
   /// AES-128 加密的分片：取密钥与整段密文，解密（CBC + PKCS7）后确认是可识别的媒体再交给播放器。
-  /// 播放器的 `Range` 不转发（整段返回 200）。
+  ///
+  /// 明文按地址缓存最近几段（[_plainCacheSize]），同一分片的并发 / 重复请求只取一次上游。
+  /// 播放器的 `Range` 由代理按明文处理（206 / 416）：FFmpeg 会在分片内续传或定位，
+  /// 若总从开头返回整段，它拿到的数据与请求的位置对不上（Android 真机上出现过卡在分片边界）。
   Future<void> _serveDecrypted(
     HttpRequest req,
+    _Entry entry,
     Uri upstream,
     HlsAes128 aes,
-    NetCancellation cancel,
   ) async {
     final res = req.response;
-    final (key, keyStatus) = await _key(aes.keyUri!);
-    if (key == null) return _status(res, keyStatus);
-    final up = await _open(upstream, null, cancel);
-    if (up == null) return _status(res, _failureStatus());
-    try {
-      if (up.status != HttpStatus.ok) {
-        return await _status(
-          res,
-          up.status >= 400 && up.status < 600
-              ? up.status
-              : HttpStatus.badGateway,
-        );
+    final (plain, status) = await _plaintext(entry, upstream, aes);
+    if (plain == null) return _status(res, status);
+    if (_closed) return _status(res, HttpStatus.notFound);
+    final total = plain.length;
+    res.headers
+      ..contentType = ContentType.binary
+      ..set(HttpHeaders.acceptRangesHeader, 'bytes');
+    final range = req.headers.value(HttpHeaders.rangeHeader)?.trim();
+    var (from, to) = (0, total - 1);
+    if (range != null && range.isNotEmpty) {
+      final parsed = _parseRange(range, total);
+      if (parsed == null) {
+        res.headers.set(HttpHeaders.contentRangeHeader, 'bytes */$total');
+        return _status(res, HttpStatus.requestedRangeNotSatisfiable);
       }
-      final encoding = (up.headers['content-encoding'] ?? 'identity')
-          .trim()
-          .toLowerCase();
-      if (encoding != 'identity' && encoding != 'gzip') {
-        return await _status(res, HttpStatus.badGateway);
-      }
-      final (head, rest) = await _peek(up.body, _sniffBytes);
-      final cipherText = await _collect(head, rest, maxEncryptedSegmentBytes);
-      if (cipherText == null) return await _status(res, HttpStatus.badGateway);
-      final Uint8List plain;
-      try {
-        final cipher =
-            PaddedBlockCipherImpl(PKCS7Padding(), CBCBlockCipher(AESEngine()))
-              ..init(
-                false,
-                PaddedBlockCipherParameters(
-                  ParametersWithIV(KeyParameter(key), aes.iv),
-                  null,
-                ),
-              );
-        plain = cipher.process(cipherText);
-      } on Object {
-        // 长度不是 16 的倍数、填充错误（密钥 / IV 不对）。
-        return await _status(res, HttpStatus.badGateway);
-      }
-      final sniff = Uint8List.sublistView(
-        plain,
-        0,
-        min(plain.length, _sniffBytes),
-      );
-      if (!looksLikeMediaContainer(sniff)) {
-        return await _status(res, HttpStatus.unsupportedMediaType);
-      }
+      (from, to) = parsed;
       res
-        ..statusCode = HttpStatus.ok
-        ..headers.contentType = ContentType.binary
-        ..contentLength = plain.length;
-      if (req.method != 'HEAD') res.add(plain);
-      return await res.close();
+        ..statusCode = HttpStatus.partialContent
+        ..headers.set(HttpHeaders.contentRangeHeader, 'bytes $from-$to/$total');
+    } else {
+      res.statusCode = HttpStatus.ok;
+    }
+    res.contentLength = to - from + 1;
+    if (req.method != 'HEAD') {
+      res.add(Uint8List.sublistView(plain, from, to + 1));
+    }
+    return res.close();
+  }
+
+  /// 单个区间 `bytes=a-b` / `bytes=a-` / `bytes=-n` → 闭区间 (起, 止)；
+  /// 多区间、格式错误或不可满足时为 null。
+  static (int, int)? _parseRange(String range, int total) {
+    final m = RegExp(r'^bytes=(\d*)-(\d*)$').firstMatch(range);
+    if (m == null || total == 0) return null;
+    final a = int.tryParse(m[1]!);
+    final b = int.tryParse(m[2]!);
+    if (a == null) {
+      if (b == null || b == 0) return null;
+      return (max(0, total - b), total - 1);
+    }
+    if (a >= total || (b != null && b < a)) return null;
+    return (a, b == null ? total - 1 : min(b, total - 1));
+  }
+
+  static const _plainCacheSize = 4;
+  final _plain = <_Entry, Future<(Uint8List?, int)>>{};
+
+  /// 一个加密分片的明文：成功时为 (明文, 200)，失败时为 (null, 应答状态码)。失败不缓存。
+  Future<(Uint8List?, int)> _plaintext(
+    _Entry entry,
+    Uri upstream,
+    HlsAes128 aes,
+  ) {
+    final cached = _plain.remove(entry);
+    if (cached != null) {
+      _plain[entry] = cached; // 移到最近使用
+      return cached;
+    }
+    final future = _fetchPlaintext(upstream, aes);
+    _plain[entry] = future;
+    while (_plain.length > _plainCacheSize) {
+      _plain.remove(_plain.keys.first);
+    }
+    future.then((r) {
+      if (r.$1 == null && identical(_plain[entry], future)) {
+        _plain.remove(entry);
+      }
+    });
+    return future;
+  }
+
+  /// 与某个播放器请求无关（可能被多个请求共用）：取消只来自会话关闭与 [MediaProxy.prepareTimeout]。
+  Future<(Uint8List?, int)> _fetchPlaintext(Uri upstream, HlsAes128 aes) async {
+    final (key, keyStatus) = await _key(aes.keyUri!);
+    if (key == null) return (null, keyStatus);
+    final cancel = NetCancellation();
+    _inFlight.add(cancel);
+    final deadline = Timer(_proxy.prepareTimeout, cancel.cancel);
+    try {
+      final up = await _open(upstream, null, cancel);
+      if (up == null) return (null, _failureStatus());
+      try {
+        if (up.status != HttpStatus.ok) {
+          return (
+            null,
+            up.status >= 400 && up.status < 600
+                ? up.status
+                : HttpStatus.badGateway,
+          );
+        }
+        final encoding = (up.headers['content-encoding'] ?? 'identity')
+            .trim()
+            .toLowerCase();
+        if (encoding != 'identity' && encoding != 'gzip') {
+          return (null, HttpStatus.badGateway);
+        }
+        final (head, rest) = await _peek(up.body, _sniffBytes);
+        final cipherText = await _collect(head, rest, maxEncryptedSegmentBytes);
+        if (cipherText == null) return (null, HttpStatus.badGateway);
+        final Uint8List plain;
+        try {
+          final cipher =
+              PaddedBlockCipherImpl(PKCS7Padding(), CBCBlockCipher(AESEngine()))
+                ..init(
+                  false,
+                  PaddedBlockCipherParameters(
+                    ParametersWithIV(KeyParameter(key), aes.iv),
+                    null,
+                  ),
+                );
+          plain = cipher.process(cipherText);
+        } on Object {
+          // 长度不是 16 的倍数、填充错误（密钥 / IV 不对）。
+          return (null, HttpStatus.badGateway);
+        }
+        final sniff = Uint8List.sublistView(
+          plain,
+          0,
+          min(plain.length, _sniffBytes),
+        );
+        if (!looksLikeMediaContainer(sniff)) {
+          return (null, HttpStatus.unsupportedMediaType);
+        }
+        return (plain, HttpStatus.ok);
+      } finally {
+        up.cancel();
+      }
+    } on NetworkException catch (e) {
+      if (e.kind != NetworkErrorKind.cancelled) _lastFailure = e;
+      return (null, HttpStatus.badGateway);
     } finally {
-      up.cancel();
+      deadline.cancel();
+      _inFlight.remove(cancel);
     }
   }
 

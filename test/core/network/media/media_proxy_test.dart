@@ -259,6 +259,57 @@ void main() {
       expect(proxiedUris(await player.text(variant)), uris);
     });
 
+    test('解密后的分片：重复 / 并发请求只取一次上游，Range 按明文返回 206 / 416', () async {
+      // 回归：FFmpeg 会重新请求分片并在分片内续传（Range: bytes=N-）。代理曾总是从开头返回整段 200，
+      // 播放器拿到的数据与请求的位置对不上，Android 真机上卡在第 2 个分片的开头（00:04）。
+      final session = open(
+        'http://video.example.com/video/media/hls/index.m3u8',
+      );
+      final seg = proxiedUris(await player.text(session.url)).last;
+
+      final (s0, h0, plain) = await player.get(seg);
+      expect(s0, 200);
+      expect(h0['accept-ranges'], 'bytes');
+      final total = plain.length;
+
+      final results = await Future.wait([
+        player.get(seg, headers: {'range': 'bytes=0-'}),
+        player.get(seg, headers: {'range': 'bytes=1000-'}),
+        player.get(seg, headers: {'range': 'bytes=188-375'}),
+        player.get(seg, headers: {'range': 'bytes=-50'}),
+      ]);
+      final [full, resume, middle, suffix] = results;
+      expect(full.$1, 206);
+      expect(full.$2['content-range'], 'bytes 0-${total - 1}/$total');
+      expect(full.$3, plain);
+      expect(resume.$1, 206);
+      expect(resume.$2['content-range'], 'bytes 1000-${total - 1}/$total');
+      expect(resume.$3, plain.sublist(1000));
+      expect(middle.$3, plain.sublist(188, 376));
+      expect(middle.$2['content-length'], '188');
+      expect(suffix.$3, plain.sublist(total - 50));
+
+      final (s416, h416, _) = await player.get(
+        seg,
+        headers: {'range': 'bytes=$total-'},
+      );
+      expect(s416, 416);
+      expect(h416['content-range'], 'bytes */$total');
+
+      final (sHead, hHead, bHead) = await player.get(
+        seg,
+        method: 'HEAD',
+        headers: {'range': 'bytes=1000-'},
+      );
+      expect(sHead, 206);
+      expect(bHead, isEmpty);
+      expect(hHead['content-length'], '${total - 1000}');
+
+      // 7 次请求，上游的分片与密钥都只取了一次。
+      expect(upstream('/video/media/hls/seg2.ts'), hasLength(1));
+      expect(upstream('/video/media/hls/key.bin'), hasLength(1));
+    });
+
     test('HEAD 根播放列表：返回改写后的类型与长度', () async {
       final session = open(
         'http://video.example.com/video/media/hls/master.m3u8',

@@ -619,7 +619,8 @@ media_kit (libmpv / FFmpeg) ── http://127.0.0.1:<port>/<token>/<编号>/<文
   它们可能用任意属性名携带地址，如插播广告的 `X-ASSET-LIST`）。每个 URI 行与 `URI="…"` 属性都基于播放列表的**最终地址（重定向之后）**
   解析后换成代理地址；非 http(s) 地址（`skd://`、`file:` 等）得到总是 403 的代理地址。
 - **AES-128 由代理解密**：`EXT-X-KEY:METHOD=AES-128` 不交给播放器；代理经源取得密钥（每个会话按地址缓存，失败不缓存）与整段密文，
-  按 IV（标签给出的，或媒体序号）做 AES-128-CBC 解密后，再按下一条识别明文。这样加密分片也能做内容检查，播放器侧不需要 FFmpeg 的
+  按 IV（标签给出的，或媒体序号）做 AES-128-CBC 解密后，再按下一条识别明文。明文按分片缓存最近 4 段（同一分片的重复 / 并发请求只取一次上游），
+  播放器的 `Range` 按明文返回 206 / 416——FFmpeg 会在分片内续传或定位，总从开头返回整段会让它卡在分片边界（Android 真机上出现过）。这样加密分片也能做内容检查，播放器侧不需要 FFmpeg 的
   `crypto` 协议。`SAMPLE-AES` 等其他方式的密钥地址照常改写，由播放器经代理取得（尚未用测试素材验证）。
 - **内容识别**（`media_signature.dart`）：分片与根地址的响应必须以已知容器的文件头开头（MPEG-TS、ISO-BMFF / fMP4、Matroska / WebM、
   FLV、Ogg、ID3 / ADTS / MPEG 音频、AC-3、FLAC、AVI / WAV），开头一段中要有控制字节，且不能以 UTF-16 / UTF-32 字节序标记开头；
@@ -628,8 +629,8 @@ media_kit (libmpv / FFmpeg) ── http://127.0.0.1:<port>/<token>/<编号>/<文
 - **类型与文件名由代理决定**：媒体一律 `application/octet-stream`、字幕 `text/vtt`、播放列表 `application/vnd.apple.mpegurl`；
   代理地址的文件名只保留常见媒体扩展名（`media.ts`、`media.mp4`……，其余为 `media.bin`），播放器不会按上游的类型或扩展名把内容当成
   其他播放列表格式。
-- **Range / HEAD**：媒体的 `Range` 原样转发（根地址的 `bytes=0-` 不转发，以便识别是否为播放列表；播放列表、密钥、加密分片不转发）。
-  HEAD 按 GET 取上游后只返回代理自己的响应头（播放列表为改写后的长度）。上游请求固定 `Accept-Encoding: identity`（`StreamRef.headers`
+- **Range / HEAD**：媒体的 `Range` 原样转发（根地址的 `bytes=0-` 不转发，以便识别是否为播放列表；播放列表、密钥、加密分片不转发给上游）。
+  HEAD 按 GET 取上游后只返回代理自己的响应头（播放列表为改写后的长度）。加密分片的 `Range` 由代理按明文处理（见上）。上游请求固定 `Accept-Encoding: identity`（`StreamRef.headers`
   不能覆盖）；上游仍压缩时只接受整段的 gzip（由 dart:io 解压，不带长度），其他编码 502。只透传 `Content-Length` / `Content-Range` /
   `Accept-Ranges`；`Set-Cookie` 已进 Jar，不透传；播放器自己的请求头（UA 等）一律不转发。
 - **错误**：白名单外（含重定向到白名单外）→ 403；`E_CHALLENGE` → 403；超时 → 504；其他网络错误 → 502；上游 4xx / 5xx 原样返回。
