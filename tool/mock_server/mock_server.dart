@@ -45,8 +45,8 @@
 /// | `GET /redirect/chain?n=N` | 连续重定向 N 次后到 `/echo` |
 /// | `GET /redirect/outside` | 302 到虚构的白名单外主机 `outside.example.net` |
 /// | `GET /video/search?q=` | 视频搜索（一部虚构剧集） |
-/// | `GET /video/show/1` | 视频详情（4 集）；种下 `vtoken=1` Cookie |
-/// | `GET /video/show/1/ep/1..4` | 剧集页：`<video><source src=…>` 指向下面的素材 |
+/// | `GET /video/show/1` | 视频详情（6 集，第 5、6 集为诊断用的 MPEG-TS）；种下 `vtoken=1` Cookie |
+/// | `GET /video/show/1/ep/1..6` | 剧集页：`<video><source src=…>` 指向下面的素材 |
 /// | `GET\|HEAD /video/media/<文件>` | `test/fixtures/mock_site/video/` 中的测试视频（`clip.mp4`、`hls/*`），支持 `Range` |
 /// | `GET\|HEAD /video/protected/<文件>` | 同上，但要求 `Referer` 的路径以 `/video/` 开头（否则 403）；`hls/key.bin` 另需 `vtoken` Cookie |
 library;
@@ -448,10 +448,15 @@ class MockServer {
     '2': ('第 2 集 HLS（AES-128）', '/video/media/hls/master.m3u8'),
     '3': ('第 3 集 MP4（需要 Referer）', '/video/protected/clip.mp4'),
     '4': ('第 4 集 HLS（需要 Referer 与 Cookie）', '/video/protected/hls/master.m3u8'),
+    // 诊断用：同一段视频的单个 MPEG-TS 文件（不经 HLS），时间戳从 1.4 s / 0 开始。
+    '5': ('第 5 集 MPEG-TS（诊断）', '/video/media/clip.ts'),
+    '6': ('第 6 集 MPEG-TS，时间戳从 0 开始（诊断）', '/video/media/clip_pts0.ts'),
   };
 
   static const _videoFiles = {
     'clip.mp4': 'video/mp4',
+    'clip.ts': 'video/mp2t',
+    'clip_pts0.ts': 'video/mp2t',
     'hls/master.m3u8': 'application/vnd.apple.mpegurl',
     'hls/index.m3u8': 'application/vnd.apple.mpegurl',
     'hls/mixed.m3u8': 'application/vnd.apple.mpegurl',

@@ -10,6 +10,8 @@
 | 文件 | 内容 |
 |---|---|
 | `clip.mp4` | 320×180、15 fps、6 s；H.264 Constrained Baseline + AAC-LC 单声道 440 Hz；`faststart` |
+| `clip.ts` | `clip.mp4` 原样转封装为 MPEG-TS（时间戳从 1.4 s 开始，与 HLS 分片相同）；诊断用 |
+| `clip_pts0.ts` | 同上，`-muxdelay 0 -muxpreload 0`，时间戳从 0 开始；诊断用 |
 | `hls/master.m3u8` | 主播放列表，指向 `index.m3u8` |
 | `hls/index.m3u8`、`hls/seg0-2.ts` | 同样的画面（660 Hz 音），3 个 2 s 的 MPEG-TS 分片，AES-128 加密 |
 | `hls/mixed.m3u8` | 手写：没有密钥的加密分片（密文无法识别为媒体）、白名单外分片、重定向到白名单外的分片、返回 JSON 文本的“分片”（测试代理的拒绝路径） |
@@ -23,6 +25,9 @@ ffmpeg -f lavfi -i "testsrc=size=320x180:rate=15:duration=6" \
   -f lavfi -i "sine=frequency=440:sample_rate=22050:duration=6" \
   -c:v h264_mf -b:v 120k -g 30 -pix_fmt nv12 -c:a aac -b:a 32k -ac 1 \
   -movflags +faststart clip.mp4
+
+ffmpeg -i clip.mp4 -map 0 -c copy -f mpegts clip.ts
+ffmpeg -i clip.mp4 -map 0 -c copy -muxdelay 0 -muxpreload 0 -f mpegts clip_pts0.ts
 
 # hls/ 目录内执行；keyinfo.txt 三行：key.bin / key.bin / 00000000000000000000000000000001
 printf 'tsumugi-test-key' > key.bin

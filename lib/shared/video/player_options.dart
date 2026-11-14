@@ -15,6 +15,35 @@ Player createVideoPlayer() => Player(
   ),
 );
 
+/// 诊断用：`--dart-define=TSUMUGI_HWDEC=<mpv 的 hwdec 取值>`（如 `no`、`mediacodec-copy`、
+/// `mediacodec`、`auto-safe`）覆盖 media_kit 的默认值（硬解 `auto-safe`），用于在真机上比较解码路径。
+/// 不设置时为空，使用 media_kit 的默认值。
+const videoHwdecOverride = String.fromEnvironment('TSUMUGI_HWDEC');
+
+/// 为 [player] 创建视频输出（应用 [videoHwdecOverride]）。
+VideoController createVideoController(Player player) => VideoController(
+  player,
+  configuration: VideoControllerConfiguration(
+    hwdec: videoHwdecOverride.isEmpty ? null : videoHwdecOverride,
+  ),
+);
+
+/// 播放开始后 libmpv 实际使用的解码设置（诊断日志用）。
+Future<String> describeVideoDecoder(Player player) async {
+  if (player.platform case final NativePlayer native) {
+    final parts = <String>[];
+    for (final name in const ['hwdec', 'hwdec-current', 'video-codec', 'vo']) {
+      try {
+        parts.add('$name=${await native.getProperty(name)}');
+      } catch (_) {
+        parts.add('$name=?');
+      }
+    }
+    return parts.join(' ');
+  }
+  return '(not native)';
+}
+
 /// 打开媒体前交给 libmpv 的选项（深度防御；主要的边界是代理）。
 ///
 /// 不设 `access-references=no`：media_kit 打开媒体时自己写一个临时播放列表文件再 `loadlist`，

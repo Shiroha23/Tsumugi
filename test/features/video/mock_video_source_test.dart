@@ -54,7 +54,7 @@ void main() {
     final detail = await source.detail('/video/show/1');
     expect(detail.title, '测试彩条');
     expect(detail.units.map((u) => u.id), [
-      for (var i = 1; i <= 4; i++) '/video/show/1/ep/$i',
+      for (var i = 1; i <= 6; i++) '/video/show/1/ep/$i',
     ]);
 
     final ep2 = await source.content('/video/show/1/ep/2') as VideoContent;

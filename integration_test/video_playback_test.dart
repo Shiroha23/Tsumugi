@@ -42,7 +42,7 @@ void main() {
   /// 播放到结束，返回 (画面宽, 高, 时长)。
   Future<(int?, int?, Duration)> playToEnd(WidgetTester tester, Uri url) async {
     final player = createVideoPlayer();
-    final controller = VideoController(player);
+    final controller = createVideoController(player);
     final errors = <String>[];
     final sub = player.stream.error.listen(errors.add);
     // libmpv 的错误日志（失败时便于排查）。
@@ -77,6 +77,7 @@ void main() {
       // 回归：Android 上曾因 Surface 未就绪解不出画面、直接跳到结尾（首个进度为 6 s）。
       expect(firstPosition, lessThan(const Duration(seconds: 1)));
       expect(errors, isEmpty);
+      debugPrint('decoder ${await describeVideoDecoder(player)}');
       return (player.state.width, player.state.height, player.state.duration);
     } finally {
       debugPrint('errors: $errors');
@@ -108,6 +109,19 @@ void main() {
     expectOnlyThroughSource();
     session.close();
   });
+
+  for (final file in ['clip.ts', 'clip_pts0.ts']) {
+    testWidgets('MPEG-TS 单文件（诊断素材）$file', (tester) async {
+      final session = proxy.open(
+        client: client,
+        url: Uri.parse('http://video.example.com/video/media/$file'),
+      );
+      final (w, h, duration) = await playToEnd(tester, session.url);
+      expect((w, h), (320, 180));
+      expect(duration.inMilliseconds, closeTo(6000, 300));
+      session.close();
+    });
+  }
 
   testWidgets('HLS（AES-128，需要 Referer 与 Cookie）', (tester) async {
     await client.getText('/video/show/1'); // 站点种下 vtoken Cookie

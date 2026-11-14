@@ -40,7 +40,7 @@ const _speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
 class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
   late final Player _player = createVideoPlayer();
-  late final VideoController _video = VideoController(_player);
+  late final VideoController _video = createVideoController(_player);
   final _subscriptions = <StreamSubscription<Object?>>[];
   ProxiedStream? _stream;
   Object? _error;
@@ -142,6 +142,11 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
         stillCurrent: () => _current(generation),
       );
       if (_current(generation)) setState(() => _loading = false);
+      // 诊断：实际使用的解码路径（真机比较 hwdec 时看 logcat）。
+      Future<void>.delayed(const Duration(seconds: 1), () async {
+        if (!_current(generation)) return;
+        debugPrint('[player] decoder ${await describeVideoDecoder(_player)}');
+      });
     } on Object catch (e) {
       if (_current(generation)) {
         setState(() {
