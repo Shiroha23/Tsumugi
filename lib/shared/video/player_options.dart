@@ -15,6 +15,12 @@ Player createVideoPlayer() => Player(
   ),
 );
 
+/// 详细的视频诊断日志（代理的逐个请求、播放器状态、实际解码路径）：debug 构建默认开启，
+/// release 构建用 `--dart-define=TSUMUGI_VIDEO_LOG=true` 开启。关闭时只输出 libmpv 的警告 / 错误、
+/// 代理的失败原因与每次播放一行的启动摘要。
+const videoVerboseLogs =
+    kDebugMode || bool.fromEnvironment('TSUMUGI_VIDEO_LOG');
+
 /// 诊断用：`--dart-define=TSUMUGI_HWDEC=<mpv 的 hwdec 取值>`（如 `no`、`mediacodec-copy`、
 /// `mediacodec`、`auto-safe`）覆盖 media_kit 的默认值（硬解 `auto-safe`），用于在真机上比较解码路径。
 /// 不设置时为空，使用 media_kit 的默认值。
@@ -90,24 +96,27 @@ Future<void> openWhenVideoReady(
       'position=${player.state.position} duration=${player.state.duration} '
       'completed=${player.state.completed}';
 
+  final started = DateTime.now();
   final outputWasReady = video.id.value != null;
+  final reopen = !outputWasReady || alwaysReopen;
   await player.open(Media(url), play: false);
-  if (!outputWasReady || alwaysReopen) {
+  if (reopen) {
     await waitForVideoOutput(video.id, timeout: timeout);
     if (!current()) return;
-    log?.call('video output ready (id=${video.id.value}): ${state()}');
     await Future<void>.delayed(settle);
     if (!current()) return;
-    log?.call('reopen: ${state()}');
     await player.open(Media(url), play: false);
     if (!current()) return;
   }
   if (needsRestart(player.state.position, completed: player.state.completed)) {
-    // 诊断：重新打开后仍不在开头（不应出现）。
+    // 重新打开后仍不在开头（不应出现）。
     log?.call('unexpected start position: ${state()}');
   }
   await player.play();
-  log?.call('play: ${state()}');
+  log?.call(
+    'started: reopened=$reopen '
+    '${DateTime.now().difference(started).inMilliseconds} ms ${state()}',
+  );
 }
 
 /// 是否已离开开头：已到结尾，或位置离开头超过 [tolerance]（诊断用）。

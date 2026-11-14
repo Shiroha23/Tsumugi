@@ -68,25 +68,28 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
       }),
     );
     // 诊断日志（debugPrint：release 构建在 Android 上同样进入 logcat）。
+    // libmpv 的警告 / 错误总是输出（播放器只上报这两级）；状态变化只在详细日志开启时输出。
     void log(String m) => debugPrint('[player] $m');
-    var firstPosition = true;
-    _subscriptions
-      ..add(
-        _player.stream.log.listen(
-          (l) => log('mpv ${l.level} ${l.prefix}: ${l.text}'),
-        ),
-      )
-      ..add(_player.stream.duration.listen((d) => log('duration $d')))
-      ..add(_player.stream.buffering.listen((b) => log('buffering $b')))
-      ..add(_player.stream.completed.listen((c) => log('completed $c')))
-      ..add(
-        _player.stream.position.listen((p) {
-          if (firstPosition && p > Duration.zero) {
-            firstPosition = false;
-            log('first position $p');
-          }
-        }),
-      );
+    _subscriptions.add(
+      _player.stream.log.listen(
+        (l) => log('mpv ${l.level} ${l.prefix}: ${l.text}'),
+      ),
+    );
+    if (videoVerboseLogs) {
+      var firstPosition = true;
+      _subscriptions
+        ..add(_player.stream.duration.listen((d) => log('duration $d')))
+        ..add(_player.stream.buffering.listen((b) => log('buffering $b')))
+        ..add(_player.stream.completed.listen((c) => log('completed $c')))
+        ..add(
+          _player.stream.position.listen((p) {
+            if (firstPosition && p > Duration.zero) {
+              firstPosition = false;
+              log('first position $p');
+            }
+          }),
+        );
+    }
     _subscriptions.add(
       _player.stream.rate.listen((r) {
         if (mounted) setState(() => _rate = r);
@@ -144,10 +147,12 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
       );
       if (_current(generation)) setState(() => _loading = false);
       // 诊断：实际使用的解码路径（真机比较 hwdec 时看 logcat）。
-      Future<void>.delayed(const Duration(seconds: 1), () async {
-        if (!_current(generation)) return;
-        debugPrint('[player] decoder ${await describeVideoDecoder(_player)}');
-      });
+      if (videoVerboseLogs) {
+        Future<void>.delayed(const Duration(seconds: 1), () async {
+          if (!_current(generation)) return;
+          debugPrint('[player] decoder ${await describeVideoDecoder(_player)}');
+        });
+      }
     } on Object catch (e) {
       if (_current(generation)) {
         setState(() {
@@ -204,8 +209,21 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
               child: Stack(
                 alignment: Alignment.center,
                 children: [
-                  Video(controller: _video),
-                  if (_loading) const CircularProgressIndicator(),
+                  // 真正从头开始播放之前不显示控件：Android 上第一次打开 HLS 时进度会短暂停在别处
+                  // （重新打开之前，见 openWhenVideoReady），用加载遮罩盖住画面与进度。
+                  Video(
+                    controller: _video,
+                    controls: _loading
+                        ? NoVideoControls
+                        : AdaptiveVideoControls,
+                  ),
+                  if (_loading)
+                    const Positioned.fill(
+                      child: ColoredBox(
+                        color: Colors.black,
+                        child: Center(child: CircularProgressIndicator()),
+                      ),
+                    ),
                 ],
               ),
             ),

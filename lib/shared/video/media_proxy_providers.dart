@@ -8,12 +8,15 @@ import '../../sources/model/content.dart';
 import '../../sources/registry/providers.dart';
 import '../../sources/session/source_sessions.dart';
 import '../../sources/source.dart';
+import 'player_options.dart';
 
 /// 全局本地媒体代理（architecture §6.4），第一次播放时在 127.0.0.1 的随机端口上启动。
 final mediaProxyProvider = FutureProvider<MediaProxy>((ref) async {
-  // 诊断日志经 debugPrint 输出（release 构建在 Android 上同样进入 logcat，便于真机排查）。
+  // 失败原因总是输出；逐个请求的记录只在详细日志开启时输出（见 videoVerboseLogs）。
+  // debugPrint 在 release 构建的 Android 上同样进入 logcat。
   final proxy = await MediaProxy.start(
     log: (m) => debugPrint('[media_proxy] $m'),
+    trace: videoVerboseLogs ? (m) => debugPrint('[media_proxy] $m') : null,
   );
   ref.onDispose(proxy.close);
   return proxy;

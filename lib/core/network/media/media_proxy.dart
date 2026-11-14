@@ -26,28 +26,36 @@ import 'media_signature.dart';
 /// `Content-Type` 与地址中的扩展名都由代理决定，不透传上游的值，播放器不会把内容当成其他播放列表格式。
 /// 纯 Dart（dart:io），不依赖 Flutter。
 class MediaProxy {
-  MediaProxy._(this._server, this.prepareTimeout, this._onLog) {
+  MediaProxy._(this._server, this.prepareTimeout, this._onLog, this._onTrace) {
     _server.listen(_handle, onError: (Object e) => _log('server error: $e'));
   }
 
   /// 在 127.0.0.1 的随机端口上启动。
   ///
-  /// [log] 接收诊断日志：每个播放器请求一行（编号、用途、Range、状态、字节数、耗时）以及上游失败的原因。
-  /// 不含令牌与上游地址的查询参数之外的内容（上游地址只记主机与路径）。默认写入 `dart:developer` 日志。
+  /// [log] 接收失败的诊断信息（上游失败的原因、处理请求时的异常；上游地址只记主机与路径）；
+  /// [trace] 接收每个播放器请求一行（编号 / 文件名、Range、状态、字节数、耗时；不含令牌），量较大，
+  /// 只在需要排查时传入。两者都同时写入 `dart:developer` 日志。
   static Future<MediaProxy> start({
     Duration prepareTimeout = const Duration(seconds: 60),
     void Function(String message)? log,
+    void Function(String message)? trace,
   }) async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     server.autoCompress = false;
-    return MediaProxy._(server, prepareTimeout, log);
+    return MediaProxy._(server, prepareTimeout, log, trace);
   }
 
   final void Function(String message)? _onLog;
+  final void Function(String message)? _onTrace;
 
   void _log(String message) {
     developer.log(message, name: 'tsumugi.media_proxy');
     _onLog?.call(message);
+  }
+
+  void _trace(String message) {
+    developer.log(message, name: 'tsumugi.media_proxy');
+    _onTrace?.call(message);
   }
 
   /// 开始向播放器发送响应体之前（取响应头、识别格式、读完播放列表 / 密钥 / 加密分片）的总时限，
@@ -115,7 +123,7 @@ class MediaProxy {
       } catch (_) {}
     } finally {
       final range = req.headers.value(HttpHeaders.rangeHeader);
-      _log(
+      _trace(
         '${req.method} $label'
         '${range == null ? '' : ' [$range]'} → ${res.statusCode}'
         '${res.contentLength >= 0 ? ' ${res.contentLength} B' : ''}'

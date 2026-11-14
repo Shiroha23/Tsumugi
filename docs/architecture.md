@@ -602,8 +602,15 @@ Apache-2.0 与 GPL-3.0 兼容。**再分发（CI 产物、Release）需要满足
   处理（`openWhenVideoReady`）：暂停打开 → 打开时视频输出未就绪的，等它就绪（最多 5 s）并稍候 0.5 s → **重新打开**同一地址
   （Surface 尺寸不变，media_kit 不再重建 Surface、也不再 seek；代理缓存了解密后的分片）→ 播放。不依赖 seek 修正。
   另关闭了在两个平台上都建不起来的 mpv 磁盘缓存（`cache-on-disk=no`）。
-  播放页经 `debugPrint` 输出代理请求、libmpv 警告、实际的解码路径与上述每一步（release 构建同样进入 logcat）；
-  第 5、6 集为诊断用的单个 MPEG-TS 文件。
+  重新打开之前进度可能短暂显示在别处，播放页在真正开始播放前用加载遮罩盖住画面并隐藏控件。
+  真机验证（2026-11，Android 16）：重新打开后 HLS 10 次中 10 次从 00:00 开始。
+  排查过程排除了：代理（所有请求正常）、解码器（`hwdec=no` 同样复现）、MPEG-TS 时间戳（单个 TS 文件正常）、FFmpeg 版本（两平台相同）。
+  应向 media_kit 上游报告（见 §6.4.6 后续 8）。
+- **诊断开关**（`shared/video/player_options.dart`）：
+  - `--dart-define=TSUMUGI_VIDEO_LOG=true`：在 release 构建中开启详细日志——代理的逐个请求（编号 / 文件名、Range、状态、字节数、耗时，不含令牌）、
+    播放器状态变化与实际解码路径；debug 构建默认开启。不开启时只输出 libmpv 的警告 / 错误、代理的失败原因与每次播放一行的启动摘要。
+  - `--dart-define=TSUMUGI_HWDEC=<mpv hwdec 取值>`（如 `no`、`mediacodec-copy`）：覆盖 media_kit 默认的硬解设置，用于比较解码路径。
+  - mock 服务器第 5、6 集为诊断用的单个 MPEG-TS 文件（时间戳从 1.4 s / 0 开始）。
 - **iOS**：CI 编译（`flutter build ios --release --no-codesign`）；未在真机上运行（同 [#31](https://github.com/Shiroha23/Tsumugi/issues/31)）。
 
 #### 6.4.3 请求头、Cookie 与主机白名单：本地媒体代理
@@ -720,6 +727,8 @@ M5 音乐复用同一 libmpv，不再增加体积。预编译库内部的组件�
 5. **DASH**：MPD 改写（`BaseURL`、`SegmentTemplate`、`SegmentList` 等），或在规范中明确不支持。
 6. **移动端**：Android 真机验证，横屏 / 全屏 / 手势、切到后台时暂停；iOS 真机（#31）。后台播放留给 M5。
 7. **限速与缓存**：视频请求的限速策略（与源实例共享或单独配置）；mpv 磁盘缓存的位置与上限。
+8. **向 media_kit 上游报告**：Android 视频输出在 Surface 就绪后重新初始化并 seek 到当前位置，HLS 初始化期间的这次 seek 停在分片边界 / 结尾；
+   附最小复现（mock 服务器的 HLS 素材）。上游修复后可去掉 `openWhenVideoReady` 的重新打开。
 
 ## 7. 里程碑
 
