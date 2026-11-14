@@ -594,6 +594,10 @@ Apache-2.0 与 GPL-3.0 兼容。**再分发（CI 产物、Release）需要满足
   完整界面（搜索 → 详情 → 播放页）的手动步骤见 PR 描述。
 - **Android**：本机与 CI 都能构建 release APK；真机验证步骤见 PR 描述（`flutter run -d <设备>` + 局域网 mock 服务器 + 导入
   `mock_video_declarative.json`），尚待在真机上执行。
+- **Android 真机发现**（Android 16，HLS 测试素材）：media_kit 在拿到视频参数之后才创建 Surface，此前 MediaCodec 硬解没有输出目标
+  （`h264_mediacodec: Both surface and native_window are NULL`），解不出画面；测试素材没有音轨，于是直接播到结尾，界面停在 00:04 附近的黑屏。
+  现在播放页先暂停打开，等视频输出（纹理编号 / Surface）就绪后再播放（`openWhenVideoReady`，最多等 5 s）；并关闭了在两个平台上都建不起来的
+  mpv 磁盘缓存（`cache-on-disk=no`）。播放页经 `debugPrint` 输出代理请求与 libmpv 警告，release 构建同样进入 logcat。
 - **iOS**：CI 编译（`flutter build ios --release --no-codesign`）；未在真机上运行（同 [#31](https://github.com/Shiroha23/Tsumugi/issues/31)）。
 
 #### 6.4.3 请求头、Cookie 与主机白名单：本地媒体代理

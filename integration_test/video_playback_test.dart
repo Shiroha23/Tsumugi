@@ -56,7 +56,12 @@ void main() {
       await hardenVideoPlayer(player);
       await player.setRate(2);
       final completed = player.stream.completed.firstWhere((c) => c);
-      await player.open(Media(url.toString()));
+      Duration? firstPosition;
+      final firstSub = player.stream.position.listen((p) {
+        if (p > Duration.zero) firstPosition ??= p;
+      });
+      // 与播放页相同：暂停打开，视频输出就绪后再播放。
+      await openWhenVideoReady(player, controller, url.toString());
 
       // 进度：播放中途暂停再继续，再跳到 4 s。
       await player.stream.position
@@ -68,6 +73,9 @@ void main() {
       await player.play();
 
       await completed.timeout(const Duration(seconds: 30));
+      await firstSub.cancel();
+      // 回归：Android 上曾因 Surface 未就绪解不出画面、直接跳到结尾（首个进度为 6 s）。
+      expect(firstPosition, lessThan(const Duration(seconds: 1)));
       expect(errors, isEmpty);
       return (player.state.width, player.state.height, player.state.duration);
     } finally {

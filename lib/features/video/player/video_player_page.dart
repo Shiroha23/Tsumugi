@@ -135,7 +135,12 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
       _stream = proxied;
       await hardenVideoPlayer(_player);
       if (!_current(generation)) return;
-      await _player.open(Media(proxied.url.toString()));
+      await openWhenVideoReady(
+        _player,
+        _video,
+        proxied.url.toString(),
+        stillCurrent: () => _current(generation),
+      );
       if (_current(generation)) setState(() => _loading = false);
     } on Object catch (e) {
       if (_current(generation)) {
