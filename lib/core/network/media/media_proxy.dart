@@ -26,17 +26,28 @@ import 'media_signature.dart';
 /// `Content-Type` 与地址中的扩展名都由代理决定，不透传上游的值，播放器不会把内容当成其他播放列表格式。
 /// 纯 Dart（dart:io），不依赖 Flutter。
 class MediaProxy {
-  MediaProxy._(this._server, this.prepareTimeout) {
+  MediaProxy._(this._server, this.prepareTimeout, this._onLog) {
     _server.listen(_handle, onError: (Object e) => _log('server error: $e'));
   }
 
   /// 在 127.0.0.1 的随机端口上启动。
+  ///
+  /// [log] 接收诊断日志：每个播放器请求一行（编号、用途、Range、状态、字节数、耗时）以及上游失败的原因。
+  /// 不含令牌与上游地址的查询参数之外的内容（上游地址只记主机与路径）。默认写入 `dart:developer` 日志。
   static Future<MediaProxy> start({
     Duration prepareTimeout = const Duration(seconds: 60),
+    void Function(String message)? log,
   }) async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     server.autoCompress = false;
-    return MediaProxy._(server, prepareTimeout);
+    return MediaProxy._(server, prepareTimeout, log);
+  }
+
+  final void Function(String message)? _onLog;
+
+  void _log(String message) {
+    developer.log(message, name: 'tsumugi.media_proxy');
+    _onLog?.call(message);
   }
 
   /// 开始向播放器发送响应体之前（取响应头、识别格式、读完播放列表 / 密钥 / 加密分片）的总时限，
@@ -82,8 +93,11 @@ class MediaProxy {
 
   Future<void> _handle(HttpRequest req) async {
     final res = req.response;
+    final started = DateTime.now();
+    final seg = req.uri.pathSegments;
+    // 日志中不写令牌：只记编号与文件名。
+    final label = seg.length == 3 ? '#${seg[1]}/${seg[2]}' : '(invalid)';
     try {
-      final seg = req.uri.pathSegments;
       final session = seg.length == 3 ? _sessions[seg[0]] : null;
       final index = seg.length == 3 ? int.tryParse(seg[1]) : null;
       final entry = session?._entryAt(index);
@@ -95,10 +109,18 @@ class MediaProxy {
       }
       await session._serve(req, entry);
     } catch (e, st) {
-      _log('${req.method} ${req.uri.path} failed: $e\n$st');
+      _log('${req.method} $label failed: $e\n$st');
       try {
         await _status(res, HttpStatus.badGateway);
       } catch (_) {}
+    } finally {
+      final range = req.headers.value(HttpHeaders.rangeHeader);
+      _log(
+        '${req.method} $label'
+        '${range == null ? '' : ' [$range]'} → ${res.statusCode}'
+        '${res.contentLength >= 0 ? ' ${res.contentLength} B' : ''}'
+        ' ${DateTime.now().difference(started).inMilliseconds} ms',
+      );
     }
   }
 }
@@ -552,7 +574,10 @@ class MediaProxySession {
     } on NetworkException catch (e) {
       if (e.kind != NetworkErrorKind.cancelled) {
         _lastFailure = e;
-        _log('upstream failed: ${e.kind.name} ${e.uri ?? upstream}');
+        _proxy._log(
+          'upstream failed: ${e.kind.name} '
+          '${(e.uri ?? upstream).replace(query: '')}',
+        );
       }
       return null;
     }
@@ -711,6 +736,3 @@ Future<void> _status(HttpResponse res, int status) {
   res.contentLength = 0;
   return res.close();
 }
-
-void _log(String message) =>
-    developer.log(message, name: 'tsumugi.media_proxy');

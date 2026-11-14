@@ -67,6 +67,26 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
         });
       }),
     );
+    // 诊断日志（debugPrint：release 构建在 Android 上同样进入 logcat）。
+    void log(String m) => debugPrint('[player] $m');
+    var firstPosition = true;
+    _subscriptions
+      ..add(
+        _player.stream.log.listen(
+          (l) => log('mpv ${l.level} ${l.prefix}: ${l.text}'),
+        ),
+      )
+      ..add(_player.stream.duration.listen((d) => log('duration $d')))
+      ..add(_player.stream.buffering.listen((b) => log('buffering $b')))
+      ..add(_player.stream.completed.listen((c) => log('completed $c')))
+      ..add(
+        _player.stream.position.listen((p) {
+          if (firstPosition && p > Duration.zero) {
+            firstPosition = false;
+            log('first position $p');
+          }
+        }),
+      );
     _subscriptions.add(
       _player.stream.rate.listen((r) {
         if (mounted) setState(() => _rate = r);

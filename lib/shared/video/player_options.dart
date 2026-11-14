@@ -6,6 +6,8 @@ Player createVideoPlayer() => Player(
   configuration: const PlayerConfiguration(
     title: 'Tsumugi',
     protocolWhitelist: ['http', 'tcp'],
+    // 警告及以上的 libmpv 日志（播放页经 debugPrint 输出，便于真机排查）。
+    logLevel: MPVLogLevel.warn,
   ),
 );
 

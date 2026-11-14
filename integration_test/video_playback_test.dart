@@ -31,7 +31,7 @@ void main() {
       allowedHosts: const [],
       headers: {'User-Agent': 'TsumugiVideoTest'},
     );
-    proxy = await MediaProxy.start();
+    proxy = await MediaProxy.start(log: (m) => debugPrint('[media_proxy] $m'));
   });
   tearDown(() async {
     await proxy.close();

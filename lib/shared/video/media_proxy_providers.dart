@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/network/media/media_proxy.dart';
@@ -10,7 +11,10 @@ import '../../sources/source.dart';
 
 /// 全局本地媒体代理（architecture §6.4），第一次播放时在 127.0.0.1 的随机端口上启动。
 final mediaProxyProvider = FutureProvider<MediaProxy>((ref) async {
-  final proxy = await MediaProxy.start();
+  // 诊断日志经 debugPrint 输出（release 构建在 Android 上同样进入 logcat，便于真机排查）。
+  final proxy = await MediaProxy.start(
+    log: (m) => debugPrint('[media_proxy] $m'),
+  );
   ref.onDispose(proxy.close);
   return proxy;
 });
