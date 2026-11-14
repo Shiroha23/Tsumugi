@@ -405,8 +405,17 @@ class _Actions extends ConsumerWidget {
                   : null,
             ),
             FilledButton.icon(
-              icon: const Icon(Icons.menu_book),
-              label: Text(progress != null ? '继续阅读' : '开始阅读'),
+              icon: Icon(
+                mediaType == MediaType.video
+                    ? Icons.play_arrow
+                    : Icons.menu_book,
+              ),
+              label: Text(switch ((mediaType, progress != null)) {
+                (MediaType.video, true) => '继续播放',
+                (MediaType.video, false) => '开始播放',
+                (_, true) => '继续阅读',
+                (_, false) => '开始阅读',
+              }),
               onPressed: read,
             ),
             ...?extraActions?.call(context, detail, coverHeaders),

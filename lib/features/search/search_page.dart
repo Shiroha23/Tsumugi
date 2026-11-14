@@ -9,6 +9,7 @@ import '../../sources/model/common.dart';
 import '../comic/detail/comic_routes.dart';
 import '../novel/novel_routes.dart';
 import '../sources/labels.dart';
+import '../video/video_routes.dart';
 import 'search_controller.dart';
 
 class SearchPage extends ConsumerStatefulWidget {
@@ -205,7 +206,9 @@ class _ResultTile extends StatelessWidget {
         context.push(ComicRoutes.detail(sourceId, item.id), extra: item);
       case MediaType.novel:
         context.push(NovelRoutes.detail(sourceId, item.id), extra: item);
-      case MediaType.video || MediaType.music:
+      case MediaType.video:
+        context.push(VideoRoutes.detail(sourceId, item.id), extra: item);
+      case MediaType.music:
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text('${type.label}详情页尚未实现')));
     }

@@ -28,6 +28,15 @@ abstract interface class SourceHttpClient {
   /// - 检测到人机验证页面时总是抛出 [NetworkErrorKind.challenge]。
   Future<NetResponse> request(NetRequest request);
 
+  /// 以流的形式发出 GET / HEAD 请求（音视频，architecture §6.4）。
+  ///
+  /// 白名单（含每一跳重定向）、默认 headers、Cookie、会话 UA、限速、重试与挑战检测都与
+  /// [request] 相同；区别是响应头到达即返回，响应体由调用方从 [NetStreamResponse.body]
+  /// 逐块读取，**不受** `maxResponseBytes` 限制。[NetRequest.timeout]（默认
+  /// [SourceNetworkConfig.timeout]）限制等待响应头的时间，以及读取响应体时相邻两块数据的间隔。
+  /// [NetRequest.cancellation] 在读取响应体期间同样有效。不支持 [NetRequest.throwOnHttpError]。
+  Future<NetStreamResponse> openStream(NetRequest request);
+
   /// 读取本源 Cookie 域中会发往 [url] 的 Cookie（name → value）。[url] 必须在白名单内。
   Future<Map<String, String>> getCookies(String url);
 
@@ -279,4 +288,39 @@ class NetResponse {
 
   void _debugLog(String message) =>
       developer.log('$message ($url)', name: 'tsumugi.network');
+}
+
+/// [SourceHttpClient.openStream] 的响应：响应头已到达，响应体尚未读取。
+class NetStreamResponse {
+  NetStreamResponse({
+    required this.status,
+    required this.url,
+    required this.headersAll,
+    required this.body,
+    required this._onCancel,
+  });
+
+  final int status;
+
+  /// 最终地址（跟随重定向之后）。
+  final Uri url;
+
+  /// 响应头，名称为小写。
+  final Map<String, List<String>> headersAll;
+
+  /// 响应体（只能监听一次）。出错时以 [NetworkException] 结束。
+  final Stream<List<int>> body;
+
+  final void Function() _onCancel;
+
+  bool get ok => status >= 200 && status < 300;
+
+  /// 响应头，名称小写，多值以 `, ` 连接。
+  late final Map<String, String> headers = {
+    for (final MapEntry(:key, :value) in headersAll.entries)
+      key: value.join(', '),
+  };
+
+  /// 放弃响应体并释放连接（已读完时无影响）。
+  void cancel() => _onCancel();
 }
