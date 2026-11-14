@@ -269,7 +269,9 @@ class MediaProxySession {
           if (!head) res.add(body);
           return await res.close();
         case _Kind.root || _Kind.media || _Kind.subtitle:
-          if (startsAtZero && !entry.verified) {
+          // 从开头开始的响应每次都重新识别（上游可能换了内容）；只有从中间开始、
+          // 无法识别的区间才沿用之前对资源开头的确认。
+          if (startsAtZero) {
             final ok = entry.kind == _Kind.subtitle
                 ? looksLikeWebVtt(bytes)
                 : looksLikeMediaContainer(bytes);
@@ -574,7 +576,7 @@ class _Entry {
   /// 非 null 时由代理按 AES-128 解密后交给播放器。
   final HlsAes128? aes;
 
-  /// 已从资源开头确认是可识别的媒体（之后的区间请求不再重复识别）。
+  /// 已从资源开头确认是可识别的媒体（之后从中间开始的区间请求沿用；从开头开始的响应每次都重新识别）。
   bool verified = false;
 }
 

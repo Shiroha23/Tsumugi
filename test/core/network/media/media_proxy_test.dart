@@ -376,6 +376,23 @@ void main() {
       expect(hls, isNot(contains('outside')));
     });
 
+    test('上游换了内容：从开头开始的响应每次都重新识别', () async {
+      var calls = 0;
+      up.routes['/switch.mp4'] = (req) {
+        calls++;
+        req.response.add(
+          calls == 1
+              ? fakeMp4()
+              : utf8.encode('[playlist]\nFile1=http://outside.example.net/a\n'),
+        );
+        return req.response.close();
+      };
+      final session = openCrafted('/switch.mp4');
+      expect((await player.get(session.url, method: 'HEAD')).$1, 200);
+      expect((await player.get(session.url)).$1, 415);
+      expect(calls, 2);
+    });
+
     test('播放列表中的“分片”若是播放列表，不交给播放器', () async {
       up
         ..bytes('/list.m3u8', utf8.encode('#EXTM3U\n#EXTINF:1,\nnested.ts\n'))
