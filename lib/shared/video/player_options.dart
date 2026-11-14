@@ -60,24 +60,52 @@ const videoPlayerMpvOptions = {
   'cache-on-disk': 'no',
 };
 
-/// 打开 [url] 并在视频输出就绪后开始播放（暂停状态打开 → [waitForVideoOutput] → 播放）。
+/// 打开 [url] 并在视频输出就绪后从头开始播放。
 ///
-/// Android 上 media_kit 在拿到视频参数之后才创建 Surface（`VideoOutput.Resize` 带来 `wid`），
-/// 之前 MediaCodec 硬解没有输出目标（“Both surface and native_window are NULL”），解不出画面；
-/// 没有音轨的短视频会直接播到结尾，界面停在黑屏（真机上 HLS 测试素材常见）。
-/// 先暂停打开，等 Surface 就绪后 media_kit 会重新初始化输出并定位到当前位置，再开始播放。
+/// 1. 暂停状态打开，等视频输出（纹理编号；Android 上与 Surface 一同到达）就绪，最多 [timeout]。
+///    Android 上 media_kit 在拿到视频参数之后才创建 Surface，此前 MediaCodec 没有输出目标。
+/// 2. Surface 就绪后 media_kit 会重新初始化输出并 seek 到“当前位置”。真机上这次 seek 落在 HLS 解复用器
+///    初始化期间，常常直接到达结尾（首个进度为 6.037 s、随即 completed；FFmpeg 随后报
+///    “m3u8 list sequence may have been wrapped”）。Windows 的视频输出不做这次 seek，因而不出现。
+///    所以等它稳定（[settle]）后，若已不在开头（[needsRestart]），显式 seek 回 0——与手动拖动进度条的效果相同。
+/// 3. 开始播放。
+///
+/// [log] 接收每一步的状态（诊断用）。
 Future<void> openWhenVideoReady(
   Player player,
   VideoController video,
   String url, {
   Duration timeout = const Duration(seconds: 5),
+  Duration settle = const Duration(milliseconds: 500),
   bool Function()? stillCurrent,
+  void Function(String message)? log,
 }) async {
+  bool current() => stillCurrent == null || stillCurrent();
+  String state() =>
+      'position=${player.state.position} duration=${player.state.duration} '
+      'completed=${player.state.completed}';
+
   await player.open(Media(url), play: false);
   await waitForVideoOutput(video.id, timeout: timeout);
-  if (stillCurrent != null && !stillCurrent()) return;
+  if (!current()) return;
+  log?.call('video output ready (id=${video.id.value}): ${state()}');
+  await Future<void>.delayed(settle);
+  if (!current()) return;
+  if (needsRestart(player.state.position, completed: player.state.completed)) {
+    log?.call('restart from 0: ${state()}');
+    await player.seek(Duration.zero);
+    if (!current()) return;
+  }
   await player.play();
+  log?.call('play: ${state()}');
 }
+
+/// 开始播放前是否需要 seek 回开头：已到结尾，或位置离开头超过 [tolerance]。
+bool needsRestart(
+  Duration position, {
+  required bool completed,
+  Duration tolerance = const Duration(milliseconds: 500),
+}) => completed || position > tolerance;
 
 /// 等待视频输出就绪（[id] 为纹理编号，Android 上与 Surface 一同到达）；
 /// 超过 [timeout]（例如只有音轨的流）时直接返回。

@@ -38,6 +38,35 @@ void main() {
     });
   });
 
+  group('needsRestart', () {
+    test('开头附近不需要', () {
+      expect(needsRestart(Duration.zero, completed: false), isFalse);
+      expect(
+        needsRestart(const Duration(milliseconds: 110), completed: false),
+        isFalse,
+      );
+    });
+
+    test('Android 上 Surface 就绪后的 seek 落到结尾 / 中间时需要', () {
+      // 真机日志：首个进度 0:00:06.037188 → completed；或 0:00:02.113111。
+      expect(
+        needsRestart(
+          const Duration(seconds: 6, microseconds: 37188),
+          completed: false,
+        ),
+        isTrue,
+      );
+      expect(
+        needsRestart(
+          const Duration(seconds: 2, microseconds: 113111),
+          completed: false,
+        ),
+        isTrue,
+      );
+      expect(needsRestart(Duration.zero, completed: true), isTrue);
+    });
+  });
+
   test('播放器选项：不用磁盘缓存、不调用 ytdl', () {
     expect(videoPlayerMpvOptions['cache-on-disk'], 'no');
     expect(videoPlayerMpvOptions['ytdl'], 'no');

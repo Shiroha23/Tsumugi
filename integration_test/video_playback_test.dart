@@ -61,7 +61,12 @@ void main() {
         if (p > Duration.zero) firstPosition ??= p;
       });
       // 与播放页相同：暂停打开，视频输出就绪后再播放。
-      await openWhenVideoReady(player, controller, url.toString());
+      await openWhenVideoReady(
+        player,
+        controller,
+        url.toString(),
+        log: (m) => debugPrint('[player] $m'),
+      );
 
       // 进度：播放中途暂停再继续，再跳到 4 s。
       await player.stream.position

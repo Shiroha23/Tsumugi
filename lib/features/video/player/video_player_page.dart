@@ -140,6 +140,7 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
         _video,
         proxied.url.toString(),
         stillCurrent: () => _current(generation),
+        log: (m) => debugPrint('[player] $m'),
       );
       if (_current(generation)) setState(() => _loading = false);
       // 诊断：实际使用的解码路径（真机比较 hwdec 时看 logcat）。
