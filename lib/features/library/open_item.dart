@@ -9,6 +9,7 @@ import '../comic/detail/comic_routes.dart';
 import '../comic/reader/reader_route.dart';
 import '../novel/novel_routes.dart';
 import '../sources/labels.dart';
+import '../video/video_routes.dart';
 
 /// 打开一个书架 / 历史条目。[progress] 从历史打开时为该条目的最新进度，
 /// 可用来直接跳到阅读器继续阅读；从书架打开时为 null。
@@ -53,7 +54,10 @@ void openLibraryItem(
                 position: progress.position,
               ),
       );
-    case MediaType.video || MediaType.music:
+    case MediaType.video:
+      // 技术验证阶段尚无播放进度：总是进入详情页。
+      context.push(VideoRoutes.detail(item.sourceId, item.itemId));
+    case MediaType.music:
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(SnackBar(content: Text('${item.mediaType.label}尚未支持')));

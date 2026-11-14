@@ -317,6 +317,10 @@ class _CountingClient implements SourceHttpClient {
   final void Function() onEnd;
 
   @override
+  Future<NetStreamResponse> openStream(NetRequest request) =>
+      throw UnimplementedError();
+
+  @override
   Future<NetResponse> request(NetRequest request) async {
     onStart();
     await Future<void>.delayed(const Duration(milliseconds: 20));

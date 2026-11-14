@@ -15,6 +15,10 @@ class FakeImageClient implements SourceHttpClient {
   final requests = <NetRequest>[];
 
   @override
+  Future<NetStreamResponse> openStream(NetRequest request) =>
+      throw UnimplementedError();
+
+  @override
   Future<NetResponse> request(NetRequest request) async {
     requests.add(request);
     return NetResponse(

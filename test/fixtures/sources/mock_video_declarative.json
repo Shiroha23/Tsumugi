@@ -1,0 +1,44 @@
+{
+  "apiVersion": 1,
+  "id": "com.example.mock.video.declarative",
+  "name": "Mock 视频（声明式）",
+  "type": "video",
+  "version": "1.0.0",
+  "author": "tsumugi",
+  "lang": "zh",
+  "description": "虚构源，配合 tool/mock_server 的自制测试视频手动调试与测试使用。",
+  "baseUrl": "http://127.0.0.1:8080",
+  "headers": {
+    "Referer": "http://127.0.0.1:8080/video/"
+  },
+  "engine": "declarative",
+  "rules": {
+    "search": {
+      "request": {
+        "url": "/video/search?q={{keyword}}"
+      },
+      "list": "css:.show",
+      "fields": {
+        "id": "css:a@href",
+        "title": "css:a@text",
+        "subtitle": "css:.note@text"
+      }
+    },
+    "detail": {
+      "fields": {
+        "title": "css:h1@text",
+        "description": "css:#intro@text"
+      },
+      "units": {
+        "list": "css:.episodes li",
+        "fields": {
+          "id": "css:a@href",
+          "title": "css:a@text"
+        }
+      }
+    },
+    "content": {
+      "streams": "css:video source@src[]"
+    }
+  }
+}

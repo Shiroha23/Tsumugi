@@ -40,10 +40,15 @@
 /// | `GET /status/<code>` | 返回指定状态码 |
 /// | `* /flaky?key=&fail=N&status=503` | 同一 key 的前 N 次返回 status（默认 503），之后 200 |
 /// | `GET /drop` | 不发送响应直接断开连接 |
-/// | `GET /large?bytes=N` | N 字节响应体 |
+/// | `GET /large?bytes=N&status=200` | N 字节响应体（可指定状态码） |
 /// | `* /redirect?to=<url>&status=302` | 重定向到任意地址（相对或绝对） |
 /// | `GET /redirect/chain?n=N` | 连续重定向 N 次后到 `/echo` |
 /// | `GET /redirect/outside` | 302 到虚构的白名单外主机 `outside.example.net` |
+/// | `GET /video/search?q=` | 视频搜索（一部虚构剧集） |
+/// | `GET /video/show/1` | 视频详情（6 集，第 5、6 集为诊断用的 MPEG-TS）；种下 `vtoken=1` Cookie |
+/// | `GET /video/show/1/ep/1..6` | 剧集页：`<video><source src=…>` 指向下面的素材 |
+/// | `GET\|HEAD /video/media/<文件>` | `test/fixtures/mock_site/video/` 中的测试视频（`clip.mp4`、`hls/*`），支持 `Range` |
+/// | `GET\|HEAD /video/protected/<文件>` | 同上，但要求 `Referer` 的路径以 `/video/` 开头（否则 403）；`hls/key.bin` 另需 `vtoken` Cookie |
 library;
 
 import 'dart:async';
@@ -217,6 +222,30 @@ class MockServer {
     }
     final segments = req.uri.pathSegments;
 
+    if (path.startsWith('/video/media/')) {
+      return _video(req, path.substring('/video/media/'.length));
+    }
+    if (path.startsWith('/video/protected/')) {
+      final referer = Uri.tryParse(req.headers.value('referer') ?? '');
+      final file = path.substring('/video/protected/'.length);
+      final hasToken = req.cookies.any(
+        (c) => c.name == 'vtoken' && c.value == '1',
+      );
+      if (referer == null ||
+          !referer.path.startsWith('/video/') ||
+          (file == 'hls/key.bin' && !hasToken)) {
+        res.statusCode = HttpStatus.forbidden;
+        return _json(res, {'error': 'referer or token required'});
+      }
+      return _video(req, file);
+    }
+    if (segments.length == 5 &&
+        path.startsWith('/video/show/1/ep/') &&
+        _episodes[segments[4]] != null) {
+      final (title, src) = _episodes[segments[4]]!;
+      return _html(res, 'video/episode.html', {'title': title, 'src': src});
+    }
+
     switch (path) {
       case '/':
         return _html(res, 'pages/index.html');
@@ -254,6 +283,11 @@ class MockServer {
           });
         }
         return _file(res, 'api/search_$page.json', ContentType.json);
+      case '/video/search':
+        return _html(res, 'video/search.html', {'keyword': q['q'] ?? ''});
+      case '/video/show/1':
+        res.cookies.add(Cookie('vtoken', '1')..path = '/');
+        return _html(res, 'video/show_1.html');
       case '/api/book/b101':
         return _file(res, 'api/book_b101.json', ContentType.json);
       // 非 UTF-8 编码的虚构页面（原样发送字节，不做模板替换与主机改写）。
@@ -363,6 +397,7 @@ class MockServer {
         return;
       case '/large':
         final n = int.tryParse(q['bytes'] ?? '') ?? 1024;
+        res.statusCode = int.tryParse(q['status'] ?? '') ?? 200;
         res.headers.contentType = ContentType.binary;
         res.contentLength = n;
         const chunk = 64 * 1024;
@@ -405,6 +440,74 @@ class MockServer {
 
     res.statusCode = HttpStatus.notFound;
     return _json(res, {'error': 'not found', 'path': path});
+  }
+
+  /// 剧集编号 → (标题, 素材地址)。
+  static const _episodes = {
+    '1': ('第 1 集 MP4', '/video/media/clip.mp4'),
+    '2': ('第 2 集 HLS（AES-128）', '/video/media/hls/master.m3u8'),
+    '3': ('第 3 集 MP4（需要 Referer）', '/video/protected/clip.mp4'),
+    '4': ('第 4 集 HLS（需要 Referer 与 Cookie）', '/video/protected/hls/master.m3u8'),
+    // 诊断用：同一段视频的单个 MPEG-TS 文件（不经 HLS），时间戳从 1.4 s / 0 开始。
+    '5': ('第 5 集 MPEG-TS（诊断）', '/video/media/clip.ts'),
+    '6': ('第 6 集 MPEG-TS，时间戳从 0 开始（诊断）', '/video/media/clip_pts0.ts'),
+  };
+
+  static const _videoFiles = {
+    'clip.mp4': 'video/mp4',
+    'clip.ts': 'video/mp2t',
+    'clip_pts0.ts': 'video/mp2t',
+    'hls/master.m3u8': 'application/vnd.apple.mpegurl',
+    'hls/index.m3u8': 'application/vnd.apple.mpegurl',
+    'hls/mixed.m3u8': 'application/vnd.apple.mpegurl',
+    'hls/key.bin': 'application/octet-stream',
+    'hls/seg0.ts': 'video/mp2t',
+    'hls/seg1.ts': 'video/mp2t',
+    'hls/seg2.ts': 'video/mp2t',
+  };
+
+  /// 发送 `video/` 下的测试素材（只认 [_videoFiles] 中的文件名），支持单个 `Range`。
+  Future<void> _video(HttpRequest req, String name) async {
+    final res = req.response;
+    final type = _videoFiles[name];
+    if (type == null || (req.method != 'GET' && req.method != 'HEAD')) {
+      res.statusCode = type == null
+          ? HttpStatus.notFound
+          : HttpStatus.methodNotAllowed;
+      return res.close();
+    }
+    final bytes = await File('${fixturesDir.path}/video/$name').readAsBytes();
+    res.headers
+      ..set(HttpHeaders.contentTypeHeader, type)
+      ..set(HttpHeaders.acceptRangesHeader, 'bytes');
+    var start = 0, end = bytes.length - 1;
+    final range = RegExp(r'^bytes=(\d*)-(\d*)$')
+        .firstMatch(req.headers.value(HttpHeaders.rangeHeader) ?? '');
+    if (range != null) {
+      final (a, b) = (int.tryParse(range[1]!), int.tryParse(range[2]!));
+      if (a != null) {
+        start = a;
+        if (b != null && b < end) end = b;
+      } else if (b != null) {
+        start = bytes.length - b < 0 ? 0 : bytes.length - b;
+      }
+      if (start > end || start >= bytes.length) {
+        res.statusCode = HttpStatus.requestedRangeNotSatisfiable;
+        res.headers.set(
+          HttpHeaders.contentRangeHeader,
+          'bytes */${bytes.length}',
+        );
+        return res.close();
+      }
+      res.statusCode = HttpStatus.partialContent;
+      res.headers.set(
+        HttpHeaders.contentRangeHeader,
+        'bytes $start-$end/${bytes.length}',
+      );
+    }
+    res.contentLength = end - start + 1;
+    if (req.method == 'GET') res.add(bytes.sublist(start, end + 1));
+    return res.close();
   }
 
   Future<void> _file(HttpResponse res, String name, ContentType type) async {

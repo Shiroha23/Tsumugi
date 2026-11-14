@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tsumugi/core/network/dio_source_http_client.dart';
 import 'package:tsumugi/core/network/network_exception.dart';
@@ -550,6 +552,152 @@ void main() {
         (await client.request(const NetRequest('/status/503'))).status,
         503,
       );
+    });
+  });
+  group('openStream（音视频流）', () {
+    Future<List<int>> readAll(NetStreamResponse r) =>
+        r.body.fold<List<int>>(<int>[], (a, c) => a..addAll(c));
+
+    test(
+      '响应体不受 maxResponseBytes 限制，headers / Cookie / UA 与 request 相同',
+      () async {
+        final small = mockClient(
+          server,
+          maxResponseBytes: 1024,
+          headers: {
+            'Referer': 'http://comic.example.com/',
+            'User-Agent': 'UA1',
+          },
+        );
+        addTearDown(small.close);
+        await small.setCookie('http://comic.example.com/', 'sid', 'x');
+        final res = await small.openStream(
+          const NetRequest('/large?bytes=300000', headers: {'X-A': '1'}),
+        );
+        expect(res.status, 200);
+        expect(
+          res.url.toString(),
+          'http://comic.example.com/large?bytes=300000',
+        );
+        expect((await readAll(res)).length, 300000);
+        final last = server.requests.last;
+        expect(last.headers['x-a'], '1');
+        expect(last.headers['referer'], 'http://comic.example.com/');
+        expect(last.headers['user-agent'], 'UA1');
+        expect(last.headers['cookie'], contains('sid=x'));
+        // request() 对同一地址仍按上限拒绝
+        await expectLater(
+          small.request(const NetRequest('/large?bytes=300000')),
+          throwsNet(NetworkErrorKind.responseTooLarge),
+        );
+      },
+    );
+
+    test('白名单：初始地址与重定向的每一跳', () async {
+      await expectLater(
+        client.openStream(const NetRequest('http://outside.example.net/a.mp4')),
+        throwsNet(NetworkErrorKind.hostNotAllowed),
+      );
+      await expectLater(
+        client.openStream(const NetRequest('/redirect/outside')),
+        throwsNet(NetworkErrorKind.hostNotAllowed, host: 'outside.example.net'),
+      );
+      expect(
+        server.requests.where((r) => r.host == 'outside.example.net'),
+        isEmpty,
+      );
+      final ok = await client.openStream(
+        const NetRequest('/redirect/chain?n=2'),
+      );
+      expect(ok.url.path, '/echo');
+      expect(utf8.decode(await readAll(ok)), contains('"path":"/echo"'));
+      await expectLater(
+        mockClient(
+          server,
+          maxRedirects: 1,
+        ).openStream(const NetRequest('/redirect/chain?n=3')),
+        throwsNet(NetworkErrorKind.tooManyRedirects),
+      );
+    });
+
+    test('跨主机重定向不转发显式的 Cookie / Authorization', () async {
+      final res = await client.openStream(
+        const NetRequest(
+          '/redirect?to=http%3A%2F%2Fimg.example.com%2Fecho',
+          headers: {'Cookie': 'a=1', 'Authorization': 'Bearer t'},
+        ),
+      );
+      final echo = jsonDecode(utf8.decode(await readAll(res))) as Map;
+      expect(echo['host'], 'img.example.com');
+      expect((echo['headers'] as Map).containsKey('authorization'), isFalse);
+      expect((echo['cookies'] as Map).containsKey('a'), isFalse);
+    });
+
+    test('挑战页 → challenge 并记录地址；普通 403 照常返回响应体', () async {
+      await expectLater(
+        client.openStream(const NetRequest('/challenge/page')),
+        throwsNet(NetworkErrorKind.challenge, status: 503),
+      );
+      expect(client.session.lastChallengeUrl?.path, '/challenge/page');
+      final res = await client.openStream(const NetRequest('/status/403'));
+      expect(res.status, 403);
+      expect(utf8.decode(await readAll(res)), contains('403'));
+    });
+
+    test('检测挑战只读开头一段：大的普通 503 照常返回完整响应体', () async {
+      final noRetry = mockClient(server, maxRetries: 0);
+      addTearDown(noRetry.close);
+      final res = await noRetry.openStream(
+        const NetRequest('/large?bytes=3000000&status=503'),
+      );
+      expect(res.status, 503);
+      expect((await readAll(res)).length, 3000000);
+    });
+
+    test('5xx 与连接错误在拿到响应头之前重试', () async {
+      final res = await client.openStream(
+        const NetRequest('/flaky?key=stream-503&fail=2'),
+      );
+      expect(res.status, 200);
+      expect(server.hits('/flaky'), greaterThanOrEqualTo(3));
+    });
+
+    test('HEAD 没有响应体；只支持 GET / HEAD', () async {
+      final res = await client.openStream(
+        const NetRequest('/large?bytes=10', method: 'HEAD'),
+      );
+      expect(res.status, 200);
+      expect(await readAll(res), isEmpty);
+      await expectLater(
+        client.openStream(const NetRequest('/echo', method: 'POST')),
+        throwsNet(NetworkErrorKind.invalidRequest),
+      );
+    });
+
+    test('读取期间取消 → cancelled；响应体停顿超过超时 → timeout', () async {
+      final c = NetCancellation();
+      final res = await client.openStream(
+        NetRequest('/slow-body?ms=2000', cancellation: c),
+      );
+      final done = readAll(res);
+      c.cancel();
+      await expectLater(done, throwsNet(NetworkErrorKind.cancelled));
+
+      final idle = await client.openStream(
+        const NetRequest(
+          '/slow-body?ms=2000',
+          timeout: Duration(milliseconds: 300),
+        ),
+      );
+      await expectLater(readAll(idle), throwsNet(NetworkErrorKind.timeout));
+    });
+
+    test('cancel() 放弃响应体', () async {
+      final res = await client.openStream(
+        const NetRequest('/slow-body?ms=2000'),
+      );
+      res.cancel();
+      await expectLater(readAll(res), throwsNet(NetworkErrorKind.cancelled));
     });
   });
 }

@@ -10,6 +10,8 @@ import '../features/novel/novel_routes.dart';
 import '../features/search/search_page.dart';
 import '../features/settings/settings_page.dart';
 import '../features/sources/sources_page.dart';
+import '../features/video/detail/video_detail_page.dart';
+import '../features/video/video_routes.dart';
 import '../shared/webview/providers.dart';
 import '../sources/model/common.dart';
 import 'shell.dart';
@@ -104,6 +106,23 @@ GoRouter router(Ref ref) {
           GoRoute(
             path: NovelRoutes.readerPattern,
             builder: (_, state) => novelReaderPageFromState(state),
+          ),
+        ],
+      ),
+      // M4 视频（技术验证）：详情与最小播放页。
+      GoRoute(
+        path: VideoRoutes.detailPattern,
+        builder: (_, state) => VideoDetailPage(
+          sourceId: state.pathParameters['sourceId']!,
+          itemId: state.pathParameters['itemId']!,
+          preview: state.extra is SearchItem
+              ? state.extra! as SearchItem
+              : null,
+        ),
+        routes: [
+          GoRoute(
+            path: VideoRoutes.playerPattern,
+            builder: (_, state) => videoPlayerPageFromState(state),
           ),
         ],
       ),

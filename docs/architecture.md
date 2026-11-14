@@ -30,7 +30,7 @@
 | JS 运行时 | [`qjs`](https://pub.dev/packages/qjs)（QuickJS-ng，MIT） | M0 已验证，三平台同一引擎；封装在 `core/engine/script`，见 §6.1 |
 | 加密 | [`crypto`](https://pub.dev/packages/crypto)（BSD-3）+ [`pointycastle`](https://pub.dev/packages/pointycastle)（MIT） | 纯 Dart；`tsumugi.crypto` 的摘要 / HMAC 与 AES（CBC / ECB / GCM） |
 | 数据库 | drift（SQLite） | |
-| 音视频 | media_kit（libmpv） | 视频与音乐共用 |
+| 音视频 | [`media_kit`](https://pub.dev/packages/media_kit)（MIT）+ 预编译 libmpv / FFmpeg（LGPL） | M4 已验证，视频与音乐共用；所有请求经本地媒体代理走源的网络层，见 §6.4 |
 | WebView | [`flutter_inappwebview`](https://pub.dev/packages/flutter_inappwebview) 6.2.0-beta.3（Apache-2.0） | M3 选定：登录 / 人机验证（用户手动完成），见 §5.3 |
 | 序列化 | freezed + json_serializable | |
 | 文本编码 | 自实现 WHATWG Encoding 解码器（纯 Dart，无新依赖） | #22：GBK / GB18030 / Big5 / Shift_JIS / EUC-KR / 单字节编码，见 §6.3 |
@@ -70,6 +70,7 @@ lib/
         host/             # worker 内的宿主 API（crypto、HTML 句柄）与 tsumugi prelude
       expression/         # 选择器表达式（css/xpath/json/regex）
     network/              # HttpClient、Cookie、限速、重试、日志
+      media/              # 本地媒体代理与 HLS 播放列表改写（音视频请求经源的网络层，§6.4）
     encoding/             # 响应文本的编码识别与解码（WHATWG Encoding，§6.3）
     storage/              # drift 数据库、KV 存储
     logging/
@@ -88,6 +89,7 @@ lib/
     novel/                # 小说正文模型、HTML 白名单清洗、章节内分页拼接（阅读器与导出共用）
     export/               # 小说导出 TXT / EPUB（M3）
     webview/              # 人机验证 / 登录（M3）
+    video/                # 播放器选项、按源建立代理会话（M4）
     download/             # 下载管理
     sync/                 # WebDAV 同步
   features/
@@ -178,9 +180,14 @@ UI(search) → SourceRegistry.enabled(type?) → 并发调用 source.search()
 detail(id) → 章节/剧集/曲目列表 → content(itemId)
   comic : List<ImageRef(url, headers)> → 图片加载器（带 headers 与缓存）
   novel : 文本（可分页）             → 排版引擎
-  video : StreamRef(url, headers, type) → media_kit
-  music : StreamRef + 可选歌词        → media_kit + 后台播放服务
+  video : StreamRef(url, headers, type) → 本地媒体代理（源的网络层）→ media_kit
+  music : StreamRef + 可选歌词        → 本地媒体代理 → media_kit + 后台播放服务
 ```
+
+**视频播放（M4 技术验证，`features/video/`）**：详情 `/video/:sourceId/:itemId`（通用详情页），播放页
+`/video/:sourceId/:itemId/play/:unitId`（`VideoRoutes`）。播放页取 `content(unitId)` 的第一个非 DASH 流，经
+`openProxiedStreamProvider`（`shared/video/`）建立代理会话后交给 media_kit；播放 / 暂停 / 进度 / 全屏为 media_kit 的
+自适应控件，倍速在标题栏菜单。选集、线路切换、进度记忆、字幕尚未实现（见 §6.4 后续拆分）。
 
 **图片加载（M2，`shared/image/`）**：所有源图片（封面、漫画页）经 `SourceImageLoader` 加载：
 内存 LRU（编码后字节，默认 64 MB）→ 磁盘 LRU（应用缓存目录 `images/`，默认 512 MB，
@@ -403,6 +410,7 @@ ScriptHost：http / storage / cookies ◀═ host 请求（脚本侧 Promise）�
 2. **iOS 分发**：无法上架 App Store，CI 产出未签名 IPA，用户自签。
 3. **音乐后台播放**：需要各平台的媒体会话适配（Android 前台服务、iOS AVAudioSession、Windows SMTC）。
 4. **XPath / JSONPath 库质量** —— M1 已选型，结论见 §6.2。
+5. **视频播放器的许可证、平台可用性与请求边界** —— M4 已验证，结论见 §6.4。
 
 ### 6.1 JS 运行时选型结论（M0，2026-11）
 
@@ -533,6 +541,194 @@ RFC 9535 是目前唯一的 JSONPath 标准，选它可避免各实现间过滤�
 - 只实现解码；请求方向（编码 GBK 表单 / 查询参数）为后续工作。
 - 测试：`test/core/encoding/`、`test/core/network/net_response_test.dart`，以及 mock 服务器的 GBK / Big5 虚构页面
   （`test/fixtures/mock_site/encoding/`）。
+
+### 6.4 视频播放选型结论（M4，2026-11）
+
+**结论：采用 [`media_kit`](https://pub.dev/packages/media_kit) 1.2.6（libmpv），三平台只引入视频所需的
+`media_kit_libs_{windows,android,ios}_video`；播放器的所有网络请求经本地媒体代理走该源的 `SourceHttpClient`。**
+四个关键问题（许可证、平台、请求边界、体积）都有可行答案，没有走不通的项；遗留风险与后续工作见 §6.4.6。
+
+#### 6.4.1 许可证
+
+media_kit 的 Dart / 插件代码都是 MIT；许可证问题在它下载的**预编译 libmpv / FFmpeg**。逐个平台核对了插件实际固定的
+下载地址与构建配置：
+
+| 平台 | 插件固定的二进制 | mpv | FFmpeg | nonfree | 依据 |
+|---|---|---|---|---|---|
+| Windows | `media-kit/libmpv-win32-video-build` 发布 `2023-09-24` 的 `mpv-dev-x86_64-20230924-git-652a1dd.7z`（MD5 写死在插件 CMake 中） | `-Dgpl=false`（LGPL-2.1+） | `--disable-gpl --disable-nonfree --enable-version3` → **LGPL-3.0+** | 无 | **二进制实测**：`libmpv-2.dll` 内嵌的配置串，以及 `libavcodec license: LGPL version 3 or later`（libavformat / avutil / avfilter / swscale / swresample 相同） |
+| Android | `media-kit/libmpv-android-video-build` `v1.1.7` 的 `default-<abi>.jar`（MD5 写死在插件 build.gradle） | `-Dgpl=false` | `default` 构建脚本：`--disable-gpl --disable-nonfree --enable-version3` → **LGPL-3.0+** | 无 | **二进制实测**：APK 中 `libmpv.so`（静态包含 FFmpeg）的配置串与 `LGPL version 3 or later`；构建脚本 `buildscripts/flavors/default.sh`、`scripts/mpv.sh` 一致 |
+| iOS | `media-kit/libmpv-darwin-build` `v0.6.0` 的 `ios-universal-video-default`（sha256 写死在插件 Makefile） | `-Dgpl=false` | `default` flavor：无 `--enable-gpl` / `--enable-nonfree`，有 `--enable-version3` → LGPL（仓库 README 写 LGPL-2.1，构建脚本为 v3） | 无 | 构建仓库 README 的许可证表与 `main` 分支的 `nix/packages/mk-pkg-ffmpeg/meson.build`；**未能读取 `v0.6.0` 标签处的配置，也未检查二进制**（不确定的只是 LGPL 的版本号，不影响兼容性结论） |
+
+三个平台带 GPL 的版本（`encoders-gpl` / `encodersgpl`，含 x264）都**没有**被插件使用。其余随包组件：
+libass（ISC）、FreeType（FTL / GPL-2 双许可）、HarfBuzz（MIT）、FriBidi（LGPL-2.1+）、dav1d（BSD-2）、mbedTLS（Apache-2.0）、
+libxml2（MIT）、uchardet（MPL-1.1 / GPL-2+ / LGPL-2.1+ 三许可）、libplacebo（LGPL-2.1+）等；Windows 另带 ANGLE（BSD-3）、
+SwiftShader 与 Vulkan Loader（Apache-2.0）、zlib，以及 **`d3dcompiler_47.dll`（微软可再分发组件，非开源）**，见 §6.4.6。
+新增的传递依赖 `wakelock_plus`、`package_info_plus`、`http`（BSD-3）与 `image`、`synchronized`、`safe_local_storage`、
+`uri_parser`、`universal_platform`（MIT）都是宽松许可证。
+
+**与 GPL-3.0 兼容**：LGPL-2.1+ / LGPL-3.0+ 的库可以并入 GPL-3.0 作品（LGPL-2.1 §3 允许改用 GPL；LGPL-3.0 即 GPL-3.0 加附加许可），
+Apache-2.0 与 GPL-3.0 兼容。**再分发（CI 产物、Release）需要满足**：
+
+1. 随安装包附带 GPL-3.0、LGPL-2.1 / LGPL-3.0 全文与各第三方组件的版权声明（NOTICE / 第三方许可证文件，应用内「关于」页可查看）；
+2. 提供**对应源码**：本项目源码 + 所用 libmpv / FFmpeg 及其依赖的源码与构建脚本，写明确切版本（上表中的发布标签；
+   Windows 为 mpv `652a1dd`）。只给上游链接时须保证长期可用——Windows 构建仓库已于 2024-10 归档，
+   **建议每次发布时把这些源码包一并上传到本项目的 Release**（GPL-3.0 §6）；
+3. LGPL 要求用户能替换库：Windows / Android 为动态库，天然满足；iOS 为静态链接的 xcframework，由于整个应用以 GPL-3.0
+   提供完整源码与构建方式，用户可以重新链接，满足 LGPL-2.1 §6 / LGPL-3.0 §4(d)。
+
+备选对比（2026-11 调研 pub.dev / GitHub）：
+
+| 方案 | Win / Android / iOS | HLS | 请求头 | 许可证 | 结论 |
+|---|---|---|---|---|---|
+| **media_kit**（libmpv）✅ | ✓ / ✓ / ✓ | ✓（AES-128 由本项目的代理解密） | 全局 `http-header-fields`；本项目改用代理 | MIT + LGPL 预编译库 | 选用；Windows 预编译库停在 2023-09，见 §6.4.6 |
+| [`fvp`](https://pub.dev/packages/fvp)（libmdk） | ✓ / ✓ / ✓ | 未声明 | 未声明 | 插件 BSD-3；**libmdk 闭源**，按 README 的 key 授权（“Free for Flutter users”） | 闭源原生库无法提供 GPL 要求的对应源码，**不兼容**，排除 |
+| [`video_player`](https://pub.dev/packages/video_player)（ExoPlayer / AVPlayer） | ✗ / ✓ / ✓ | 平台播放器支持 | `httpHeaders`（各平台对分片请求的支持不一） | BSD-3（ExoPlayer Apache-2.0） | 无 Windows 实现 |
+| `video_player` + [`video_player_win`](https://pub.dev/packages/video_player_win)（Media Foundation） | ✓ / ✓ / ✓ | **Windows 不支持 HLS** | 未声明 | BSD-3 | Windows 无 HLS，排除 |
+
+#### 6.4.2 平台可用性
+
+- **Windows**：已实际播放（`integration_test/video_playback_test.dart`，`flutter test integration_test/video_playback_test.dart -d windows`）：
+  真实 libmpv 经代理播放 MP4 与 AES-128 加密（由代理解密）、需要 Referer 与 Cookie 的 HLS，覆盖播放、暂停、跳转、2 倍速与播放完成，
+  画面 320×180、时长 6 s，并断言上游的每个请求都来自源客户端（虚构主机名、源的 UA，没有 libmpv 自己的 UA）。
+  日志中的 `Failed to create EGL surface`（dxva2-egl 硬解互操作失败后回落）与 `Failed to create file cache` 不影响播放。
+  完整界面（搜索 → 详情 → 播放页）的手动步骤见 PR 描述。
+- **Android**：本机与 CI 都能构建 release APK；真机验证步骤见 PR 描述（`flutter run -d <设备>` + 局域网 mock 服务器 + 导入
+  `mock_video_declarative.json`），尚待在真机上执行。
+- **Android 真机发现**（Android 16，HLS 测试素材；MP4 与单个 MPEG-TS 文件正常）：HLS 常常一开始就跳到结尾（首个进度 6.037 s → 播放完成，
+  界面停在黑屏）。软解（`--dart-define=TSUMUGI_HWDEC=no`）同样出现，两个平台的 FFmpeg 都是 n6.0（Lavf 60.3.100），故与解码器、
+  时间戳和 FFmpeg 版本无关。差别在 media_kit 的 Android 视频输出：拿到视频参数后才创建 Surface，随后重新初始化输出并 seek 到“当前位置”；
+  这次 seek 落在 HLS 解复用器初始化期间，常常直接到达结尾（FFmpeg 随后报 “m3u8 list sequence may have been wrapped”）。
+  这次 seek 停在分片边界（2.05 / 4.09 s）或结尾，之后再 seek 到 0 也不生效；Windows 的视频输出没有这一步，同样的 seek 在 Windows 上正常。
+  处理（`openWhenVideoReady`）：暂停打开 → 打开时视频输出未就绪的，等它就绪（最多 5 s）并稍候 0.5 s → **重新打开**同一地址
+  （Surface 尺寸不变，media_kit 不再重建 Surface、也不再 seek；代理缓存了解密后的分片）→ 播放。不依赖 seek 修正。
+  另关闭了在两个平台上都建不起来的 mpv 磁盘缓存（`cache-on-disk=no`）。
+  重新打开之前进度可能短暂显示在别处，播放页在真正开始播放前用加载遮罩盖住画面并隐藏控件。
+  真机验证（2026-11，Android 16）：重新打开后 HLS 10 次中 10 次从 00:00 开始。
+  排查过程排除了：代理（所有请求正常）、解码器（`hwdec=no` 同样复现）、MPEG-TS 时间戳（单个 TS 文件正常）、FFmpeg 版本（两平台相同）。
+  应向 media_kit 上游报告（见 §6.4.6 后续 8）。
+- **诊断开关**（`shared/video/player_options.dart`）：
+  - `--dart-define=TSUMUGI_VIDEO_LOG=true`：在 release 构建中开启详细日志——代理的逐个请求（编号 / 文件名、Range、状态、字节数、耗时，不含令牌）、
+    播放器状态变化与实际解码路径；debug 构建默认开启。不开启时只输出 libmpv 的警告 / 错误、代理的失败原因与每次播放一行的启动摘要。
+  - `--dart-define=TSUMUGI_HWDEC=<mpv hwdec 取值>`（如 `no`、`mediacodec-copy`）：覆盖 media_kit 默认的硬解设置，用于比较解码路径。
+  - mock 服务器第 5、6 集为诊断用的单个 MPEG-TS 文件（时间戳从 1.4 s / 0 开始）。
+- **iOS**：CI 编译（`flutter build ios --release --no-codesign`）；未在真机上运行（同 [#31](https://github.com/Shiroha23/Tsumugi/issues/31)）。
+
+#### 6.4.3 请求头、Cookie 与主机白名单：本地媒体代理
+
+播放器自带的网络栈（FFmpeg）只能设置一组全局 headers，Cookie 是静态的（不随 `Set-Cookie` 更新、不分主机），也无法限制访问哪些主机。
+因此**不让播放器直接访问上游**，而是在应用内起一个只监听 `127.0.0.1` 的代理（`core/network/media/media_proxy.dart`）：
+
+```
+media_kit (libmpv / FFmpeg) ── http://127.0.0.1:<port>/<token>/<编号>/<文件名> ──▶ MediaProxy
+                                                                   │ 会话：编号 → 上游地址（只登记见过的地址）
+                                                                   ▼
+                        SourceHttpClient.openStream（该源的白名单 / 每跳重定向检查 / Cookie Jar /
+                                                     默认 headers / 会话 UA / StreamRef.headers / 限速）
+```
+
+**边界**：播放器能拿到的只有代理地址；代理只会替它请求“根地址或代理改写过的播放列表中出现的地址”，而且只把三类内容交给播放器——
+改写过的 HLS 播放列表、文件头可识别的媒体容器、字幕播放列表中的 WebVTT。其他任何内容（包括播放器可能当成播放列表去跟随的格式）都不放行。
+
+- **会话**：每次播放一个会话，令牌为 192 位随机数。会话内的地址按（地址, 用途, 解密参数）去重编号，播放器无法让代理请求任意地址。
+  关闭会话后请求一律 404，进行中的上游请求被取消。
+- **HLS 改写**（`hls_playlist.dart`）：只保留 RFC 8216 中播放器需要、且地址只出现在 `URI` 属性或下一行的标签
+  （`EXT-X-DATERANGE`、`EXT-X-SESSION-DATA`、`EXT-X-CONTENT-STEERING`、`EXT-X-DEFINE`、`EXT-X-SKIP`、非标准标签与普通注释整行删除——
+  它们可能用任意属性名携带地址，如插播广告的 `X-ASSET-LIST`）。每个 URI 行与 `URI="…"` 属性都基于播放列表的**最终地址（重定向之后）**
+  解析后换成代理地址；非 http(s) 地址（`skd://`、`file:` 等）得到总是 403 的代理地址。
+- **AES-128 由代理解密**：`EXT-X-KEY:METHOD=AES-128` 不交给播放器；代理经源取得密钥（每个会话按地址缓存，失败不缓存）与整段密文，
+  按 IV（标签给出的，或媒体序号）做 AES-128-CBC 解密后，再按下一条识别明文。明文按分片缓存最近 4 段（同一分片的重复 / 并发请求只取一次上游），
+  播放器的 `Range` 按明文返回 206 / 416——FFmpeg 会在分片内续传或定位，总从开头返回整段会让它卡在分片边界（Android 真机上出现过）。这样加密分片也能做内容检查，播放器侧不需要 FFmpeg 的
+  `crypto` 协议。`SAMPLE-AES` 等其他方式的密钥地址照常改写，由播放器经代理取得（尚未用测试素材验证）。
+- **内容识别**（`media_signature.dart`）：分片与根地址的响应必须以已知容器的文件头开头（MPEG-TS、ISO-BMFF / fMP4、Matroska / WebM、
+  FLV、Ogg、ID3 / ADTS / MPEG 音频、AC-3、FLAC、AVI / WAV），开头一段中要有控制字节，且不能以 UTF-16 / UTF-32 字节序标记开头；
+  字幕播放列表中的分片必须以 `WEBVTT` 开头。识别不了的一律 415——HLS 以外的 m3u / pls / DASH MPD / ffconcat / EDL、HTML 错误页、
+  任何编码的文本都在此列。子播放列表必须以 `#EXTM3U` 开头，否则 502。从中间开始的区间请求先单独取资源开头 1 KB 识别（每个地址一次）。
+- **类型与文件名由代理决定**：媒体一律 `application/octet-stream`、字幕 `text/vtt`、播放列表 `application/vnd.apple.mpegurl`；
+  代理地址的文件名只保留常见媒体扩展名（`media.ts`、`media.mp4`……，其余为 `media.bin`），播放器不会按上游的类型或扩展名把内容当成
+  其他播放列表格式。
+- **Range / HEAD**：媒体的 `Range` 原样转发（根地址的 `bytes=0-` 不转发，以便识别是否为播放列表；播放列表、密钥、加密分片不转发给上游）。
+  HEAD 按 GET 取上游后只返回代理自己的响应头（播放列表为改写后的长度）。加密分片的 `Range` 由代理按明文处理（见上）。上游请求固定 `Accept-Encoding: identity`（`StreamRef.headers`
+  不能覆盖）；上游仍压缩时只接受整段的 gzip（由 dart:io 解压，不带长度），其他编码 502。只透传 `Content-Length` / `Content-Range` /
+  `Accept-Ranges`；`Set-Cookie` 已进 Jar，不透传；播放器自己的请求头（UA 等）一律不转发。
+- **错误**：白名单外（含重定向到白名单外）→ 403；`E_CHALLENGE` → 403；超时 → 504；其他网络错误 → 502；上游 4xx / 5xx 原样返回。
+  网络层错误记在 `MediaProxySession.lastFailure`，播放页在播放器报错时据此显示 `SourceErrorView`（人机验证 / 登录时提供「打开验证页」，
+  完成后重新加载）。
+- **取消与资源**：dart:io 在写入之前察觉不到播放器断开，因此“开始发送响应体之前”的阶段（取响应头、识别、读完播放列表 / 密钥 / 加密分片）
+  有总时限 `prepareTimeout`（默认 60 s），超时取消上游；开始发送之后，播放器断开会让写入失败并立即取消上游。播放列表限 4 MB、密钥限
+  4 KB（必须为 16 字节）、加密分片限 64 MB（整段在内存中解密），每个会话最多登记 20000 个地址。
+- **`openStream`**：`SourceHttpClient` 新增的流式 GET / HEAD。白名单、重定向、Cookie、headers、限速、重试（只在拿到响应头之前）与挑战检测
+  都与 `request` 一致，但不受 20 MB 上限；挑战检测只读开头 `scanBytes`（64 KB），之后与剩余部分拼接返回。超时限制等待响应头的时间与
+  读取响应体时相邻两块数据的间隔；调用方取消订阅或 `cancel()` 时中止请求、释放连接。
+- **播放器侧的深度防御**（`shared/video/player_options.dart`）：FFmpeg `protocol_whitelist` 只有 `http,tcp`；关闭 `ytdl` 与外挂字幕 / 音轨 /
+  封面的自动加载。`access-references=no` 不可用——media_kit 打开媒体时自己写临时播放列表再 `loadlist`，该选项会让它失败（实测）。
+
+限制：
+
+- **DASH 暂不支持**（MPD 中 `BaseURL` / `SegmentTemplate` 等地址需要另外改写）：播放页跳过 `type: dash` 的流，代理拒绝 MPD。
+- AES-128 与 `EXT-X-BYTERANGE` 同时使用、加密的低延迟部分分片（`EXT-X-PART`）暂不支持（对应地址总是 403）。
+- 伪装成图片等其他格式的分片（文件头不是媒体容器）会被拒绝。
+- 每次播放新建一个使用该源会话的客户端，**限速按该客户端单独计**（图片加载已是如此），不与源实例共享令牌桶，与 source-spec §5
+  “每个源一个限速队列”不完全一致；`rateLimit` 很小的源上 HLS 会因分片排队而卡顿。见后续拆分 7。
+- 新版 FFmpeg（7.1+）对 HLS 分片有扩展名检查：代理地址只用常见媒体扩展名，扩展名不常见的分片名为 `media.bin`，在新版 FFmpeg 上
+  可能被拒（当前 Windows 的 FFmpeg 为 2023 年的版本，不受影响）。
+- 代理只监听本机回环地址，其他本机程序没有令牌就无法使用。
+
+#### 6.4.4 安装包体积
+
+本机 release 构建（同一代码，加 / 不加视频依赖）：
+
+| 产物 | 引入前 | 引入后 | 增量 |
+|---|---|---|---|
+| Windows `Release/` 目录 | 39.9 MB | 89.4 MB | +49.5 MB |
+| Windows `Release/` 压缩（zip -9） | 16.5 MB | 36.8 MB | +20.3 MB |
+| Android `app-arm64-v8a-release.apk` | 27.2 MB | 40.6 MB | +13.4 MB |
+| Android `app-armeabi-v7a-release.apk` | 25.0 MB | 37.7 MB | +12.7 MB |
+| Android `app-x86_64-release.apk` | 28.9 MB | 45.7 MB | +16.8 MB |
+| Android 通用 APK（三个 ABI） | 78.5 MB | 121.3 MB | +42.7 MB |
+
+（MB = 10⁶ 字节；Android 为 `flutter build apk --release [--split-per-abi]`。arm64 的增量主要是 `libmpv.so` 12.4 MB，含静态链接的 FFmpeg。）
+
+Windows 增量的构成：`libmpv-2.dll` 29.8 MB；ANGLE / SwiftShader / Vulkan（`libGLESv2`、`libEGL`、`vk_swiftshader`、`vulkan-1`）
+13.6 MB；`d3dcompiler_47.dll` 4.9 MB；其余插件不到 0.5 MB。iOS 的对比见 PR 中 CI 产物的大小。
+
+**只带视频所需组件**：只引入了三个目标平台的 `*_video` 包（不含 macOS / Linux 的库）。音频专用的 `*_audio` 包更小但不能播放视频；
+M5 音乐复用同一 libmpv，不再增加体积。预编译库内部的组件无法按需裁剪，进一步瘦身只能自建 libmpv（只留需要的解码器 / 解复用器），
+或 Android 只发 `arm64-v8a`（已按 ABI 拆分发布）。
+
+#### 6.4.5 测试素材
+
+`test/fixtures/mock_site/video/`：项目自制（FFmpeg `testsrc` 彩条 + 秒数计数器、`sine` 正弦音），随仓库按 GPL-3.0 发布，
+共约 190 KB：`clip.mp4`（6 s，H.264 + AAC）；`hls/`（主 / 子播放列表、3 个 2 s 分片，AES-128 加密，密钥为虚构的
+`tsumugi-test-key`）；`hls/mixed.m3u8`（手写，测试代理的拒绝路径）。代理的其他边界情形（UTF-16 播放列表、WebVTT、压缩编码、断开与取消等）
+在 `test/core/network/media/media_proxy_test.dart` 中用测试内构造的上游响应覆盖。生成命令见该目录 README。mock 服务器新增
+`/video/search`、`/video/show/1`、`/video/show/1/ep/1..4`、`/video/media/*`（支持 Range）与 `/video/protected/*`
+（要求路径以 `/video/` 开头的 Referer，密钥另需 `vtoken` Cookie）；虚构源 `test/fixtures/sources/mock_video_declarative.json`。
+
+#### 6.4.6 风险与后续拆分
+
+风险：
+
+- **预编译库陈旧，Windows 构建仓库已归档**：Windows 的 mpv / FFmpeg 为 2023-09 的版本，缺少此后的 FFmpeg 安全修复；播放的是第三方源
+  提供的内容，属于不可信输入。代理已限制来源主机与内容类型，但无法防御解码器本身的漏洞。**应尽快换成维护中的 LGPL 构建（自建或 fork）**；
+  Android（v1.1.7）与 iOS（v0.6.0）也落后于各自构建仓库的最新发布。media_kit 主仓库 2026-08 仍有提交，最近一次发版在 2025 年末。
+- **`d3dcompiler_47.dll`**：`media_kit_libs_windows_video` 随 ANGLE 打包的微软可再分发组件（非开源，按 Windows SDK 的再分发条款）。
+  Windows 10 起系统目录自带同名 DLL，可视为 GPL-3.0 的“系统库”，但**由我们随包分发是否合适不确定**。建议在 CMake 中不打包它，
+  并在 Windows 10 / 11 上验证播放。
+- media_kit 主要由一人维护。播放器只出现在 `features/video/player/` 与 `shared/video/player_options.dart`，代理与播放器无关，
+  必要时可以换播放器实现。
+
+建议的 M4 后续拆分（各自独立的 PR）：
+
+1. **第三方许可证与源码分发**：NOTICE / 「关于」页的许可证列表；Release 工作流上传 libmpv / FFmpeg 对应源码包；不再打包 `d3dcompiler_47.dll`。
+2. **原生库更新**：评估自建 / fork 的 libmpv 构建（三平台 LGPL、只留所需组件），替换过期的预编译库。
+3. **播放页完善**：选集与线路（`Detail.groups`）、上一集 / 下一集、播放进度记忆（`item_progress_entries.position`）与书架 / 历史接入、
+   清晰度（`StreamRef.quality`）切换。
+4. **字幕**：`SubtitleRef`（srt / vtt / ass）经代理加载与解析。
+5. **DASH**：MPD 改写（`BaseURL`、`SegmentTemplate`、`SegmentList` 等），或在规范中明确不支持。
+6. **移动端**：Android 真机验证，横屏 / 全屏 / 手势、切到后台时暂停；iOS 真机（#31）。后台播放留给 M5。
+7. **限速与缓存**：视频请求的限速策略（与源实例共享或单独配置）；mpv 磁盘缓存的位置与上限。
+8. **向 media_kit 上游报告**：Android 视频输出在 Surface 就绪后重新初始化并 seek 到当前位置，HLS 初始化期间的这次 seek 停在分片边界 / 结尾；
+   附最小复现（mock 服务器的 HLS 素材）。上游修复后可去掉 `openWhenVideoReady` 的重新打开。
 
 ## 7. 里程碑
 

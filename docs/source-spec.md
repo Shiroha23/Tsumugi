@@ -528,6 +528,14 @@ export async function search(keyword, page) {
   非法字节一律替换为 U+FFFD，不会导致请求失败。`responseType: "bytes"` 与图片、音视频不经过解码。
   请求方向（URL 模板、表单、请求体）始终按 UTF-8 编码。
 - 图片、音视频流的 headers 由内容结构中的 `headers` 字段携带给加载器/播放器。
+- **音视频**：播放器不直接访问网络，所有请求（HLS 的主 / 子播放列表、分片、密钥、初始化分片，MP4 的区间请求）都经客户端的
+  本地媒体代理由本源的网络层发出（architecture §6.4），因此与其他请求一样受白名单（含每一跳重定向）、Cookie 域、默认 headers
+  与限速约束，`StreamRef.headers` 随**每个**请求发送。播放列表中白名单外的地址会播放失败。
+  - 目前只支持 HLS（`type: "hls"`）与单文件（`mp4` / `auto`）；`dash` 暂不支持。
+  - 分片与单文件的响应必须是可识别的媒体容器（MPEG-TS、MP4 / fMP4、Matroska / WebM、FLV、Ogg、ADTS / MP3、AC-3、FLAC、AVI / WAV），
+    字幕播放列表中的分片必须是 WebVTT；HLS 以外的播放列表 / 清单、伪装成其他格式的分片会被拒绝。
+  - `EXT-X-KEY:METHOD=AES-128` 由客户端取密钥并解密；与 `EXT-X-BYTERANGE` 同时使用暂不支持。
+  - 音视频不受 20 MB 响应体上限限制；`timeoutMs` 限制等待响应头的时间，以及读取响应体时相邻两块数据的间隔（而不是整个响应）。
 
 ## 6. 错误码
 
