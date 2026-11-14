@@ -31,7 +31,8 @@ dependencies:
   media_kit_video: 2.0.1
   path_provider: ^2.1.6
   pointycastle: ^4.0.0
-  qjs: ^0.2.3
+  # 固定版本：native_stack.dart 依赖 qjs 内部的 JSRuntime.ptr 布局，升级前须复查（#28）。
+  qjs: 0.2.3
   riverpod_annotation: ^4.0.8
   xml: 7.1.0
 

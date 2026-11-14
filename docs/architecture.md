@@ -475,7 +475,10 @@ CPU 预算跨 await 累计、总时长上限、内存上限、栈上限、超限
   `Maximum call stack size exceeded`；反方向时栈检查会失效。`qjs` 未暴露 `JS_UpdateStackTop`，
   `core/engine/script/native_stack.dart` 经 native asset 直接调用它（读取 `JSRuntime.ptr` 的第一个字段，
   该成员在 qjs 中标为 `@internal`），在每次从 Dart 同步进入 JS（调用、resolve 宿主 Promise、建引擎、释放）前更新。
-  升级 qjs 时需复查结构布局；应向上游报告，修复后删除此文件（[#28](https://github.com/Shiroha23/Tsumugi/issues/28)）。
+  因此 `pubspec.yaml` 把 qjs 固定为 `0.2.3`，升级时须复查结构布局；`test/core/engine/script/native_stack_test.dart`
+  经同一指针调用 `JS_SetMaxStackSize`，确认栈上限真的作用于 JS 递归，布局失效时会失败
+  （线程迁移导致的误报本身无法在测试中稳定复现）。
+  不向上游提需求，等待上游自行公开该 API 后删除此文件（[#28](https://github.com/Shiroha23/Tsumugi/issues/28)）。
 - **worker 无法被强制终止**：不能用 `Isolate.kill(priority: immediate)`——worker 往往正处于 QuickJS → Dart 的
   FFI 回调中，在那里被强制终止会让整个进程崩溃（已实测）。因此看门狗只做 `kill(beforeNextEvent)`：worker 回到事件循环时退出，
   一直卡住的 worker 只能放弃（占用一个线程直到进程退出）。

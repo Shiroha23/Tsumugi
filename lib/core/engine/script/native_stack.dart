@@ -16,11 +16,16 @@ external void _jsUpdateStackTop(Pointer<Void> rt);
 /// 此时旧的栈顶属于别的线程：要么每次调用都误报 `Maximum call stack size exceeded`，
 /// 要么栈检查完全失效（深递归会让原生栈溢出、进程崩溃）。worker isolate 中已实测到前者。
 /// 因此每次从 Dart 同步进入 JS 之前都要调用一次（docs/architecture.md §6.1）。
-void updateStackTop(JSRuntime rt) {
-  // `QJSABIRuntime` 的第一个字段是 `JSRuntime *rt`（qjs src/qjs_dart.c）。
-  // `ptr` 在 qjs 中标为 @internal：这是在上游修复（每次进入 JS 时更新栈顶）之前的临时做法，
-  // 升级 qjs 时需复查结构布局；见 docs/architecture.md §6.1。
+void updateStackTop(JSRuntime rt) =>
+    _jsUpdateStackTop(nativeRuntimePointer(rt));
+
+/// `package:qjs` 的运行时包装背后的 QuickJS `JSRuntime *`。
+///
+/// `QJSABIRuntime` 的第一个字段是 `JSRuntime *rt`（qjs `src/qjs_dart.c`）。
+/// `ptr` 在 qjs 中标为 @internal：这是在上游公开更新栈顶的 API 之前的临时做法。
+/// qjs 已在 `pubspec.yaml` 中固定版本，升级时须复查结构布局，
+/// `test/core/engine/script/native_stack_test.dart` 会在布局失效时失败（#28）。
+Pointer<Void> nativeRuntimePointer(JSRuntime rt) {
   // ignore: invalid_use_of_internal_member
-  final inner = Pointer<Pointer<Void>>.fromAddress(rt.ptr.address).value;
-  _jsUpdateStackTop(inner);
+  return Pointer<Pointer<Void>>.fromAddress(rt.ptr.address).value;
 }
