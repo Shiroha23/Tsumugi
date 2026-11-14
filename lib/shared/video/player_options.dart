@@ -60,16 +60,20 @@ const videoPlayerMpvOptions = {
   'cache-on-disk': 'no',
 };
 
-/// 打开 [url] 并在视频输出就绪后从头开始播放。
+/// 打开 [url]，视频输出就绪后从头开始播放。
 ///
-/// 1. 暂停状态打开，等视频输出（纹理编号；Android 上与 Surface 一同到达）就绪，最多 [timeout]。
-///    Android 上 media_kit 在拿到视频参数之后才创建 Surface，此前 MediaCodec 没有输出目标。
-/// 2. Surface 就绪后 media_kit 会重新初始化输出并 seek 到“当前位置”。真机上这次 seek 落在 HLS 解复用器
-///    初始化期间，常常直接到达结尾（首个进度为 6.037 s、随即 completed；FFmpeg 随后报
-///    “m3u8 list sequence may have been wrapped”）。Windows 的视频输出不做这次 seek，因而不出现。
-///    所以等它稳定（[settle]）后，若已不在开头（[needsRestart]），显式 seek 回 0——与手动拖动进度条的效果相同。
-/// 3. 开始播放。
+/// Android 上 media_kit 在拿到视频参数之后才创建 Surface；Surface 到达时它会重新初始化输出并
+/// seek 到“当前位置”。这次 seek 落在 HLS 解复用器初始化期间，真机上常常停在分片边界或结尾
+/// （首个进度 2.05 / 4.09 / 6.04 s），之后再 seek 到 0 也不生效（Windows 上同样的 seek 正常，无法复现）。
+/// 因此不靠 seek 修正，而是：
 ///
+/// 1. 暂停状态打开；
+/// 2. 打开时视频输出尚未就绪的，等它就绪（最多 [timeout]）并稍候 [settle]，让上述重新初始化完成；
+/// 3. **重新打开**同一地址：Surface 尺寸不变，media_kit 不会再创建 Surface、也不会再 seek，
+///    新的解复用器从头读取（代理缓存了解密后的分片，几乎不增加网络请求）；
+/// 4. 开始播放。
+///
+/// 打开时视频输出已就绪（如 Windows）则不重新打开。[alwaysReopen] 只用于在桌面上测试第 3 步。
 /// [log] 接收每一步的状态（诊断用）。
 Future<void> openWhenVideoReady(
   Player player,
@@ -79,28 +83,34 @@ Future<void> openWhenVideoReady(
   Duration settle = const Duration(milliseconds: 500),
   bool Function()? stillCurrent,
   void Function(String message)? log,
+  bool alwaysReopen = false,
 }) async {
   bool current() => stillCurrent == null || stillCurrent();
   String state() =>
       'position=${player.state.position} duration=${player.state.duration} '
       'completed=${player.state.completed}';
 
+  final outputWasReady = video.id.value != null;
   await player.open(Media(url), play: false);
-  await waitForVideoOutput(video.id, timeout: timeout);
-  if (!current()) return;
-  log?.call('video output ready (id=${video.id.value}): ${state()}');
-  await Future<void>.delayed(settle);
-  if (!current()) return;
-  if (needsRestart(player.state.position, completed: player.state.completed)) {
-    log?.call('restart from 0: ${state()}');
-    await player.seek(Duration.zero);
+  if (!outputWasReady || alwaysReopen) {
+    await waitForVideoOutput(video.id, timeout: timeout);
     if (!current()) return;
+    log?.call('video output ready (id=${video.id.value}): ${state()}');
+    await Future<void>.delayed(settle);
+    if (!current()) return;
+    log?.call('reopen: ${state()}');
+    await player.open(Media(url), play: false);
+    if (!current()) return;
+  }
+  if (needsRestart(player.state.position, completed: player.state.completed)) {
+    // 诊断：重新打开后仍不在开头（不应出现）。
+    log?.call('unexpected start position: ${state()}');
   }
   await player.play();
   log?.call('play: ${state()}');
 }
 
-/// 开始播放前是否需要 seek 回开头：已到结尾，或位置离开头超过 [tolerance]。
+/// 是否已离开开头：已到结尾，或位置离开头超过 [tolerance]（诊断用）。
 bool needsRestart(
   Duration position, {
   required bool completed,

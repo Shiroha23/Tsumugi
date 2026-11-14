@@ -40,7 +40,11 @@ void main() {
   });
 
   /// 播放到结束，返回 (画面宽, 高, 时长)。
-  Future<(int?, int?, Duration)> playToEnd(WidgetTester tester, Uri url) async {
+  Future<(int?, int?, Duration)> playToEnd(
+    WidgetTester tester,
+    Uri url, {
+    bool alwaysReopen = false,
+  }) async {
     final player = createVideoPlayer();
     final controller = createVideoController(player);
     final errors = <String>[];
@@ -66,6 +70,7 @@ void main() {
         controller,
         url.toString(),
         log: (m) => debugPrint('[player] $m'),
+        alwaysReopen: alwaysReopen,
       );
 
       // 进度：播放中途暂停再继续，再跳到 4 s。
@@ -127,6 +132,21 @@ void main() {
       session.close();
     });
   }
+
+  testWidgets('HLS：视频输出就绪后重新打开（Android 的路径）也从头播放', (tester) async {
+    final session = proxy.open(
+      client: client,
+      url: Uri.parse('http://video.example.com/video/media/hls/master.m3u8'),
+    );
+    final (w, h, duration) = await playToEnd(
+      tester,
+      session.url,
+      alwaysReopen: true,
+    );
+    expect((w, h), (320, 180));
+    expect(duration.inMilliseconds, closeTo(6000, 300));
+    session.close();
+  });
 
   testWidgets('HLS（AES-128，需要 Referer 与 Cookie）', (tester) async {
     await client.getText('/video/show/1'); // 站点种下 vtoken Cookie
