@@ -605,7 +605,8 @@ Apache-2.0 与 GPL-3.0 兼容。**再分发（CI 产物、Release）需要满足
   重新打开之前进度可能短暂显示在别处，播放页在真正开始播放前用加载遮罩盖住画面并隐藏控件。
   真机验证（2026-11，Android 16）：重新打开后 HLS 10 次中 10 次从 00:00 开始。
   排查过程排除了：代理（所有请求正常）、解码器（`hwdec=no` 同样复现）、MPEG-TS 时间戳（单个 TS 文件正常）、FFmpeg 版本（两平台相同）。
-  应向 media_kit 上游报告（见 §6.4.6 后续 8）。
+  上游已有同类问题（[media-kit#1417](https://github.com/media-kit/media-kit/issues/1417)，由 [media-kit#1294](https://github.com/media-kit/media-kit/pull/1294) 引入）；
+  计划改用只改 `widListener` 的 fork，见 §6.4.6 后续 8。
 - **诊断开关**（`shared/video/player_options.dart`）：
   - `--dart-define=TSUMUGI_VIDEO_LOG=true`：在 release 构建中开启详细日志——代理的逐个请求（编号 / 文件名、Range、状态、字节数、耗时，不含令牌）、
     播放器状态变化与实际解码路径；debug 构建默认开启。不开启时只输出 libmpv 的警告 / 错误、代理的失败原因与每次播放一行的启动摘要。
@@ -727,8 +728,9 @@ M5 音乐复用同一 libmpv，不再增加体积。预编译库内部的组件�
 5. **DASH**：MPD 改写（`BaseURL`、`SegmentTemplate`、`SegmentList` 等），或在规范中明确不支持。
 6. **移动端**：Android 真机验证，横屏 / 全屏 / 手势、切到后台时暂停；iOS 真机（#31）。后台播放留给 M5。
 7. **限速与缓存**：视频请求的限速策略（与源实例共享或单独配置）；mpv 磁盘缓存的位置与上限。
-8. **向 media_kit 上游报告**：Android 视频输出在 Surface 就绪后重新初始化并 seek 到当前位置，HLS 初始化期间的这次 seek 停在分片边界 / 结尾；
-   附最小复现（mock 服务器的 HLS 素材）。上游修复后可去掉 `openWhenVideoReady` 的重新打开。
+8. **media_kit_video fork**（[#39](https://github.com/Shiroha23/Tsumugi/issues/39)）：Android 视频输出在 Surface 就绪后重新初始化并 seek 到当前位置，
+   HLS 初始化期间的这次 seek 停在分片边界 / 结尾。在 M4 正式播放页中改用 fork：位置 ≤ 0 或已播完时不 seek，
+   并去掉 `openWhenVideoReady` 的重新打开。不向上游提交补丁，等待上游修复后回到正式版本。
 
 ## 7. 里程碑
 
