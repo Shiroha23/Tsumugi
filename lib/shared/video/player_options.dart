@@ -61,8 +61,9 @@ const videoPlayerMpvOptions = {
   'cover-art-auto': 'no',
   // 不调用 youtube-dl / yt-dlp 解析地址。
   'ytdl': 'no',
-  // 只用内存缓存：media_kit 默认开启的磁盘缓存在 Windows / Android 上都建不起来
-  // （日志 “Failed to create file cache”）。
+  // 只用内存缓存（media_kit 的 bufferSize：向前 / 向后各 32 MB）。media_kit 默认开启磁盘缓存但不设
+  // cache-dir，在 Windows / Android 上都建不起来（日志 “Failed to create file cache”）；评估后不启用：
+  // 它只是同一解复用缓存的后备存储（容量不变、不跨播放保留），且会把解密后的明文落盘（architecture §6.4.3）。
   'cache-on-disk': 'no',
 };
 

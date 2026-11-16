@@ -317,8 +317,10 @@ class _CountingClient implements SourceHttpClient {
   final void Function() onEnd;
 
   @override
-  Future<NetStreamResponse> openStream(NetRequest request) =>
-      throw UnimplementedError();
+  Future<NetStreamResponse> openStream(
+    NetRequest request, {
+    RateLimitLane lane = RateLimitLane.source,
+  }) => throw UnimplementedError();
 
   @override
   Future<NetResponse> request(NetRequest request) async {

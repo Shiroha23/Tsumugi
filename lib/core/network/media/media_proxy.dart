@@ -241,7 +241,12 @@ class MediaProxySession {
         if (verdict != null) return await _status(res, verdict);
       }
 
-      up = await _open(upstream, range, cancel);
+      up = await _open(
+        upstream,
+        range,
+        cancel,
+        lane: _laneFor(entry, rangeStart: rangeStart),
+      );
       if (up == null) return await _status(res, _failureStatus());
       if (_closed) return await _status(res, HttpStatus.notFound);
 
@@ -410,7 +415,7 @@ class MediaProxySession {
       _plain[entry] = cached; // 移到最近使用
       return cached;
     }
-    final future = _fetchPlaintext(upstream, aes);
+    final future = _fetchPlaintext(entry, upstream, aes);
     _plain[entry] = future;
     while (_plain.length > _plainCacheSize) {
       _plain.remove(_plain.keys.first);
@@ -424,14 +429,23 @@ class MediaProxySession {
   }
 
   /// 与某个播放器请求无关（可能被多个请求共用）：取消只来自会话关闭与 [MediaProxy.prepareTimeout]。
-  Future<(Uint8List?, int)> _fetchPlaintext(Uri upstream, HlsAes128 aes) async {
+  Future<(Uint8List?, int)> _fetchPlaintext(
+    _Entry entry,
+    Uri upstream,
+    HlsAes128 aes,
+  ) async {
     final (key, keyStatus) = await _key(aes.keyUri!);
     if (key == null) return (null, keyStatus);
     final cancel = NetCancellation();
     _inFlight.add(cancel);
     final deadline = Timer(_proxy.prepareTimeout, cancel.cancel);
     try {
-      final up = await _open(upstream, null, cancel);
+      final up = await _open(
+        upstream,
+        null,
+        cancel,
+        lane: _laneFor(entry, rangeStart: 0),
+      );
       if (up == null) return (null, _failureStatus());
       try {
         if (up.status != HttpStatus.ok) {
@@ -507,7 +521,8 @@ class MediaProxySession {
     _inFlight.add(cancel);
     final deadline = Timer(_proxy.prepareTimeout, cancel.cancel);
     try {
-      final up = await _open(uri, null, cancel);
+      // 密钥的数量同样由分片决定（轮换密钥时每个分片一个），走媒体配额。
+      final up = await _open(uri, null, cancel, lane: RateLimitLane.media);
       if (up == null) return (null, _failureStatus());
       try {
         if (up.status != HttpStatus.ok) {
@@ -561,13 +576,29 @@ class MediaProxySession {
         '',
   );
 
+  /// [entry] 的上游请求计入哪个令牌桶（source-spec §5）。[rangeStart] 为本次请求的区间起点
+  /// （不带区间为 0，后缀区间为 -1）。
+  ///
+  /// 分片（含字幕分片、加密分片的密文）与密钥（数量由分片决定，轮换密钥时每个分片一个）走本源的媒体配额；
+  /// 根地址只有在确认是媒体之后、且不从开头开始的请求（跳转时的区间请求）才走媒体配额——从开头开始的响应
+  /// 每次都会重新识别，可能是播放列表，因此计入 `rateLimit`。播放列表计入 `rateLimit`。
+  static RateLimitLane _laneFor(_Entry entry, {required int rangeStart}) =>
+      switch (entry.kind) {
+        _Kind.media || _Kind.subtitle || _Kind.key => RateLimitLane.media,
+        _Kind.root when entry.verified && rangeStart != 0 =>
+          RateLimitLane.media,
+        _ => RateLimitLane.source,
+      };
+
   Future<NetStreamResponse?> _open(
     Uri upstream,
     String? range,
-    NetCancellation cancel,
-  ) async {
+    NetCancellation cancel, {
+    required RateLimitLane lane,
+  }) async {
     try {
       return await _client.openStream(
+        lane: lane,
         NetRequest(
           upstream.toString(),
           headers: {
@@ -604,7 +635,12 @@ class MediaProxySession {
     _Entry entry,
     NetCancellation cancel,
   ) async {
-    final up = await _open(upstream, 'bytes=0-${_sniffBytes - 1}', cancel);
+    final up = await _open(
+      upstream,
+      'bytes=0-${_sniffBytes - 1}',
+      cancel,
+      lane: _laneFor(entry, rangeStart: 0),
+    );
     if (up == null) return _failureStatus();
     try {
       if (up.status != HttpStatus.ok &&

@@ -356,9 +356,16 @@ tsumugi.ui.openWebView ────────┘   （单飞 / 节流） └�
 `lib/core/network/` 提供按源隔离的 HTTP 客户端，声明式引擎与脚本宿主 API（`tsumugi.http` /
 `tsumugi.cookies`）共用同一抽象：
 
-- `SourceHttpClient`（接口）/ `DioSourceHttpClient`（dio + cookie_jar 实现）：每个源一个实例，
-  持有独立的 Cookie Jar、默认 headers、超时、令牌桶限速（`TokenBucket`）与 `HostPolicy`。
-  重定向由客户端逐跳处理以便对每一跳做白名单检查；行为细则见 source-spec §5。
+- `SourceHttpClient`（接口）/ `DioSourceHttpClient`（dio + cookie_jar 实现）：按源构造，持有该源的默认 headers、
+  超时与 `HostPolicy`；Cookie Jar、UA 与**限速令牌桶**在按源的 `SourceSession` 中（`SourceSessions.of(sourceId)`）。
+  同一源的源实例、图片加载与每次播放的媒体代理客户端都用同一个会话，因此共用同一个令牌桶（source-spec §5）；
+  不同源的会话（Cookie、UA、令牌桶）互不相通。重定向由客户端逐跳处理以便对每一跳做白名单检查；行为细则见 source-spec §5。
+- **限速**（`TokenBucket`，FIFO，排队期间可取消且不消耗令牌）：会话按 `RateLimitConfig` 的取值各保留一个桶——源升级改了
+  `rateLimit` 时，按旧清单构造、尚未关闭的客户端（图片客户端失效后延迟 30 s 关闭）继续用旧桶，新客户端用新桶，二者不会互相重置。
+  请求分两条**通道**（`RateLimitLane`）：`source`（默认，`request` 只用它）计入清单的 `rateLimit`；`media` 只经
+  `openStream(lane: media)` 使用，计入每个源单独的固定媒体配额（`SourceSession.mediaRateLimit`，突发 10、每秒 10）。
+  只有媒体代理会选 `media`（HLS 分片与密钥、确认是媒体后的单文件区间请求），脚本与声明式规则无法选择通道。
+  图片加载器全局最多 6 个下载并发，因此源实例的请求在共用队列中最多排在几个图片请求之后。
 - `SourceNetworkConfig`：纯 core 类型；由清单生成的函数 `networkConfigFromManifest` 位于
   `lib/sources/network_error_mapping.dart`（core 不依赖 sources）。
 - 错误统一为 `NetworkException(kind)`，`NetworkErrorKind` 与 source-spec §6 错误码一一映射
@@ -623,7 +630,7 @@ Apache-2.0 与 GPL-3.0 兼容。**再分发（CI 产物、Release）需要满足
   不再“暂停打开 → 等待视频输出 → 重新打开”（PR #38 的临时方案，已删除）。加载遮罩保留到播放器真正开始播放
   （正在播放且位置到达起始位置附近）才撤下，期间不显示控件。**不向上游提交补丁**；上游发布包含修复的版本后删除 override，回到正式版本。
   续播（`start` > 0）时 Surface 就绪后的那次 seek 仍会执行（目标为起始位置附近），真机结果见 PR。
-- 另关闭了在两个平台上都建不起来的 mpv 磁盘缓存（`cache-on-disk=no`）。
+- 另关闭了在两个平台上都建不起来的 mpv 磁盘缓存（`cache-on-disk=no`，是否启用的结论见 §6.4.3「播放器缓存」）。
 - **诊断开关**（`shared/video/player_options.dart`）：
   - `--dart-define=TSUMUGI_VIDEO_LOG=true`：在 release 构建中开启详细日志——代理的逐个请求（编号 / 文件名、Range、状态、字节数、耗时，不含令牌）、
     播放器状态变化与实际解码路径；debug 构建默认开启。不开启时只输出 libmpv 的警告 / 错误、代理的失败原因与每次播放一行的启动摘要。
@@ -677,6 +684,29 @@ media_kit (libmpv / FFmpeg) ── http://127.0.0.1:<port>/<token>/<编号>/<文
 - **`openStream`**：`SourceHttpClient` 新增的流式 GET / HEAD。白名单、重定向、Cookie、headers、限速、重试（只在拿到响应头之前）与挑战检测
   都与 `request` 一致，但不受 20 MB 上限；挑战检测只读开头 `scanBytes`（64 KB），之后与剩余部分拼接返回。超时限制等待响应头的时间与
   读取响应体时相邻两块数据的间隔；调用方取消订阅或 `cancel()` 时中止请求、释放连接。
+- **限速**：每次播放的客户端用该源的 `SourceSession`，与源实例、图片加载共用令牌桶（§5.4）。代理按地址用途选通道：
+  播放列表、根地址从开头开始的请求（每次都重新识别，可能是播放列表）与确认之前识别用的 1 KB 探测走 `source`，计入清单 `rateLimit`；
+  分片（含字幕分片、加密分片的密文）、密钥（轮换密钥时每个分片一个，数量同样不由源作者的 `rateLimit` 估计）与已确认是媒体的根地址
+  不从开头开始的请求（MP4 跳转时的区间请求）走 `media`，计入本源固定的媒体配额（突发 10、每秒 10）。
+  **评估**：分片数由片长决定（2 s 分片 1 倍速约 0.5 个/s，跳转、多路音视频时短时突发几个），源作者无法据此设置 `rateLimit`；
+  若计入 `rateLimit`，`1 / 3 s` 这样的源会每个分片排队数秒，播放必然卡顿，而分片多在 CDN 上，按站点礼貌限速的本意也不针对它们。
+  另外两种方案：分片完全不限（异常播放列表——极短分片、大量地址——能让客户端无节制地请求）、清单新增可配置的媒体限速字段
+  （改源格式，源作者同样不知道该填多少）。因此采用固定的媒体配额：正常播放远达不到，又给出硬上限。
+  直播播放列表按目标时长刷新，计入 `rateLimit`；`rateLimit` 小于刷新频率的源上直播会落后，需由源作者调大。
+  `prepareTimeout`（60 s）包含限速排队时间：`rateLimit` 极小（如每 30 s 1 个）且图片也在排队时，打开播放所需的主 / 子播放列表
+  可能排队超过时限而播放失败，需由源作者调大 `rateLimit`。
+- **播放器缓存**（结论：**不启用 mpv 磁盘缓存**，`cache-on-disk=no`）：media_kit 默认 `cache-on-disk=yes` 但不设 `cache-dir`，
+  所以两个平台都报 “Failed to create file cache” 并回落到内存。当前为内存缓存：向前 / 向后各 32 MB（media_kit `bufferSize` 默认，
+  `demuxer-max-bytes` / `demuxer-max-back-bytes`）。不启用磁盘缓存的理由：
+  1. mpv 的磁盘缓存只是同一个解复用缓存的后备存储，**容量仍由上述两项决定**，不跨播放保留，重播不省流量；
+     想要更大的回看范围，调大 `bufferSize` 即可，不必落盘。
+  2. 落盘的是解密后的第三方内容明文；mpv 默认“创建后立即删除”（`cache-unlink-files=immediate`），但 Windows 上打开中的文件
+     通常无法删除（未验证 mpv 在 Windows 上如何处理），崩溃 / 强杀后的残留需要另做启动清理。
+  3. 代理已缓存解密后的最近 4 个分片与密钥，HLS 回看超出内存缓存时重新经代理取（受媒体配额约束）即可。
+
+  需要重新考虑的情况：移动端内存吃紧需要降低 `bufferSize`、但又要保留回看时，再启用——目录为
+  `getApplicationCacheDirectory()/mpv_cache/`（三平台均为应用私有缓存目录），上限由 `demuxer-max-bytes` / `demuxer-max-back-bytes` 决定，
+  每次关闭播放器与应用启动时删除该目录。
 - **播放器侧的深度防御**（`shared/video/player_options.dart`）：FFmpeg `protocol_whitelist` 只有 `http,tcp`；关闭 `ytdl` 与外挂字幕 / 音轨 /
   封面的自动加载。`access-references=no` 不可用——media_kit 打开媒体时自己写临时播放列表再 `loadlist`，该选项会让它失败（实测）。
 
@@ -685,8 +715,6 @@ media_kit (libmpv / FFmpeg) ── http://127.0.0.1:<port>/<token>/<编号>/<文
 - **DASH 暂不支持**（MPD 中 `BaseURL` / `SegmentTemplate` 等地址需要另外改写）：播放页跳过 `type: dash` 的流，代理拒绝 MPD。
 - AES-128 与 `EXT-X-BYTERANGE` 同时使用、加密的低延迟部分分片（`EXT-X-PART`）暂不支持（对应地址总是 403）。
 - 伪装成图片等其他格式的分片（文件头不是媒体容器）会被拒绝。
-- 每次播放新建一个使用该源会话的客户端，**限速按该客户端单独计**（图片加载已是如此），不与源实例共享令牌桶，与 source-spec §5
-  “每个源一个限速队列”不完全一致；`rateLimit` 很小的源上 HLS 会因分片排队而卡顿。见后续拆分 7。
 - 新版 FFmpeg（7.1+）对 HLS 分片有扩展名检查：代理地址只用常见媒体扩展名，扩展名不常见的分片名为 `media.bin`，在新版 FFmpeg 上
   可能被拒（当前 Windows 的 FFmpeg 为 2023 年的版本，不受影响）。
 - 代理只监听本机回环地址，其他本机程序没有令牌就无法使用。
@@ -746,9 +774,11 @@ M5 音乐复用同一 libmpv，不再增加体积。预编译库内部的组件�
 3. ~~**播放页完善**~~（已完成，见 §5.2「视频播放」）：选集与线路、上一集 / 下一集（含播完自动下一集）、播放进度记忆与书架 / 历史接入、
    清晰度切换。
 4. **字幕**：`SubtitleRef`（srt / vtt / ass）经代理加载与解析。
-5. **DASH**：MPD 改写（`BaseURL`、`SegmentTemplate`、`SegmentList` 等），或在规范中明确不支持。
+5. **DASH**：**已决定（2026-11）：apiVersion 1 不支持**，已写入 source-spec §5。MPD 改写（`BaseURL`、`SegmentTemplate`、`SegmentList` 等）
+   涉及代理的地址边界，推迟到有实际需求时单独评估（[#42](https://github.com/Shiroha23/Tsumugi/issues/42)）。
 6. **移动端**：Android 真机验证，横屏 / 全屏 / 手势、切到后台时暂停；iOS 真机（#31）。后台播放留给 M5。
-7. **限速与缓存**：视频请求的限速策略（与源实例共享或单独配置）；mpv 磁盘缓存的位置与上限。
+7. ~~**限速与缓存**~~（已完成）：令牌桶移到按源的 `SourceSession`，源实例、图片加载与媒体代理共用；分片走每源固定的媒体配额；
+   mpv 磁盘缓存评估后保持关闭（§6.4.3「限速」「播放器缓存」）。
 8. ~~**media_kit_video fork**~~（已完成，[#39](https://github.com/Shiroha23/Tsumugi/issues/39)，见 §6.4.2）。剩余工作：上游发布包含修复的版本后
    删除 `dependency_overrides`；升级 media_kit 时须把补丁 rebase 到对应版本。
 
