@@ -15,6 +15,7 @@ class NativeComponent {
     required this.versions,
     required this.source,
     required this.licenseFiles,
+    this.bundledSources = const {},
     this.note,
   });
 
@@ -27,8 +28,12 @@ class NativeComponent {
   /// 各平台随包的版本；没有出现的平台不分发该组件。
   final Map<TargetPlatform, String> versions;
 
-  /// 上游源码地址。确切版本的源码包随 Release 上传。
+  /// 上游源码地址。
   final String source;
+
+  /// 确切版本的源码已收进 Release 源码包（`tool/release/native_sources.tsv`）的平台。
+  /// 其他平台只给上游地址。
+  final Set<TargetPlatform> bundledSources;
 
   /// `assets/licenses/` 下的文件名，按顺序拼接为许可证正文。
   final List<String> licenseFiles;
@@ -47,6 +52,8 @@ const _i = TargetPlatform.iOS;
 const _unrecorded = 'git 快照（确切版本未记录）';
 
 const _all = {_w: '', _a: '', _i: ''};
+const _wai = {_w, _a, _i};
+const _ai = {_a, _i};
 
 const nativeComponents = <NativeComponent>[
   // ---- 本项目 ----
@@ -68,6 +75,7 @@ const nativeComponents = <NativeComponent>[
     },
     source: 'https://github.com/mpv-player/mpv',
     licenseFiles: ['mpv.txt', 'lgpl-2.1.txt'],
+    bundledSources: _wai,
     note: '以 -Dgpl=false 构建，按 LGPL-2.1-or-later 提供。',
   ),
   NativeComponent(
@@ -76,6 +84,7 @@ const nativeComponents = <NativeComponent>[
     versions: {_w: 'n6.0', _a: 'n6.0', _i: '6.0'},
     source: 'https://ffmpeg.org/',
     licenseFiles: ['ffmpeg.txt', 'lgpl-3.0.txt'],
+    bundledSources: _wai,
     note:
         '以 --disable-gpl --disable-nonfree --enable-version3 构建。'
         'LGPL-3.0 引用的 GPL-3.0 全文见「Tsumugi」条目。',
@@ -87,6 +96,7 @@ const nativeComponents = <NativeComponent>[
     versions: {_w: _unrecorded, _a: '0.17.1', _i: '0.17.1'},
     source: 'https://github.com/libass/libass',
     licenseFiles: ['libass.txt'],
+    bundledSources: _ai,
   ),
   NativeComponent(
     name: 'FreeType',
@@ -94,6 +104,7 @@ const nativeComponents = <NativeComponent>[
     versions: {_w: _unrecorded, _a: '2.13.0', _i: '2.13.2'},
     source: 'https://freetype.org/',
     licenseFiles: ['freetype.txt'],
+    bundledSources: _ai,
     note:
         '按 FreeType License (FTL) 使用。Portions of this software are '
         'copyright © The FreeType Project (www.freetype.org). '
@@ -105,6 +116,7 @@ const nativeComponents = <NativeComponent>[
     versions: {_w: _unrecorded, _a: '7.2.0', _i: '8.1.1'},
     source: 'https://github.com/harfbuzz/harfbuzz',
     licenseFiles: ['harfbuzz.txt'],
+    bundledSources: _ai,
   ),
   NativeComponent(
     name: 'GNU FriBidi',
@@ -112,6 +124,7 @@ const nativeComponents = <NativeComponent>[
     versions: {_w: '1.0.13', _a: '1.0.12', _i: '1.0.13'},
     source: 'https://github.com/fribidi/fribidi',
     licenseFiles: ['lgpl-2.1.txt'],
+    bundledSources: _wai,
   ),
   NativeComponent(
     name: 'Mbed TLS',
@@ -119,6 +132,7 @@ const nativeComponents = <NativeComponent>[
     versions: {_w: '3.4.1（推断）', _a: '3.4.0', _i: '3.4.1'},
     source: 'https://github.com/Mbed-TLS/mbedtls',
     licenseFiles: ['apache-2.0.txt'],
+    bundledSources: _ai,
     note: '按 Apache-2.0 使用。',
   ),
   NativeComponent(
@@ -127,6 +141,7 @@ const nativeComponents = <NativeComponent>[
     versions: {_w: '1.2.1-48-g769bd14（推断）', _a: '1.2.0', _i: '1.2.1'},
     source: 'https://code.videolan.org/videolan/dav1d',
     licenseFiles: ['dav1d.txt'],
+    bundledSources: _ai,
   ),
   NativeComponent(
     name: 'libxml2',
@@ -134,6 +149,7 @@ const nativeComponents = <NativeComponent>[
     versions: {_w: _unrecorded, _a: '2.10.3', _i: '2.11.5'},
     source: 'https://gitlab.gnome.org/GNOME/libxml2',
     licenseFiles: ['libxml2.txt'],
+    bundledSources: _ai,
   ),
   NativeComponent(
     name: 'uchardet',
@@ -141,6 +157,7 @@ const nativeComponents = <NativeComponent>[
     versions: {_w: _unrecorded, _i: '0.0.8'},
     source: 'https://www.freedesktop.org/wiki/Software/uchardet/',
     licenseFiles: ['uchardet.txt'],
+    bundledSources: {_i},
     note: '按 LGPL-2.1-or-later 使用。',
   ),
   NativeComponent(
@@ -149,6 +166,7 @@ const nativeComponents = <NativeComponent>[
     versions: {_w: '1.6.41.git', _i: '1.6.40'},
     source: 'https://github.com/pnggroup/libpng',
     licenseFiles: ['libpng.txt'],
+    bundledSources: {_i},
   ),
   NativeComponent(
     name: 'media-kit-android-helper',
@@ -156,6 +174,7 @@ const nativeComponents = <NativeComponent>[
     versions: {_a: 'git 42054e5d479f'},
     source: 'https://github.com/media-kit/media-kit-android-helper',
     licenseFiles: ['media-kit-android-helper.txt'],
+    bundledSources: {_a},
   ),
   // ---- Windows：静态链接进 libmpv-2.dll 的其他依赖 ----
   NativeComponent(
@@ -164,6 +183,7 @@ const nativeComponents = <NativeComponent>[
     versions: {_w: '1.17（推断）'},
     source: 'https://www.gnu.org/software/libiconv/',
     licenseFiles: ['lgpl-2.1.txt'],
+    bundledSources: {_w},
   ),
   NativeComponent(
     name: 'libsoxr',
@@ -171,6 +191,7 @@ const nativeComponents = <NativeComponent>[
     versions: {_w: '0.1.3'},
     source: 'https://sourceforge.net/projects/soxr/',
     licenseFiles: ['libsoxr.txt', 'lgpl-2.1.txt'],
+    bundledSources: {_w},
   ),
   NativeComponent(
     name: 'zlib-ng',
@@ -437,7 +458,9 @@ Stream<LicenseEntry> nativeLicenseEntries(
     final header = [
       if (version.isNotEmpty) '版本：$version',
       '许可证：${c.license}',
-      '源码：${c.source}（确切版本的源码包随 Release 发布）',
+      c.bundledSources.contains(platform)
+          ? '源码：${c.source}（该版本的源码收在 Release 的原生组件源码包中）'
+          : '源码：${c.source}',
       if (c.note != null) c.note!,
     ].join('\n');
     final texts = [

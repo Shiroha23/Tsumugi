@@ -39,6 +39,41 @@ void main() {
       }
     });
 
+    test('只对收进源码包的组件声称源码随 Release 发布', () async {
+      for (final c in nativeComponents) {
+        expect(c.versions.keys, containsAll(c.bundledSources), reason: c.name);
+      }
+      final entries = await nativeLicenseEntries(
+        _DiskBundle(),
+        TargetPlatform.windows,
+      ).toList();
+      String header(String name) => entries
+          .firstWhere((e) => e.packages.contains(name))
+          .paragraphs
+          .first
+          .text;
+      const claim = '源码收在 Release';
+      expect(header('mpv (libmpv)'), contains(claim));
+      expect(header('GNU libiconv'), contains(claim));
+      for (final name in [
+        'ANGLE',
+        'Microsoft Edge WebView2 SDK (WebView2Loader.dll)',
+        'uchardet',
+        'libass',
+      ]) {
+        expect(header(name), isNot(contains(claim)), reason: name);
+      }
+    });
+
+    test('源码清单中 uchardet 只对应版本已知的 iOS', () {
+      final rows = File('tool/release/native_sources.tsv')
+          .readAsLinesSync()
+          .where((l) => l.isNotEmpty && !l.startsWith('#'))
+          .map((l) => l.split('\t'));
+      final uchardet = rows.singleWhere((r) => r[1] == 'uchardet');
+      expect(uchardet[0], 'ios');
+    });
+
     test('THIRD_PARTY_NOTICES.md 列出了每个原生组件', () {
       final notices = File('THIRD_PARTY_NOTICES.md').readAsStringSync();
       for (final c in nativeComponents) {

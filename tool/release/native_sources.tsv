@@ -33,7 +33,7 @@ ios	HarfBuzz	8.1.1	MIT	https://github.com/harfbuzz/harfbuzz/archive/8.1.1.tar.gz
 ios	libass	0.17.1	ISC	https://github.com/libass/libass/releases/download/0.17.1/libass-0.17.1.tar.xz	f0da0bbfba476c16ae3e1cfd862256d30915911f7abaa1b16ce62ee653192784	common/libass-0.17.1.tar.xz
 ios	libxml2	2.11.5	MIT	https://download.gnome.org/sources/libxml2/2.11/libxml2-2.11.5.tar.xz	3727b078c360ec69fa869de14bd6f75d7ee8d36987b071e6928d4720a28df3a6	ios/libxml2-2.11.5.tar.xz
 ios	Mbed TLS	3.4.1	Apache-2.0 OR GPL-2.0-or-later	https://github.com/Mbed-TLS/mbedtls/archive/refs/tags/v3.4.1.tar.gz	a420fcf7103e54e775c383e3751729b8fb2dcd087f6165befd13f28315f754f5	ios/mbedtls-3.4.1.tar.gz
-windows,ios	uchardet	0.0.8	MPL-1.1 OR GPL-2.0-or-later OR LGPL-2.1-or-later	https://www.freedesktop.org/software/uchardet/releases/uchardet-0.0.8.tar.xz	e97a60cfc00a1c147a674b097bb1422abd9fa78a2d9ce3f3fdcc2e78a34ac5f0	common/uchardet-0.0.8.tar.xz
+ios	uchardet	0.0.8	MPL-1.1 OR GPL-2.0-or-later OR LGPL-2.1-or-later	https://www.freedesktop.org/software/uchardet/releases/uchardet-0.0.8.tar.xz	e97a60cfc00a1c147a674b097bb1422abd9fa78a2d9ce3f3fdcc2e78a34ac5f0	common/uchardet-0.0.8.tar.xz
 ios	libpng	1.6.40	libpng-2.0	https://downloads.sourceforge.net/project/libpng/libpng16/1.6.40/libpng-1.6.40.tar.xz	535b479b2467ff231a3ec6d92a525906fb8ef27978be4f66dbe05d3f3a01b3a1	ios/libpng-1.6.40.tar.xz
 #
 # ---- Windows 其他 LGPL 依赖（版本取自 libmpv-2.dll 内的版本串，或构建时上游脚本固定的版本；见 windows_libmpv_build_config.txt） ----
