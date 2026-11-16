@@ -23,7 +23,10 @@ void main() {
         jsonDecode(File(_manifest).readAsStringSync()) as Map<String, Object?>;
     expect(
       json['script'],
-      File('test/fixtures/script/video/source.js').readAsStringSync(),
+      // Windows 上检出的文件可能是 CRLF。
+      File('test/fixtures/script/video/source.js')
+          .readAsStringSync()
+          .replaceAll('\r\n', '\n'),
     );
   });
 
