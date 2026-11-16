@@ -10,8 +10,14 @@ enum HlsUriKind {
   /// 字幕子播放列表（`EXT-X-MEDIA:TYPE=SUBTITLES` 的 `URI`），其中的分片为 WebVTT。
   subtitlePlaylist,
 
-  /// 分片、初始化分片（`EXT-X-MAP`）、部分分片（`EXT-X-PART` / `EXT-X-PRELOAD-HINT`）。
+  /// 分片（`EXTINF` 之后的 URI 行）。
   media,
+
+  /// 初始化分片（`EXT-X-MAP`）。
+  init,
+
+  /// 部分分片（`EXT-X-PART` / `EXT-X-PRELOAD-HINT`）。
+  part,
 
   /// 密钥（`EXT-X-KEY` / `EXT-X-SESSION-KEY`）。
   key,
@@ -90,11 +96,16 @@ bool _isSpace(int b) => b == 0x20 || b == 0x09 || b == 0x0A || b == 0x0D;
 ///   （由代理解密）。AES-128 与 `EXT-X-BYTERANGE` 同时出现时，分片以 null 地址交给 [map]（不支持）。
 ///   其他加密方式（`SAMPLE-AES` 等）的 `EXT-X-KEY` 原样改写，密钥由播放器经代理取得。
 ///
+/// [onByteRange] 在分片（`EXT-X-BYTERANGE`）或初始化分片（`EXT-X-MAP` 的 `BYTERANGE`）以字节区间引用资源时，
+/// 于交给 [map] 之前收到该区间（起点, 长度）；`EXT-X-BYTERANGE` 省略起点时接着上一个区间（RFC 8216 §4.3.2.2），
+/// `EXT-X-MAP` 省略起点时为 0。
+///
 /// 输入不是播放列表（首个非空行不是 `#EXTM3U`）时抛出 [FormatException]。
 String rewriteHlsPlaylist(
   String text, {
   required Uri base,
   required HlsUriMapper map,
+  void Function(int offset, int length)? onByteRange,
 }) {
   final lines = const LineSplitter().convert(
     text.startsWith('﻿') ? text.substring(1) : text,
@@ -110,6 +121,9 @@ String rewriteHlsPlaylist(
   (Uri?, Uint8List?)? aes;
   var byteRange = false;
   var unsupportedAes = false;
+  // 当前分片的区间 (起点, 长度)；下一个省略起点的区间接在 nextOffset 之后。
+  (int, int)? range;
+  var nextOffset = 0;
 
   HlsAes128? aesFor(int seq) => switch (aes) {
     null => null,
@@ -126,11 +140,13 @@ String rewriteHlsPlaylist(
       } else if (aes != null && (byteRange || unsupportedAes)) {
         out.add(map(null, HlsUriKind.media));
       } else {
+        if (range case (final o, final n)?) onByteRange?.call(o, n);
         out.add(map(uri, HlsUriKind.media, aesFor(sequence)));
       }
       if (!nextIsPlaylist) sequence++;
       nextIsPlaylist = false;
       byteRange = false;
+      range = null;
       continue;
     }
     final colon = line.indexOf(':');
@@ -140,7 +156,11 @@ String rewriteHlsPlaylist(
     if (tag == '#EXT-X-MEDIA-SEQUENCE') {
       sequence = int.tryParse(line.substring(colon + 1).trim()) ?? 0;
     }
-    if (tag == '#EXT-X-BYTERANGE') byteRange = true;
+    if (tag == '#EXT-X-BYTERANGE') {
+      byteRange = true;
+      range = _byteRange(line.substring(colon + 1), nextOffset);
+      if (range case (final o, final n)?) nextOffset = o + n;
+    }
     if (tag == '#EXT-X-KEY') {
       final method = _attribute(line, 'METHOD');
       if (method == 'NONE') {
@@ -166,7 +186,7 @@ String rewriteHlsPlaylist(
       if (iv == null || unsupportedAes || uriValue == null) continue;
       if (_attribute(line, 'BYTERANGE') != null) continue;
       out.add(
-        '#EXT-X-MAP:URI="${map(_resolve(base, uriValue), HlsUriKind.media, HlsAes128(key, iv))}"',
+        '#EXT-X-MAP:URI="${map(_resolve(base, uriValue), HlsUriKind.init, HlsAes128(key, iv))}"',
       );
       continue;
     }
@@ -180,6 +200,14 @@ String rewriteHlsPlaylist(
         HlsUriKind.subtitlePlaylist,
       _ => _uriKindOf[tag] ?? HlsUriKind.media,
     };
+    if (tag == '#EXT-X-MAP') {
+      final value = _attribute(line, 'BYTERANGE');
+      if (value != null) {
+        if (_byteRange(value, 0) case (final o, final n)?) {
+          onByteRange?.call(o, n);
+        }
+      }
+    }
     final rewritten = line.replaceAllMapped(
       _uriAttribute,
       (m) => '${m[1]}URI="${map(_resolve(base, m[2]!), kind)}"',
@@ -190,6 +218,15 @@ String rewriteHlsPlaylist(
     out.add(rewritten);
   }
   return '${out.join('\n')}\n';
+}
+
+/// `<n>[@<o>]` → (起点, 长度)；省略起点时为 [defaultOffset]，无效时为 null。
+(int, int)? _byteRange(String value, int defaultOffset) {
+  final m = RegExp(r'^\s*(\d+)(?:@(\d+))?\s*$').firstMatch(value);
+  if (m == null) return null;
+  final n = int.tryParse(m[1]!);
+  final o = m[2] == null ? defaultOffset : int.tryParse(m[2]!);
+  return n == null || o == null ? null : (o, n);
 }
 
 /// 属性值（去掉引号）；没有该属性时为 null。
@@ -274,7 +311,7 @@ const _uriKindOf = {
   '#EXT-X-MEDIA': HlsUriKind.playlist,
   '#EXT-X-I-FRAME-STREAM-INF': HlsUriKind.playlist,
   '#EXT-X-RENDITION-REPORT': HlsUriKind.playlist,
-  '#EXT-X-MAP': HlsUriKind.media,
-  '#EXT-X-PART': HlsUriKind.media,
-  '#EXT-X-PRELOAD-HINT': HlsUriKind.media,
+  '#EXT-X-MAP': HlsUriKind.init,
+  '#EXT-X-PART': HlsUriKind.part,
+  '#EXT-X-PRELOAD-HINT': HlsUriKind.part,
 };

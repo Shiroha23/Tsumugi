@@ -34,7 +34,7 @@ https://cdn.example.com/seg1.ts?x=1
 ''';
     final out = rewriteHlsPlaylist(text, base: base, map: map);
     expect(seen, [
-      (Uri.parse('http://video.example.com/init.mp4'), HlsUriKind.media),
+      (Uri.parse('http://video.example.com/init.mp4'), HlsUriKind.init),
       (
         Uri.parse('http://video.example.com/show/1/hls/seg0.ts'),
         HlsUriKind.media,
@@ -153,6 +153,32 @@ d.ts
     expect(out, isNot(contains('\r')));
   });
 
+  test('onByteRange：分片与初始化分片的区间（省略起点时接着上一个区间）', () {
+    final ranges = <(int, int, HlsUriKind)>[];
+    (int, int)? pending;
+    rewriteHlsPlaylist(
+      '#EXTM3U\n#EXT-X-MAP:URI="i.mp4",BYTERANGE="700@50"\n'
+      '#EXT-X-MAP:URI="j.mp4",BYTERANGE="30"\n'
+      '#EXT-X-BYTERANGE:100@1000\n#EXTINF:1,\na.mp4\n'
+      '#EXT-X-BYTERANGE:200\n#EXTINF:1,\na.mp4\n'
+      '#EXTINF:1,\nb.mp4\n',
+      base: base,
+      onByteRange: (o, n) => pending = (o, n),
+      map: (uri, kind, [aes]) {
+        if (pending case (final o, final n)?) ranges.add((o, n, kind));
+        pending = null;
+        return map(uri, kind, aes);
+      },
+    );
+    expect(ranges, [
+      (50, 700, HlsUriKind.init),
+      (0, 30, HlsUriKind.init),
+      (1000, 100, HlsUriKind.media),
+      (1100, 200, HlsUriKind.media),
+    ]);
+    expect(seen, hasLength(4 + 1));
+  });
+
   test('只有 STREAM-INF 之后的第一行是子播放列表', () {
     rewriteHlsPlaylist(
       '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\n\na.m3u8\n#EXTINF:1,\nb.ts\n',
@@ -184,6 +210,7 @@ a.ts
       '/show/1/hls/part.mp4',
       '/show/1/hls/a.ts',
     ]);
+    expect(seen.map((e) => e.$2), [HlsUriKind.part, HlsUriKind.media]);
   });
 
   test('SERVER-URI 不被当作 URI 属性改写', () {
