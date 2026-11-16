@@ -297,6 +297,51 @@ Dialogue: 0:00:00.00,0:00:01.00,visible{\\p99999999999999999999999}m 0 0 l 1 1
     });
   });
 
+  test('未闭合的标签按普通文字保留；闭合的照常去掉', () {
+    final doc = parseSubtitle(
+      '1\n00:00:00,000 --> 00:00:01,000\n<b>a</b> < c {\\i1}d {\\x\n'
+      '2 > 1 <i>e</i>\n',
+    );
+    expect(doc.cues.single.text, 'a < c d {\\x\n2 > 1 e');
+  });
+
+  test(r'ASS 的 \n 是软换行（显示为空格），\N 才换行', () {
+    final doc = parseSubtitle(
+      '[Script Info]\n[Events]\nFormat: Start, End, Text\n'
+      r'Dialogue: 0:00:00.00,0:00:01.00,Hello\nworld\Nnext {unclosed'
+      '\n',
+    );
+    expect(doc.cues.single.text, 'Hello world\nnext {unclosed');
+  });
+
+  test('一条很长的 cue 与大量普通 cue：查询正确且不回扫全部', () {
+    final b = StringBuffer()
+      ..write('[Script Info]\n[Events]\nFormat: Start, End, Text\n')
+      ..write('Dialogue: 0:00:00.00,9:00:00.00,watermark\n');
+    for (var i = 0; i < maxSubtitleCues - 1; i++) {
+      final cs = i * 100; // 每条 1 s
+      String t(int c) =>
+          '${c ~/ 360000}:${(c ~/ 6000 % 60).toString().padLeft(2, '0')}:'
+          '${(c ~/ 100 % 60).toString().padLeft(2, '0')}.'
+          '${(c % 100).toString().padLeft(2, '0')}';
+      b.write('Dialogue: ${t(cs)},${t(cs + 50)},cue $i\n');
+    }
+    final doc = parseSubtitle(b.toString());
+    expect(doc.textAt(const Duration(milliseconds: 1700)), 'watermark');
+    expect(doc.textAt(const Duration(milliseconds: 1200)), 'watermark\ncue 1');
+    expect(
+      doc.textAt(const Duration(seconds: 5000, milliseconds: 100)),
+      'watermark\ncue 5000',
+    );
+    final sw = Stopwatch()..start();
+    for (var i = 0; i < 20000; i++) {
+      doc.textAt(Duration(milliseconds: i * 997));
+    }
+    expect(sw.elapsed, lessThan(const Duration(seconds: 1)));
+  });
+
+  group('病态输入', pathologicalMarkupTests);
+
   group('textAt', () {
     final doc = parseSubtitle('''
 1
@@ -328,4 +373,33 @@ String _srtTime(int ms) {
   String two(int n) => n.toString().padLeft(2, '0');
   return '${two(d.inHours)}:${two(d.inMinutes % 60)}:${two(d.inSeconds % 60)},'
       '${(ms % 1000).toString().padLeft(3, '0')}';
+}
+
+/// 审查意见 1：病态的标签输入（大量未闭合的 `<` / `{`）不能让解析耗时超线性。
+void pathologicalMarkupTests() {
+  for (final (name, text) in [
+    (
+      'srt：一行 1 MB 的 <',
+      '1\n00:00:00,000 --> 00:00:01,000\n${'<' * (1 << 20)}\n',
+    ),
+    (
+      r'srt：一行 1 MB 的 {\',
+      '1\n00:00:00,000 --> 00:00:01,000\n${r'{\' * (1 << 19)}\n',
+    ),
+    (
+      'ass：一行 1 MB 的 {',
+      '[Script Info]\n[Events]\nFormat: Start, End, Text\n'
+          'Dialogue: 0:00:00.00,0:00:01.00,${'{' * (1 << 20)}\n',
+    ),
+  ]) {
+    test(name, () {
+      final sw = Stopwatch()..start();
+      final doc = parseSubtitle(text);
+      expect(sw.elapsed, lessThan(const Duration(seconds: 2)));
+      expect(
+        doc.cues.single.text.length,
+        lessThanOrEqualTo(maxSubtitleCueLength),
+      );
+    });
+  }
 }

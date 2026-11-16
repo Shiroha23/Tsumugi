@@ -51,6 +51,30 @@ void main() {
     });
   });
 
+  test('同名内嵌轨附上序号，可分别匹配', () {
+    const dup = [
+      EmbeddedSubtitle('1', language: 'zh'),
+      EmbeddedSubtitle('2', language: 'zh'),
+      EmbeddedSubtitle('3', language: 'ja'),
+      EmbeddedSubtitle('4', language: 'ZH'),
+    ];
+    expect(
+      [for (var i = 0; i < dup.length; i++) embeddedSubtitleLabel(dup, i)],
+      ['zh', 'zh 2', 'ja', 'ZH 3'],
+    );
+    expect(matchEmbeddedSubtitle(dup, 'zh'), 0);
+    expect(matchEmbeddedSubtitle(dup, 'zh 2'), 1);
+    expect(matchEmbeddedSubtitle(dup, 'zh 3'), 3);
+    expect(
+      pickSubtitle(
+        preference: const SubtitleLabel('zh 2'),
+        external: const [],
+        embedded: dup,
+      ),
+      const SubtitleChoiceEmbedded('zh 2'),
+    );
+  });
+
   group('pickSubtitle（按源记住的选择）', () {
     SubtitleChoice pick(
       SubtitlePreference? p, {
@@ -88,7 +112,27 @@ void main() {
       );
       expect(
         pick(const SubtitleLabel('zh')),
-        const SubtitleChoiceEmbedded('zh'),
+        const SubtitleChoiceEmbedded('HLS Chinese'),
+      );
+    });
+
+    test('记住的标签不是外挂字幕、轨道列表未确定：先关闭，不去取外挂字幕', () {
+      SubtitleChoice early(String label) => pickSubtitle(
+        preference: SubtitleLabel(label),
+        external: _subs,
+        embedded: const [],
+        embeddedKnown: false,
+      );
+      expect(early('zh'), const SubtitleChoiceOff());
+      expect(early('English'), const SubtitleChoiceExternal(1));
+      expect(
+        pickSubtitle(
+          preference: null,
+          external: _subs,
+          embedded: const [],
+          embeddedKnown: false,
+        ),
+        const SubtitleChoiceExternal(0),
       );
     });
 
@@ -148,6 +192,19 @@ void main() {
       expect(await reopened.load('a'), isNull);
       await reopened.save('a', const SubtitleOff());
       expect(await reopened.load('a'), const SubtitleOff());
+    });
+
+    test('连续快速保存：按调用顺序生效，文件始终是合法 JSON', () async {
+      final file = File('${dir.path}/video_subtitles.json');
+      final store = FileSubtitlePreferencesStore(() async => file);
+      await Future.wait([
+        for (var i = 0; i < 20; i++)
+          store.save(i.isEven ? 'a' : 'b', SubtitleLabel('l$i')),
+      ]);
+      final reopened = FileSubtitlePreferencesStore(() async => file);
+      expect(await reopened.load('a'), const SubtitleLabel('l18'));
+      expect(await reopened.load('b'), const SubtitleLabel('l19'));
+      expect(File('${file.path}.tmp').existsSync(), isFalse);
     });
 
     test('未知的记录形状被忽略', () {

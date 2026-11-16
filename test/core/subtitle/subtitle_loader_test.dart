@@ -210,6 +210,108 @@ void main() {
     expect(up.requests, isEmpty);
   });
 
+  // 审查意见 2：总时限与取消。
+  Future<void> Function(HttpResponse) slow() => (res) async {
+    try {
+      res.write('1\n00:00:00,000 --> 00:00:01,000\n');
+      await res.flush();
+      for (var i = 0; i < 100; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        res.write('x');
+        await res.flush();
+      }
+      await res.close();
+    } on Object {
+      // 客户端中止
+    }
+  };
+
+  test('慢速上游：超过总时限抛 timeout', () async {
+    up.handlers['/slow.srt'] = slow();
+    final sw = Stopwatch()..start();
+    await expectLater(
+      fetchSubtitle(
+        client,
+        '/slow.srt',
+        totalTimeout: const Duration(milliseconds: 500),
+      ),
+      throwsA(
+        isA<NetworkException>().having(
+          (e) => e.kind,
+          'kind',
+          NetworkErrorKind.timeout,
+        ),
+      ),
+    );
+    expect(sw.elapsed, lessThan(const Duration(seconds: 3)));
+  });
+
+  test('读取期间取消抛 cancelled', () async {
+    up.handlers['/slow.srt'] = slow();
+    final cancel = NetCancellation();
+    final future = fetchSubtitle(client, '/slow.srt', cancellation: cancel);
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    cancel.cancel();
+    await expectLater(
+      future,
+      throwsA(
+        isA<NetworkException>().having(
+          (e) => e.kind,
+          'kind',
+          NetworkErrorKind.cancelled,
+        ),
+      ),
+    );
+  });
+
+  test('等待响应头期间取消抛 cancelled', () async {
+    up.handlers['/hang.srt'] = (res) async {
+      await Future<void>.delayed(const Duration(seconds: 3));
+      await res.close();
+    };
+    final cancel = NetCancellation();
+    final future = fetchSubtitle(client, '/hang.srt', cancellation: cancel);
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    cancel.cancel();
+    await expectLater(
+      future,
+      throwsA(
+        isA<NetworkException>().having(
+          (e) => e.kind,
+          'kind',
+          NetworkErrorKind.cancelled,
+        ),
+      ),
+    );
+  });
+
+  test('重定向到白名单外拒绝', () async {
+    up.handlers['/redirect.srt'] = (res) async {
+      res.statusCode = 302;
+      res.headers.set('location', 'http://other.example.org/a.srt');
+      await res.close();
+    };
+    await expectLater(
+      fetchSubtitle(client, '/redirect.srt'),
+      throwsA(
+        isA<NetworkException>().having(
+          (e) => e.kind,
+          'kind',
+          NetworkErrorKind.hostNotAllowed,
+        ),
+      ),
+    );
+    expect(up.requests.map((r) => r.uri.path), ['/redirect.srt']);
+  });
+
+  test('空的 format 按未给出处理', () async {
+    up.handlers['/a.srt'] = bytes(
+      utf8.encode('1\n00:00:00,000 --> 00:00:01,000\nok\n'),
+    );
+    final doc = await fetchSubtitle(client, '/a.srt', format: '  ');
+    expect(doc.cues.single.text, 'ok');
+  });
+
   group('mock 服务器', () {
     late MockServer server;
     late DioSourceHttpClient mock;

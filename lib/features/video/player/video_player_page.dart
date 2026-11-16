@@ -128,6 +128,12 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
   final _subFailed = <int>{};
   int _subGeneration = 0;
 
+  /// 换集或离开页面时取消仍在取的外挂字幕。
+  NetCancellation _subCancel = NetCancellation();
+
+  /// 当前流已开始播放、轨道列表已确定（之前找不到记住的内嵌轨不代表它不存在）。
+  bool _embeddedKnown = false;
+
   /// 用户选了尚未取得的外挂字幕：取得成功后才记住（失败时不记住）。
   int? _subRememberPending;
 
@@ -360,8 +366,8 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
     // 上一集的流在新一集的 content 到达前不可再选（否则会以旧流播放、进度记到新一集）。
     _streams = const [];
     _streamIndex = -1;
-    _setExternalSubtitles(const []);
     final generation = _begin();
+    _setExternalSubtitles(const []);
     try {
       final source = await ref.read(
         sourceInstanceProvider(widget.sourceId).future,
@@ -392,6 +398,8 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
   /// 换清晰度：沿用已取得的流列表。
   Future<void> _play(int index, {required Duration start}) async {
     final generation = _begin();
+    // 内嵌轨属于具体的流：按记住的标签在新流中重新自动选择（新流没有该轨道时按默认规则）。
+    if (_subChoice is SubtitleChoiceEmbedded) _subAuto = true;
     try {
       await _open(generation, index, start);
     } on Object catch (e) {
@@ -401,8 +409,10 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
 
   int _begin() {
     final generation = ++_generation;
-    // 内嵌字幕轨属于具体的流：新流的轨道列表到达后按所选标签重新匹配。
+    // 内嵌字幕轨属于具体的流：新流的轨道列表到达后按所选标签重新匹配，
+    // 开始播放后（轨道列表已确定）才认定某条内嵌轨不存在。
     _embeddedSubs = const [];
+    _embeddedKnown = false;
     _stream?.close();
     _stream = null;
     _autoNextHandled = false;
@@ -449,6 +459,12 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
     );
     setState(() => _loading = false);
     _report(immediate: true);
+    _embeddedKnown = true;
+    if (_subAuto) {
+      _autoPickSubtitle();
+    } else {
+      _applyPlayerSubtitleTrack();
+    }
     // 诊断：实际使用的解码路径（真机比较 hwdec 时看 logcat）。
     if (videoVerboseLogs) {
       Future<void>.delayed(const Duration(seconds: 1), () async {
@@ -473,6 +489,8 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
   /// 换集：换上新一集的外挂字幕，并按记录重新选择。
   void _setExternalSubtitles(List<SubtitleRef> subtitles) {
     _subGeneration++;
+    _subCancel.cancel(); // 上一集仍在取的字幕
+    _subCancel = NetCancellation();
     _subRememberPending = null;
     _subCache.clear();
     _subPending.clear();
@@ -511,6 +529,7 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
         preference: _subPref,
         external: _externalSubs,
         embedded: _embeddedSubs,
+        embeddedKnown: _embeddedKnown,
         failed: _subFailed,
       ),
     );
@@ -582,6 +601,7 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
       final document = await ref.read(loadSubtitleProvider)(
         widget.sourceId,
         _externalSubs[index],
+        cancellation: _subCancel,
       );
       if (!mounted || generation != _subGeneration) return;
       _subCache[index] = document;
@@ -598,7 +618,8 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
       _subFailed.add(index);
       if (_subRememberPending == index) _subRememberPending = null;
       if (_subChoice != SubtitleChoiceExternal(index)) return;
-      // 退回关闭（不记住）；播放不受影响。
+      // 退回关闭（不记住），本集不再自动选择其他字幕；播放不受影响。
+      _subAuto = false;
       _setSubtitle(const SubtitleChoiceOff());
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
         SnackBar(
@@ -622,6 +643,7 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
       ..removeListener(_onFullscreenChanged)
       ..restore().ignore()
       ..dispose();
+    _subCancel.cancel();
     _subtitles.dispose();
     _playback.dispose();
     for (final s in _subscriptions) {

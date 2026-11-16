@@ -5,6 +5,8 @@
 library;
 
 import 'dart:convert';
+import 'dart:math';
+import 'dart:typed_data';
 
 import '../encoding/charset_sniffing.dart';
 import '../encoding/text_decoding.dart';
@@ -15,6 +17,9 @@ enum SubtitleFormat {
   ass;
 
   /// `SubtitleRef.format` 的取值（不区分大小写；`ssa` 视为 ass）；不认识的返回 null。
+  /// 空串与 null 都视为未给出，由调用方（[isBlank]）区分。
+  static bool isBlank(String? value) => value == null || value.trim().isEmpty;
+
   static SubtitleFormat? parse(String? value) =>
       switch (value?.trim().toLowerCase()) {
         'srt' => srt,
@@ -59,15 +64,26 @@ class SubtitleCue {
 /// 解析后的字幕：[cues] 按开始时间排序。
 class SubtitleDocument {
   SubtitleDocument(this.format, List<SubtitleCue> cues)
-    : cues = List.unmodifiable(cues),
-      _maxLength = cues.fold(
-        Duration.zero,
-        (m, c) => c.end - c.start > m ? c.end - c.start : m,
-      );
+    : cues = List.unmodifiable(cues) {
+    while (_leaves < cues.length) {
+      _leaves <<= 1;
+    }
+    _maxEnd = Int64List(2 * _leaves)..fillRange(0, 2 * _leaves, -1);
+    for (var i = 0; i < cues.length; i++) {
+      _maxEnd[_leaves + i] = cues[i].end.inMicroseconds;
+    }
+    for (var n = _leaves - 1; n >= 1; n--) {
+      _maxEnd[n] = max(_maxEnd[2 * n], _maxEnd[2 * n + 1]);
+    }
+  }
 
   final SubtitleFormat format;
   final List<SubtitleCue> cues;
-  final Duration _maxLength;
+
+  /// 结束时间（微秒）的最大值线段树：查询只走向仍可能在显示的条目，耗时与结果数成比例
+  /// （审查意见：一条很长的 cue 不能让每次查询回扫全部条目）。
+  var _leaves = 1;
+  late final Int64List _maxEnd;
 
   /// [position] 时应显示的文字（多条同时显示时按开始时间以换行连接），没有时为空串。
   String textAt(Duration position) {
@@ -81,13 +97,21 @@ class SubtitleDocument {
         hi = mid;
       }
     }
-    final active = <String>[];
-    // 往前找：开始时间早于 position - 最长时长的不可能还在显示。
-    final earliest = position - _maxLength;
-    for (var i = lo - 1; i >= 0 && cues[i].start >= earliest; i--) {
-      if (cues[i].end > position) active.add(cues[i].text);
+    final active = <int>[];
+    _collect(1, 0, _leaves, lo, position.inMicroseconds, active);
+    return [for (final i in active) cues[i].text].join('\n');
+  }
+
+  /// 在节点 [node]（覆盖 [from, to)）中按下标顺序收集 `< limit` 且结束时间 > [at] 的条目。
+  void _collect(int node, int from, int to, int limit, int at, List<int> out) {
+    if (from >= limit || _maxEnd[node] <= at) return;
+    if (to - from == 1) {
+      out.add(from);
+      return;
     }
-    return active.reversed.join('\n');
+    final mid = (from + to) >> 1;
+    _collect(2 * node, from, mid, limit, at, out);
+    _collect(2 * node + 1, mid, to, limit, at, out);
   }
 }
 
@@ -283,10 +307,53 @@ List<SubtitleCue> _parseSrt(String text) {
   return out.list;
 }
 
-/// srt / vtt 文字中的标签：HTML 风格的 `<…>` 与 ASS 风格的 `{\…}`。
-final _tags = RegExp(r'<[^>\n]*>|\{\\[^}\n]*\}');
-
-String _stripMarkup(String s) => _decodeEntities(s.replaceAll(_tags, ''));
+/// 去掉 srt / vtt 文字中的标签（HTML 风格的 `<…>` 与 ASS 风格的 `{\…}`，都不跨行），再解码字符实体。
+///
+/// 手写的线性扫描（审查意见：正则在大量未闭合的 `<` / `{` 上耗时超平方）：从某个开头找不到同一行内的
+/// 结尾时，记下“到这里为止都没有结尾”，其后的同类开头直接当作普通文字，每个字符最多被扫描常数次。
+String _stripMarkup(String s) {
+  final out = StringBuffer();
+  var noAngleCloseBefore = -1; // 在此下标之前（同一行）没有 '>'
+  var noBraceCloseBefore = -1; // 在此下标之前（同一行）没有 '}'
+  var literalFrom = 0;
+  var i = 0;
+  while (i < s.length) {
+    final c = s.codeUnitAt(i);
+    final isAngle = c == 0x3C; // <
+    final isBrace =
+        c == 0x7B && i + 1 < s.length && s.codeUnitAt(i + 1) == 0x5C; // `{\`
+    if (!isAngle && !isBrace) {
+      i++;
+      continue;
+    }
+    if ((isAngle && i < noAngleCloseBefore) ||
+        (isBrace && i < noBraceCloseBefore)) {
+      i++;
+      continue;
+    }
+    final close = isAngle ? 0x3E : 0x7D;
+    var j = i + 1;
+    while (j < s.length) {
+      final d = s.codeUnitAt(j);
+      if (d == close || d == 0x0A) break;
+      j++;
+    }
+    if (j < s.length && s.codeUnitAt(j) == close) {
+      out.write(s.substring(literalFrom, i));
+      i = j + 1;
+      literalFrom = i;
+    } else {
+      if (isAngle) {
+        noAngleCloseBefore = j;
+      } else {
+        noBraceCloseBefore = j;
+      }
+      i++;
+    }
+  }
+  out.write(s.substring(literalFrom));
+  return _decodeEntities(out.toString());
+}
 
 final _entity = RegExp(
   r'&(amp|lt|gt|quot|apos|nbsp|lrm|rlm|#\d{1,7}|#x[0-9a-fA-F]{1,6});',
@@ -439,26 +506,29 @@ Duration? _assTime(String s) {
   return _time(m[1], m[2], m[3], frac, frac.length);
 }
 
-final _assOverride = RegExp(r'\{([^}]*)\}');
-final _assDrawing = RegExp(r'\\p(\d+)');
+final _assDrawing = RegExp(r'\p(\d+)');
 
-/// 去掉 `{…}` 覆盖标签；`\N` / `\n` 为换行，`\h` 为空格；绘图模式（`\p1` 起到 `\p0`）中的内容丢弃。
+/// 去掉 `{…}` 覆盖标签；`\N` 为换行，`\n`（软换行，只在 WrapStyle 2 下换行）与 `\h` 为空格；
+/// 绘图模式（`\p1` 起到 `\p0`）中的内容丢弃。线性扫描：没有 `}` 的 `{` 之后全部按普通文字处理。
 String _assText(String s) {
   final out = StringBuffer();
   var drawing = false;
   var from = 0;
-  for (final m in _assOverride.allMatches(s)) {
-    if (!drawing) out.write(s.substring(from, m.start));
-    for (final p in _assDrawing.allMatches(m[1]!)) {
+  while (true) {
+    final open = s.indexOf('{', from);
+    final close = open < 0 ? -1 : s.indexOf('}', open + 1);
+    if (close < 0) break; // 其后没有完整的覆盖标签
+    if (!drawing) out.write(s.substring(from, open));
+    for (final p in _assDrawing.allMatches(s.substring(open + 1, close))) {
       // 位数过多（溢出）也按绘图模式处理。
       drawing = (int.tryParse(p[1]!) ?? 1) > 0;
     }
-    from = m.end;
+    from = close + 1;
   }
   if (!drawing) out.write(s.substring(from));
   return out
       .toString()
       .replaceAll(r'\N', '\n')
-      .replaceAll(r'\n', '\n')
+      .replaceAll(r'\n', ' ')
       .replaceAll(r'\h', '\u00A0');
 }

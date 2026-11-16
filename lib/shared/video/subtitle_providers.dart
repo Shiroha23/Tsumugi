@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../core/network/network_exception.dart';
+import '../../core/network/source_http_client.dart';
 import '../../core/subtitle/subtitle_loader.dart';
 import '../../core/subtitle/subtitle_parser.dart';
 import '../../sources/model/content.dart';
@@ -14,6 +15,7 @@ import '../../sources/registry/providers.dart';
 import '../../sources/source.dart';
 import 'media_proxy_providers.dart';
 
+export '../../core/network/source_http_client.dart' show NetCancellation;
 export '../../core/subtitle/subtitle_parser.dart'
     show SubtitleCue, SubtitleDocument, SubtitleFormat, SubtitleFormatException;
 
@@ -31,9 +33,13 @@ String subtitleErrorMessage(Object e) => switch (e) {
 /// [SourceException]。
 final loadSubtitleProvider =
     Provider<
-      Future<SubtitleDocument> Function(String sourceId, SubtitleRef subtitle)
+      Future<SubtitleDocument> Function(
+        String sourceId,
+        SubtitleRef subtitle, {
+        NetCancellation? cancellation,
+      })
     >(
-      (ref) => (sourceId, subtitle) async {
+      (ref) => (sourceId, subtitle, {cancellation}) async {
         final installed = await ref.read(sourceRegistryProvider).get(sourceId);
         final manifest = installed?.manifest;
         if (installed == null || manifest == null) {
@@ -57,6 +63,7 @@ final loadSubtitleProvider =
             url,
             format: subtitle.format,
             charset: subtitle.charset,
+            cancellation: cancellation,
             log: (m) => debugPrint('[subtitle] $m'),
           );
         } finally {
@@ -155,14 +162,26 @@ class FileSubtitlePreferencesStore implements SubtitlePreferencesStore {
   Future<SubtitlePreference?> load(String sourceId) async =>
       SubtitlePreference.fromJson((await _read())[sourceId]);
 
+  /// 串行化：上一次写入完成后才读改写，连续快速选择时不会乱序或交错写出半个文件。
+  Future<void> _last = Future.value();
+
   @override
-  Future<void> save(String sourceId, SubtitlePreference preference) async {
+  Future<void> save(String sourceId, SubtitlePreference preference) {
+    final next = _last.then((_) => _save(sourceId, preference));
+    _last = next.catchError((Object _) {});
+    return next;
+  }
+
+  /// 写入同目录的临时文件后改名替换（原子替换，崩溃时不留下半个 JSON）。
+  Future<void> _save(String sourceId, SubtitlePreference preference) async {
     final all = await _read();
     all[sourceId] = preference.toJson();
     try {
       final f = await _file();
       await f.parent.create(recursive: true);
-      await f.writeAsString(jsonEncode(all), flush: true);
+      final tmp = File('${f.path}.tmp');
+      await tmp.writeAsString(jsonEncode(all), flush: true);
+      await tmp.rename(f.path);
     } on FileSystemException {
       // 偏好写入失败不影响播放。
     }

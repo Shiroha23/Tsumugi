@@ -88,17 +88,30 @@ String? _nonEmpty(String? s) {
 String externalSubtitleLabel(List<SubtitleRef> subtitles, int index) =>
     _nonEmpty(subtitles[index].lang) ?? '字幕 ${index + 1}';
 
-/// 内嵌字幕轨的标签：名称 → 语言 → “内嵌字幕 n”。
-String embeddedSubtitleLabel(List<EmbeddedSubtitle> tracks, int index) =>
+String _embeddedBaseLabel(List<EmbeddedSubtitle> tracks, int index) =>
     _nonEmpty(tracks[index].title) ??
     _nonEmpty(tracks[index].language) ??
     '内嵌字幕 ${index + 1}';
 
+/// 内嵌字幕轨的标签：名称 → 语言 → “内嵌字幕 n”。与前面的轨道同名时附上序号（“zh 2”），
+/// 以便区分、分别选择（FFmpeg 只报告语言，同语言的多条轨道很常见）。
+String embeddedSubtitleLabel(List<EmbeddedSubtitle> tracks, int index) {
+  final base = _embeddedBaseLabel(tracks, index);
+  var n = 1;
+  for (var i = 0; i < index; i++) {
+    if (_sameLabel(_embeddedBaseLabel(tracks, i), base)) n++;
+  }
+  return n == 1 ? base : '$base $n';
+}
+
 bool _sameLabel(String? a, String b) =>
     a != null && a.trim().toLowerCase() == b.trim().toLowerCase();
 
-/// [tracks] 中与 [label] 相符的轨道下标（标签、名称或语言相同，不区分大小写），没有时为 -1。
+/// [tracks] 中与 [label] 相符的轨道下标：先按标签（含序号），再按名称或语言（不区分大小写），没有时为 -1。
 int matchEmbeddedSubtitle(List<EmbeddedSubtitle> tracks, String label) {
+  for (var i = 0; i < tracks.length; i++) {
+    if (_sameLabel(embeddedSubtitleLabel(tracks, i), label)) return i;
+  }
   for (var i = 0; i < tracks.length; i++) {
     final t = tracks[i];
     if (_sameLabel(embeddedSubtitleLabel(tracks, i), label) ||
@@ -112,10 +125,14 @@ int matchEmbeddedSubtitle(List<EmbeddedSubtitle> tracks, String label) {
 
 /// 按记住的选择 [preference] 选字幕：关闭 → 关闭；标签 → 标签相同的外挂字幕 → 相符的内嵌轨；
 /// 没有记录或找不到时选第一条可用的外挂字幕（跳过 [failed] 中加载失败的），没有则关闭。
+///
+/// 记住的标签没有对应的外挂字幕、而轨道列表尚未确定（[embeddedKnown] 为 false）时先关闭，
+/// 等轨道列表确定后再决定：它可能是内嵌轨，不应先去取一条外挂字幕。
 SubtitleChoice pickSubtitle({
   required SubtitlePreference? preference,
   required List<SubtitleRef> external,
   required List<EmbeddedSubtitle> embedded,
+  bool embeddedKnown = true,
   Set<int> failed = const {},
 }) {
   switch (preference) {
@@ -128,9 +145,11 @@ SubtitleChoice pickSubtitle({
           return SubtitleChoiceExternal(i);
         }
       }
-      if (matchEmbeddedSubtitle(embedded, label) >= 0) {
-        return SubtitleChoiceEmbedded(label);
+      final i = matchEmbeddedSubtitle(embedded, label);
+      if (i >= 0) {
+        return SubtitleChoiceEmbedded(embeddedSubtitleLabel(embedded, i));
       }
+      if (!embeddedKnown) return const SubtitleChoiceOff();
     case null:
   }
   for (var i = 0; i < external.length; i++) {
