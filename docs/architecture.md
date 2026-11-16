@@ -728,7 +728,8 @@ M5 音乐复用同一 libmpv，不再增加体积。预编译库内部的组件�
 3. **播放页完善**：选集与线路（`Detail.groups`）、上一集 / 下一集、播放进度记忆（`item_progress_entries.position`）与书架 / 历史接入、
    清晰度（`StreamRef.quality`）切换。
 4. **字幕**：`SubtitleRef`（srt / vtt / ass）经代理加载与解析。
-5. **DASH**：MPD 改写（`BaseURL`、`SegmentTemplate`、`SegmentList` 等），或在规范中明确不支持。
+5. **DASH**：**已决定（2026-11）：apiVersion 1 不支持**，已写入 source-spec §5。MPD 改写（`BaseURL`、`SegmentTemplate`、`SegmentList` 等）
+   涉及代理的地址边界，推迟到有实际需求时单独评估（[#42](https://github.com/Shiroha23/Tsumugi/issues/42)）。
 6. **移动端**：Android 真机验证，横屏 / 全屏 / 手势、切到后台时暂停；iOS 真机（#31）。后台播放留给 M5。
 7. **限速与缓存**：视频请求的限速策略（与源实例共享或单独配置）；mpv 磁盘缓存的位置与上限。
 8. **media_kit_video fork**（[#39](https://github.com/Shiroha23/Tsumugi/issues/39)）：Android 视频输出在 Surface 就绪后重新初始化并 seek 到当前位置，
