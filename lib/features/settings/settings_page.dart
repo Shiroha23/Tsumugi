@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
-import '../../shared/widgets/empty_state.dart';
+import 'settings_routes.dart';
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
@@ -9,7 +10,16 @@ class SettingsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('设置')),
-      body: const EmptyState(icon: Icons.settings_outlined, message: '设置项即将推出'),
+      body: ListView(
+        children: [
+          ListTile(
+            leading: const Icon(Icons.info_outline),
+            title: const Text('关于 Tsumugi'),
+            subtitle: const Text('版本、许可证与源码'),
+            onTap: () => context.push(SettingsRoutes.about),
+          ),
+        ],
+      ),
     );
   }
 }

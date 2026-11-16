@@ -60,6 +60,10 @@ add_subdirectory("runner")
 # them to the application.
 include(flutter/generated_plugins.cmake)
 
+# media_kit_libs_windows_video 随 ANGLE 打包了 d3dcompiler_47.dll（微软可再分发组件，非开源）。
+# 不随本项目分发：ANGLE 使用 Windows 10 起系统自带的同名 DLL（architecture §6.4.1）。
+list(FILTER PLUGIN_BUNDLED_LIBRARIES EXCLUDE REGEX "[/\\\\]d3dcompiler_47\\.dll$")
+
 
 # === Installation ===
 # Support files are copied into place next to the executable, so that it can
@@ -83,6 +87,11 @@ install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}
 
 install(FILES "${FLUTTER_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
   COMPONENT Runtime)
+
+# 删除旧构建留在输出目录中的 d3dcompiler_47.dll（install 不会清理已排除的文件）。
+install(CODE "
+  file(REMOVE \"${INSTALL_BUNDLE_LIB_DIR}/d3dcompiler_47.dll\")
+  " COMPONENT Runtime)
 
 if(PLUGIN_BUNDLED_LIBRARIES)
   install(FILES "${PLUGIN_BUNDLED_LIBRARIES}"
