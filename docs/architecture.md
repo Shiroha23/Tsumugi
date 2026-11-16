@@ -214,7 +214,18 @@ detail(id) → 章节/剧集/曲目列表 → content(itemId)
   暂停、播完、出错、离开页面时取消。全屏不另建 `Video`，不影响计数。
 - **切到后台**（Android / iOS）：应用进入 `hidden` / `paused` 时暂停，回到前台不自动播放；正在加载时进入后台的，加载完成后立即暂停
   （包括后台播完自动打开下一集）。桌面沿用 media_kit 的默认行为（只在 `paused` 时暂停）。后台播放留给 M5。
-- 字幕尚未实现（见 §6.4.6）。
+- **字幕**（M4，方案与安全边界见 §6.4.7）：标题栏（移动端全屏时在顶栏）的字幕菜单列出「关闭」、`content.subtitles` 中的
+  外挂字幕（标签为 `lang`，缺省为“字幕 n”）与 HLS 流自带的字幕轨（字幕播放列表，标签为 libmpv 报告的轨道标题 / 语言，带“（内嵌）”；
+  FFmpeg 不把 `EXT-X-MEDIA` 的 `NAME` 作为标题，实际为 `LANGUAGE`，都没有时为“内嵌字幕 n”）。
+  两者都由页面自己的字幕层（`VideoSubtitleOverlay`）显示，media_kit 的 `SubtitleView` 与 libmpv 自己的字幕渲染都不用；
+  字幕层放在 `Video` 的控件构造器里，因此桌面的窗口全屏路由中同样显示，位于控件之下。
+  - 外挂字幕只在选中时才取（每条每集最多一次，结果缓存到换集），取回后在 Dart 中解析为纯文本的时间轴；加载失败时提示原因并退回“关闭”（不记住），播放不受影响。
+  - **记住选择（按源）**：用户在菜单中选择后，按源记住“关闭”或所选的标签（应用支持目录 `video_subtitles.json`）。
+    换集、重新打开时按记录选择：先找标签相同的外挂字幕，再找名称 / 语言相同的内嵌轨；没有记录或找不到时，选第一条外挂字幕，
+    没有外挂字幕则关闭（内嵌轨只在记录指明时才选）。按源而不是全局：各源的语言标签写法不同（`zh` / `中文` / `简体`），
+    全局记录难以跨源匹配；是否需要字幕也因源而异（有的源是硬字幕）。
+  - **与清晰度 / 换集联动**：换清晰度时外挂字幕保持（同一份时间轴，不重新请求）；内嵌轨属于具体的流，按所选轨道的标签在新流的
+    轨道中重新匹配（轨道列表到达后才选上）。换集时按上一条重新选择。未选内嵌轨时让 libmpv 也不选字幕轨（`sid=no`），不多取字幕分片。
 
 **图片加载（M2，`shared/image/`）**：所有源图片（封面、漫画页）经 `SourceImageLoader` 加载：
 内存 LRU（编码后字节，默认 64 MB）→ 磁盘 LRU（应用缓存目录 `images/`，默认 512 MB，
@@ -790,7 +801,7 @@ media_kit (libmpv / FFmpeg) ── http://127.0.0.1:<port>/<token>/<编号>/<文
   `getApplicationCacheDirectory()/mpv_cache/`（三平台均为应用私有缓存目录），上限由 `demuxer-max-bytes` / `demuxer-max-back-bytes` 决定，
   每次关闭播放器与应用启动时删除该目录。
 - **播放器侧的深度防御**（`shared/video/player_options.dart`）：FFmpeg `protocol_whitelist` 只有 `http,tcp`；关闭 `ytdl` 与外挂字幕 / 音轨 /
-  封面的自动加载。`access-references=no` 不可用——media_kit 打开媒体时自己写临时播放列表再 `loadlist`，该选项会让它失败（实测）。
+  封面的自动加载。`content.subtitles` 的外挂字幕**不经代理、不交给播放器**（不用 `sub-add`），由 Dart 侧取回并显示（§6.4.7）。`access-references=no` 不可用——media_kit 打开媒体时自己写临时播放列表再 `loadlist`，该选项会让它失败（实测）。
 
 限制：
 
@@ -864,7 +875,8 @@ M5 音乐复用同一 libmpv，不再增加体积。预编译库内部的组件�
 2. **原生库更新**：评估自建 / fork 的 libmpv 构建（三平台 LGPL、只留所需组件），替换过期的预编译库。
 3. ~~**播放页完善**~~（已完成，见 §5.2「视频播放」）：选集与线路、上一集 / 下一集（含播完自动下一集）、播放进度记忆与书架 / 历史接入、
    清晰度切换。
-4. **字幕**：`SubtitleRef`（srt / vtt / ass）经代理加载与解析。
+4. ~~**字幕**~~（已完成，见 §5.2「视频播放」与 §6.4.7）：外挂字幕（srt / vtt / ass）由 Dart 侧经源的网络层取回、解析并显示，
+   HLS 字幕轨可选。未做：ASS 样式（位置、颜色、特效）、声明式引擎的 `subtitles` 键。
 5. **DASH**：**已决定（2026-11）：apiVersion 1 不支持**，已写入 source-spec §5。MPD 改写（`BaseURL`、`SegmentTemplate`、`SegmentList` 等）
    涉及代理的地址边界，推迟到有实际需求时单独评估（[#42](https://github.com/Shiroha23/Tsumugi/issues/42)）。
 6. ~~**移动端交互**~~（已完成，见 §5.2「视频播放」）：横竖屏全屏、触控手势、屏幕常亮、切到后台时暂停。
@@ -873,6 +885,49 @@ M5 音乐复用同一 libmpv，不再增加体积。预编译库内部的组件�
    mpv 磁盘缓存评估后保持关闭（§6.4.3「限速」「播放器缓存」）。
 8. ~~**media_kit_video fork**~~（[#49](https://github.com/Shiroha23/Tsumugi/issues/49)）：实测不可行，保留“重新打开”方案（§6.4.2）。
    上游修复 Android 输出初始化与 HLS 的冲突后，可去掉重新打开（升级 media_kit 时在真机上复测）。
+
+#### 6.4.7 字幕（M4，2026-11）
+
+**结论：外挂字幕（`VideoContent.subtitles`）由 Dart 侧经源的网络层取回、校验、解码、解析为纯文本时间轴，由 Flutter 显示；
+不交给 libmpv。** HLS 流自带的字幕轨仍由 libmpv 经代理取得（只有 WebVTT，§6.4.3），但同样只取其文本、由 Flutter 显示。
+
+比较的两条路：
+
+| | (a) Dart 取回、解析、自己渲染 ✅ | (b) 经代理交给 libmpv 作为外挂字幕（`sub-add`） |
+|---|---|---|
+| 网络边界 | 一次性请求，经该源的 `SourceHttpClient`（白名单含每跳重定向、Cookie、默认 headers、限速），与图片同一路径 | 同样经源的网络层，但代理要新增“字幕文件”这一类内容并为它定义识别规则 |
+| 解析不可信内容的代码 | Dart（内存安全），本项目自己的小解析器，有大小 / 条数上限 | FFmpeg 的 srt / webvtt / ass 解复用器与解码器 + **libass**（ASS 事件解析）；`[Fonts]` 中的内嵌字体交给 **FreeType** 解析，绘图指令（`\p`）交给 libass 光栅化。Windows 的 libass / FreeType 版本未记录、停在 2023-09（§6.4.1），无法评估其漏洞 |
+| 编码 | 复用 `core/encoding`，GBK 等有确定的回退规则 | 依赖 mpv 的 `sub-codepage`（uchardet 猜测），无法套用 source-spec §5 的规则 |
+| 显示 | 纯文本；ASS 的位置 / 颜色 / 特效丢失 | media_kit 默认 `libass: false`，本来就只取 `sub-text` 的纯文本由 Flutter 显示，样式同样丢失 |
+
+(b) 在显示效果上没有收益（media_kit 不启用 libass 渲染），却把 ASS 的字体与绘图解析交给过期的原生库，扩大了播放器的攻击面；
+(a) 只多一个小的 Dart 解析器。因此选 (a)，播放器侧保持 `sub-auto=no`、不调用 `sub-add`。
+
+**取回**（`core/subtitle/subtitle_loader.dart`，`shared/video/subtitle_providers.dart`）：用与代理相同的方式为该源新建客户端
+（该源的 `SourceSession`：Cookie、UA、令牌桶），`openStream` 走 `source` 通道（计入 `rateLimit`，每条字幕每集一个请求），
+不经本地代理（代理只服务播放器）。非 2xx、白名单外、人机验证等与其他请求一样失败。`SubtitleRef` 没有 `headers`，只带清单的默认 headers。
+
+**校验**（`core/subtitle/subtitle_parser.dart`，任何一项不满足即拒绝，提示“字幕加载失败”）：
+
+- **大小**：响应体不超过 4 MB（`Content-Length` 超过时不读，读取中超过时中止）。带大量内嵌字体的 ASS 可能因此被拒，内嵌字体本来也不用。
+- **编码**（source-spec §2.2）：`SubtitleRef.charset` → BOM（UTF-8 / UTF-16）→ `Content-Type` 的 charset → 整段是合法 UTF-8 时按 UTF-8 →
+  否则按 GB18030（GBK / GB2312 的超集，中文字幕最常见的非 UTF-8 编码）。Big5、Shift_JIS 等需要源声明 `charset`。
+  解码后含 U+0000 的（二进制、声明错误的 UTF-16 等）拒绝。
+- **格式按内容识别**（不信任 `Content-Type` 与扩展名）：去掉 BOM 与开头空白后，以 `WEBVTT` 开头（其后为空白或结尾）→ vtt；
+  以 `[Script Info]` 开头 → ass（含 SSA）；第一个非空行是序号、下一行是时间轴，或第一行即时间轴 → srt。识别不了的（HTML 错误页、
+  JSON、播放列表等）拒绝；`SubtitleRef.format` 给出时必须与识别结果一致。
+- **内容**：最多 20000 条，单条文字最多 2000 个字符（超出截断）；结束不晚于开始、时间无法解析的条目丢弃；一条都没有时拒绝。
+
+**解析**：只取时间与文字。srt / vtt 去掉标签（`<i>`、`<font …>`、`<c.x>`、`<v 名字>`、时间戳标签，以及 srt 中常见的 `{\an8}`），
+解码 vtt 的字符实体；vtt 跳过 `NOTE` / `STYLE` / `REGION` 块。ass 只读 `[Events]` 中按 `Format:` 定位的 `Dialogue:` 行的
+`Start` / `End` / `Text`，忽略 `[Fonts]` / `[Graphics]`（不解码内嵌数据）与样式；`{…}` 覆盖标签全部去掉，`\N` / `\n` 为换行、
+`\h` 为空格，绘图模式（`\p1` 起到 `\p0`）中的文字（绘图指令）丢弃。同一时刻的多条按开始时间以换行连接显示。
+
+**HLS 字幕轨**：代理只把字幕播放列表中以 `WEBVTT` 开头的分片交给播放器（§6.4.3），libmpv 经 FFmpeg 的 WebVTT 解码器得到文本，
+media_kit（`libass: false`）设 `sub-visibility=no`、只读 `sub-text`。WebVTT 没有字体 / 绘图，这一面在 M4 之前就已存在，字幕功能没有扩大它。
+
+**测试**：`test/fixtures/subtitles/`（自制的 srt / vtt / ass，含 GBK 编码的 srt、带内嵌字体段与绘图指令的 ass、伪装成字幕的 HTML），
+mock 服务器 `/video/subs/*` 与 HLS 字幕播放列表 `hls/master_sub.m3u8`，虚构脚本源 `mock_video_script.json` 的每集都带字幕。
 
 ## 7. 里程碑
 

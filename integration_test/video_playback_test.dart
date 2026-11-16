@@ -18,6 +18,7 @@ import 'package:tsumugi/features/video/player/video_player_page.dart';
 import 'package:tsumugi/shared/history/providers.dart';
 import 'package:tsumugi/shared/video/media_proxy_providers.dart';
 import 'package:tsumugi/shared/video/player_options.dart';
+import 'package:tsumugi/shared/video/subtitle_providers.dart';
 import 'package:tsumugi/sources/network_error_mapping.dart';
 import 'package:tsumugi/sources/registry/providers.dart';
 import 'package:tsumugi/sources/session/source_sessions.dart';
@@ -238,9 +239,11 @@ void main() {
     const itemId = '/video/api/show/2';
     late AppDatabase db;
     late ProviderContainer container;
+    late MemorySubtitlePreferencesStore subtitlePrefs;
 
     setUp(() async {
       db = openTestDatabase();
+      subtitlePrefs = MemorySubtitlePreferencesStore();
       await SourceRegistry(db).importText(
         File('test/fixtures/sources/mock_video_script.json').readAsStringSync(),
       );
@@ -248,6 +251,7 @@ void main() {
         overrides: [
           appDatabaseProvider.overrideWithValue(db),
           sessionPersistenceProvider.overrideWithValue(null),
+          subtitlePreferencesStoreProvider.overrideWithValue(subtitlePrefs),
           sourceFactoriesProvider.overrideWithValue(mockFactories(server)),
           mediaProxyClientProvider.overrideWithValue(
             (manifest) => DioSourceHttpClient(
@@ -352,6 +356,110 @@ void main() {
       );
       expect(latest!.unitId, ep2);
       expect(latest.item.coverHeaders, isNull, reason: '没有封面');
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    // 字幕（architecture §5.2「字幕」、§6.4.7）。
+    String subtitleText(WidgetTester tester) {
+      final f = find.byKey(const ValueKey('video-subtitle-text'));
+      return f.evaluate().isEmpty ? '' : tester.widget<Text>(f).data ?? '';
+    }
+
+    Future<void> chooseSubtitle(WidgetTester tester, String label) async {
+      await tester.tap(find.byTooltip('字幕'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(label).last);
+      await tester.pump();
+    }
+
+    testWidgets('字幕：默认第一条外挂字幕；GBK / ASS；失败退回关闭；HLS 内嵌轨；按源记住', (tester) async {
+      await pumpPage(tester, '/video/api/play/b/1');
+      await pumpUntil(tester, playing, reason: '开始播放');
+
+      // 没有记录：显示第一条外挂字幕（简体中文，UTF-8 带 BOM 的 srt）。
+      await pumpUntil(
+        tester,
+        () => subtitleText(tester).startsWith('第'),
+        reason: '外挂字幕（简体中文）',
+      );
+      expect(subtitlePrefs.values, isEmpty, reason: '自动选择不记住');
+
+      // GBK 编码的 srt（服务器不带 charset）。
+      await chooseSubtitle(tester, '简体中文（GBK）');
+      await pumpUntil(
+        tester,
+        () => subtitleText(tester).startsWith('GBK 字幕：'),
+        reason: 'GBK 字幕',
+      );
+      expect(subtitlePrefs.values[sourceId], const SubtitleLabel('简体中文（GBK）'));
+
+      // 伪装成 srt 的 HTML：提示失败、退回关闭、不记住。
+      await chooseSubtitle(tester, '损坏示例');
+      await pumpUntil(
+        tester,
+        () => find.textContaining('加载失败').evaluate().isNotEmpty,
+        reason: '失败提示',
+      );
+      expect(subtitleText(tester), '');
+      expect(subtitlePrefs.values[sourceId], const SubtitleLabel('简体中文（GBK）'));
+
+      // HLS 流自带的字幕轨（经代理的 WebVTT 分片）。
+      // FFmpeg 不把 EXT-X-MEDIA 的 NAME 作为轨道标题，标签为 LANGUAGE。
+      await chooseSubtitle(tester, 'zh（内嵌）');
+      await pumpUntil(
+        tester,
+        () => subtitleText(tester).startsWith('HLS subtitle'),
+        reason: 'HLS 内嵌字幕',
+      );
+      expect(
+        server.requests.map((r) => r.path),
+        contains('/video/media/hls/sub.m3u8'),
+      );
+      expect(subtitlePrefs.values[sourceId], const SubtitleLabel('zh'));
+
+      // ASS：覆盖标签与绘图指令被去掉。
+      await chooseSubtitle(tester, '日本語');
+      await pumpUntil(
+        tester,
+        () => const {
+          '一つ目, comma kept\nnext line',
+          '二つ目 です',
+          '三つ目',
+        }.contains(subtitleText(tester)),
+        reason: 'ASS 字幕',
+      );
+
+      // 换清晰度：外挂字幕保持。
+      await chooseSubtitle(tester, 'English');
+      await tester.tap(find.byTooltip('清晰度'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('360p').last);
+      await tester.pump();
+      await pumpUntil(tester, playing, reason: '360p 开始播放');
+      await pumpUntil(
+        tester,
+        () => const {
+          'Color bars & a tone',
+          'Second part still',
+          'Last part <end>',
+        }.contains(subtitleText(tester)),
+        reason: '换清晰度后仍显示 English',
+      );
+      expect(subtitlePrefs.values[sourceId], const SubtitleLabel('English'));
+      await tester.pumpWidget(const SizedBox());
+
+      // 重新打开另一集：按记住的标签选择。
+      await pumpPage(tester, '/video/api/play/a/2');
+      await pumpUntil(tester, playing, reason: '另一集开始播放');
+      await pumpUntil(
+        tester,
+        () => const {
+          'Color bars & a tone',
+          'Second part still',
+          'Last part <end>',
+        }.contains(subtitleText(tester)),
+        reason: '按记录选 English',
+      );
       await tester.pumpWidget(const SizedBox());
     });
   });

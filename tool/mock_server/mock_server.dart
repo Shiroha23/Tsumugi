@@ -47,11 +47,11 @@
 /// | `GET /video/search?q=` | 视频搜索（一部虚构剧集） |
 /// | `GET /video/show/1` | 视频详情（6 集，第 5、6 集为诊断用的 MPEG-TS）；种下 `vtoken=1` Cookie |
 /// | `GET /video/show/1/ep/1..6` | 剧集页：`<video><source src=…>` 指向下面的素材 |
-/// | `GET\|HEAD /video/media/<文件>` | `test/fixtures/mock_site/video/` 中的测试视频（`clip.mp4`、`hls/*`），支持 `Range` |
+/// | `GET\|HEAD /video/media/<文件>` | `test/fixtures/mock_site/video/` 中的测试视频（`clip.mp4`、`hls/*`）与字幕（`subs/*`），支持 `Range` |
 /// | `GET\|HEAD /video/protected/<文件>` | 同上，但要求 `Referer` 的路径以 `/video/` 开头（否则 403）；`hls/key.bin` 另需 `vtoken` Cookie |
 /// | `GET /video/api/search?q=` | 视频 JSON 接口（脚本源）：搜索，一部多线路的虚构剧集 |
 /// | `GET /video/api/show/2` | JSON 详情：两条线路（A：需要 Referer / Cookie；B：无保护）各 3 集；种下 `vtoken=1` Cookie |
-/// | `GET /video/api/play/<a\|b>/<1..3>` | JSON 剧集：两个清晰度（`720p` 为 AES-128 HLS，`360p` 为 MP4） |
+/// | `GET /video/api/play/<a\|b>/<1..3>` | JSON 剧集：两个清晰度（`720p` 为带 HLS 字幕轨的 AES-128 HLS，`360p` 为 MP4）与 5 条外挂字幕（含 GBK 编码的 srt 与伪装成 srt 的 HTML） |
 library;
 
 import 'dart:async';
@@ -486,8 +486,21 @@ class MockServer {
       final (_, base) = lines[m[1]]!;
       return _json(res, {
         'streams': [
-          {'url': '${base}hls/master.m3u8', 'type': 'hls', 'quality': '720p'},
+          {
+            'url': '${base}hls/master_sub.m3u8',
+            'type': 'hls',
+            'quality': '720p',
+          },
           {'url': '${base}clip.mp4', 'type': 'mp4', 'quality': '360p'},
+        ],
+        // 外挂字幕（architecture §6.4.7）：GBK 的 srt 不声明编码（按 GB18030 回退），
+        // bad.srt 是伪装成字幕的 HTML（应被拒绝）。
+        'subtitles': [
+          {'url': '${base}subs/zh.srt', 'lang': '简体中文', 'format': 'srt'},
+          {'url': '${base}subs/zh_gbk.srt', 'lang': '简体中文（GBK）'},
+          {'url': '${base}subs/en.vtt', 'lang': 'English', 'format': 'vtt'},
+          {'url': '${base}subs/ja.ass', 'lang': '日本語', 'format': 'ass'},
+          {'url': '${base}subs/bad.srt', 'lang': '损坏示例', 'format': 'srt'},
         ],
       });
     }
@@ -511,12 +524,23 @@ class MockServer {
     'clip.ts': 'video/mp2t',
     'clip_pts0.ts': 'video/mp2t',
     'hls/master.m3u8': 'application/vnd.apple.mpegurl',
+    'hls/master_sub.m3u8': 'application/vnd.apple.mpegurl',
+    'hls/sub.m3u8': 'application/vnd.apple.mpegurl',
+    'hls/sub0.vtt': 'text/vtt',
+    'hls/sub1.vtt': 'text/vtt',
+    'hls/sub2.vtt': 'text/vtt',
     'hls/index.m3u8': 'application/vnd.apple.mpegurl',
     'hls/mixed.m3u8': 'application/vnd.apple.mpegurl',
     'hls/key.bin': 'application/octet-stream',
     'hls/seg0.ts': 'video/mp2t',
     'hls/seg1.ts': 'video/mp2t',
     'hls/seg2.ts': 'video/mp2t',
+    // 字幕：srt / ass 不带 charset（GBK 的按回退规则识别），bad.srt 实为 HTML。
+    'subs/zh.srt': 'text/plain',
+    'subs/zh_gbk.srt': 'text/plain',
+    'subs/en.vtt': 'text/vtt; charset=utf-8',
+    'subs/ja.ass': 'text/plain',
+    'subs/bad.srt': 'text/html',
   };
 
   /// 发送 `video/` 下的测试素材（只认 [_videoFiles] 中的文件名），支持单个 `Range`。

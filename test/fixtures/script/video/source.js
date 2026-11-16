@@ -1,5 +1,5 @@
 // 虚构脚本视频源：JSON 接口来自 tool/mock_server（/video/api/*）。
-// 两条线路（Detail.groups）、每集两个清晰度（StreamRef.quality）。
+// 两条线路（Detail.groups）、每集两个清晰度（StreamRef.quality）与外挂字幕（subtitles）。
 // test/fixtures/sources/mock_video_script.json 内联了本文件，测试会检查两者一致。
 
 export async function search(keyword, page) {
@@ -35,6 +35,11 @@ export async function content(unitId) {
       url: s.url,
       type: s.type,
       quality: s.quality,
+    })),
+    subtitles: (r.subtitles || []).map((s) => ({
+      url: s.url,
+      lang: s.lang,
+      format: s.format,
     })),
   };
 }

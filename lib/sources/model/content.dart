@@ -49,6 +49,9 @@ abstract class SubtitleRef with _$SubtitleRef {
     required String url,
     String? lang,
     String? format,
+
+    /// 字幕文件的字符集（source-spec §2.2「视频字幕」），缺省时按 BOM / Content-Type / UTF-8 / GB18030。
+    String? charset,
   }) = _SubtitleRef;
 
   factory SubtitleRef.fromJson(Map<String, dynamic> json) =>

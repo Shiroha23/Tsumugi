@@ -16,6 +16,13 @@
 | `hls/index.m3u8`、`hls/seg0-2.ts` | 同样的画面（660 Hz 音），3 个 2 s 的 MPEG-TS 分片，AES-128 加密 |
 | `hls/mixed.m3u8` | 手写：没有密钥的加密分片（密文无法识别为媒体）、白名单外分片、重定向到白名单外的分片、返回 JSON 文本的“分片”（测试代理的拒绝路径） |
 | `hls/key.bin` | AES-128 密钥：ASCII `tsumugi-test-key`（16 字节，虚构，仅供测试），IV = 1 |
+| `hls/master_sub.m3u8` | 手写：同一 `index.m3u8`，另带一条字幕轨（`EXT-X-MEDIA:TYPE=SUBTITLES`，`NAME="HLS Chinese"`，`LANGUAGE="zh"`） |
+| `hls/sub.m3u8`、`hls/sub0-2.vtt` | 手写：字幕播放列表与 3 个 2 s 的 WebVTT 分片（`X-TIMESTAMP-MAP` 对应分片的 1.4 s 起始时间戳） |
+| `subs/zh.srt` | 手写：UTF-8（带 BOM）、CRLF 的 srt，含 `<i>` 与 `{\an8}` 标签 |
+| `subs/zh_gbk.srt` | 手写：GBK 编码（无 BOM，服务器不带 charset）的 srt |
+| `subs/en.vtt` | 手写：WebVTT，含头部行、`NOTE` / `STYLE` 块、标识、设置、`<v>` / `<c>` / 时间戳标签与字符实体 |
+| `subs/ja.ass` | 手写：ASS，含覆盖标签、`\N` / `\h`、绘图指令（`\p1`…`\p0`）、`Comment`、时间倒置的条目与虚构的 `[Fonts]` 段 |
+| `subs/bad.srt` | 手写：伪装成 srt 的 HTML 错误页（应被拒绝） |
 
 生成命令（FFmpeg 8.1，Windows；H.264 编码器 `h264_mf` 为 Windows 自带的 Media Foundation，
 其他平台可换成 `libx264`，产物不同但等价）：
