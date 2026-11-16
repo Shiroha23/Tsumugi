@@ -709,9 +709,26 @@ media_kit (libmpv / FFmpeg) ── http://127.0.0.1:<port>/<token>/<编号>/<文
   FLV、Ogg、ID3 / ADTS / MPEG 音频、AC-3、FLAC、AVI / WAV），开头一段中要有控制字节，且不能以 UTF-16 / UTF-32 字节序标记开头；
   字幕播放列表中的分片必须以 `WEBVTT` 开头。识别不了的一律 415——HLS 以外的 m3u / pls / DASH MPD / ffconcat / EDL、HTML 错误页、
   任何编码的文本都在此列。子播放列表必须以 `#EXTM3U` 开头，否则 502。从中间开始的区间请求先单独取资源开头 1 KB 识别（每个地址一次）。
-- **类型与文件名由代理决定**：媒体一律 `application/octet-stream`、字幕 `text/vtt`、播放列表 `application/vnd.apple.mpegurl`；
-  代理地址的文件名只保留常见媒体扩展名（`media.ts`、`media.mp4`……，其余为 `media.bin`），播放器不会按上游的类型或扩展名把内容当成
-  其他播放列表格式。
+- **类型与文件名由代理决定**：媒体一律 `application/octet-stream`、字幕 `text/vtt`、播放列表 `application/vnd.apple.mpegurl`，
+  不透传上游的类型。代理地址中的文件名不参与查找（只按令牌与编号），只给播放器看；扩展名都是媒体或 HLS 的扩展名，
+  播放器不会按扩展名把内容当成其他播放列表格式：
+  - 子播放列表 `index.m3u8`，密钥 `key.bin`，字幕分片 `sub.vtt`。
+  - **HLS 分片按内容命名**（同一个子播放列表中的分片、初始化分片与部分分片用同一个扩展名）：改写子播放列表时分片还没取，
+    代理先取该列表第一个媒体地址（`EXT-X-MAP` 或第一个分片）的开头 1 KB（AES-128 加密的取整段并解密，明文进上述缓存，
+    播放器随后取同一分片不再请求上游），按识别出的容器决定扩展名：MPEG-TS → `ts`，ISO-BMFF / fMP4 → `mp4`，ADTS（含 ID3 前缀的
+    打包音频）→ `aac`，MPEG 音频 → `mp3`，AC-3 → `ac3`，E-AC-3 → `eac3`，Matroska / WebM → `mkv`，Ogg → `ogg`，FLAC → `flac`，
+    AVI → `avi`，WAV → `wav`，FLV → `flv`。结果记在该播放列表上（只在识别成功时记下，直播刷新不再探测）；
+    探测失败（上游错误、内容无法识别）时用 `ts`，分片本身照常按上一条检查。探测走 `media` 通道，计入该播放列表请求的 `prepareTimeout`。
+  - 根地址仍按上游扩展名取常见媒体扩展名（`media.mp4` 等，`.m3u8` / `.m3u` 为 `index.m3u8`，其余 `media.bin`）：根地址不经 HLS 的
+    分片检查，FFmpeg 按内容识别。
+  - **为什么按内容**：FFmpeg 7.1.1 起 HLS 解复用器默认 `extension_picky=1`（`libavformat/hls.c` 的 `test_segment()`，n7.1.1 / n8.0.1
+    核对）：每个分片地址（播放列表中的地址，不看重定向后的）的扩展名必须在 `allowed_segment_extensions`（n8.0.1：`3gp,aac,avi,ac3,
+    eac3,flac,mkv,m3u8,m4a,m4s,m4v,mpg,mov,mp2,mp3,mp4,mpeg,mpegts,ogg,ogv,oga,ts,vob,vtt,wav,webvtt,cmfv,cmfa,ec3,fmp4,html`）中，
+    并且与按**该列表第一个分片**探测出的格式匹配——mpegts 接受 `ts,m2t,m2ts,mts,mpg,m4s,mpeg,mpegts`；mov/mp4 接受自身扩展名
+    （含 `mp4`）及上述 TS 系扩展名；aac 只接受 `aac`（n8.0 起也接受 TS 系）；mp3 为 `mp2,mp3,m2a,mpa`；eac3 为 `eac3,ec3`；
+    matroska 为 `mkv,…,webm`；webvtt 为 `vtt`。因此同一列表内用同一个扩展名。`flv` 不在允许列表中，`wav` 解复用器没有扩展名，
+    这两种分片在新版上无论叫什么都会被拒（HLS 中本不常见）。FFmpeg 6.0 只对 `file` 协议检查扩展名，按内容命名对它没有影响
+    （探测时扩展名只是加分项，与内容一致）。
 - **Range / HEAD**：媒体的 `Range` 原样转发（根地址的 `bytes=0-` 不转发，以便识别是否为播放列表；播放列表、密钥、加密分片不转发给上游）。
   HEAD 按 GET 取上游后只返回代理自己的响应头（播放列表为改写后的长度）。加密分片的 `Range` 由代理按明文处理（见上）。上游请求固定 `Accept-Encoding: identity`（`StreamRef.headers`
   不能覆盖）；上游仍压缩时只接受整段的 gzip（由 dart:io 解压，不带长度），其他编码 502。只透传 `Content-Length` / `Content-Range` /
@@ -756,8 +773,9 @@ media_kit (libmpv / FFmpeg) ── http://127.0.0.1:<port>/<token>/<编号>/<文
 - **DASH 暂不支持**（MPD 中 `BaseURL` / `SegmentTemplate` 等地址需要另外改写）：播放页跳过 `type: dash` 的流，代理拒绝 MPD。
 - AES-128 与 `EXT-X-BYTERANGE` 同时使用、加密的低延迟部分分片（`EXT-X-PART`）暂不支持（对应地址总是 403）。
 - 伪装成图片等其他格式的分片（文件头不是媒体容器）会被拒绝。
-- 新版 FFmpeg（7.1+）对 HLS 分片有扩展名检查：代理地址只用常见媒体扩展名，扩展名不常见的分片名为 `media.bin`，在新版 FFmpeg 上
-  可能被拒（当前 Windows 的 FFmpeg 为 2023 年的版本，不受影响）。
+- 新版 FFmpeg（7.1.1+）的 HLS 分片扩展名检查：代理按每个子播放列表第一个媒体地址的内容命名（见上）。同一列表中容器不一致的分片
+  （例如 `EXT-X-DISCONTINUITY` 前后换了容器）、首个分片探测失败而实际不是 TS / fMP4 的列表、FLV / WAV 分片，在新版上仍会被拒；
+  FFmpeg 本身也按第一个分片的格式检查整个列表。当前三平台的 FFmpeg 为 6.0，不受影响。
 - 代理只监听本机回环地址，其他本机程序没有令牌就无法使用。
 
 #### 6.4.4 安装包体积

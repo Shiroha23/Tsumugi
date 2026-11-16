@@ -543,7 +543,8 @@ void main() {
       final hls = await player.text(session.url); // 换成了播放列表
       expect(hls, startsWith('#EXTM3U'));
       expect(counting.acquiredWith(limit), 2);
-      expect(counting.acquiredWith(SourceSession.mediaRateLimit), 0);
+      // 改写时探测第一个分片的内容（决定分片扩展名）：分片走媒体配额。
+      expect(counting.acquiredWith(SourceSession.mediaRateLimit), 1);
     });
 
     test('上游换了内容：从开头开始的响应每次都重新识别', () async {
@@ -571,7 +572,148 @@ void main() {
           utf8.encode('#EXTM3U\n#EXTINF:1,\nhttp://outside.example.net/x.ts\n'),
         );
       final playlist = await player.text(openCrafted('/list.m3u8').url);
-      expect((await player.get(proxiedUris(playlist).single)).$1, 415);
+      final nested = proxiedUris(playlist).single;
+      // 探测不出媒体：扩展名用 ts（不是上游的 m3u8），请求时照常拒绝。
+      expect(nested.pathSegments.last, 'media.ts');
+      expect((await player.get(nested)).$1, 415);
+    });
+
+    group('分片扩展名按内容决定（FFmpeg 7.1.1+ 的 extension_picky）', () {
+      List<String> names(String playlist) =>
+          proxiedUris(playlist).map((u) => u.pathSegments.last).toList();
+
+      test('fMP4（EXT-X-MAP）：初始化分片与分片都是 .mp4，不看上游扩展名', () async {
+        final moof = Uint8List.fromList([
+          0, 0, 0, 0x10, ...ascii.encode('moof'), 0, 0, 0, 8, //
+          ...ascii.encode('mdat'),
+        ]);
+        up
+          ..bytes(
+            '/fmp4.m3u8',
+            utf8.encode(
+              '#EXTM3U\n#EXT-X-MAP:URI="init.bin"\n'
+              '#EXTINF:1,\na.ts\n#EXTINF:1,\nb?x=1\n#EXT-X-ENDLIST\n',
+            ),
+          )
+          ..bytes('/init.bin', fakeMp4())
+          ..bytes('/a.ts', moof)
+          ..bytes('/b', moof);
+        final playlist = await player.text(openCrafted('/fmp4.m3u8').url);
+        expect(names(playlist), ['media.mp4', 'media.mp4', 'media.mp4']);
+        for (final u in proxiedUris(playlist)) {
+          expect((await player.get(u)).$1, 200);
+        }
+      });
+
+      test('TS 内容在上游名为 .m3u8 / .bin 时仍为 .ts', () async {
+        up
+          ..bytes(
+            '/ts.m3u8',
+            utf8.encode(
+              '#EXTM3U\n#EXTINF:1,\nseg.m3u8\n#EXTINF:1,\nseg2.bin\n',
+            ),
+          )
+          ..bytes('/seg.m3u8', fixture('clip.ts'))
+          ..bytes('/seg2.bin', fixture('clip.ts'));
+        final playlist = await player.text(openCrafted('/ts.m3u8').url);
+        expect(names(playlist), ['media.ts', 'media.ts']);
+      });
+
+      test('ADTS 音频（含 ID3 时间戳）为 .aac，MPEG 音频为 .mp3', () async {
+        final adts = [0xFF, 0xF1, 0x50, 0x80, 0x02, 0x1F, 0xFC, 0, 0, 0];
+        final id3 = [
+          ...ascii.encode('ID3'), 4, 0, 0, 0, 0, 0, 4, //
+          0, 0, 0, 0,
+        ];
+        up
+          ..bytes(
+            '/audio.m3u8',
+            utf8.encode('#EXTM3U\n#EXTINF:1,\na0\n#EXTINF:1,\na1\n'),
+          )
+          ..bytes('/a0', [...id3, ...adts])
+          ..bytes('/mp3.m3u8', utf8.encode('#EXTM3U\n#EXTINF:1,\nm0.aac\n'))
+          ..bytes('/m0.aac', [0xFF, 0xFB, 0x90, 0x64, 0, 0, 0, 0]);
+        expect(names(await player.text(openCrafted('/audio.m3u8').url)), [
+          'media.aac',
+          'media.aac',
+        ]);
+        expect(names(await player.text(openCrafted('/mp3.m3u8').url)), [
+          'media.mp3',
+        ]);
+      });
+
+      test('每个播放列表只探测一次：刷新沿用；第一个分片同时确认，播放器取它时不再探测', () async {
+        final requests = <String?>[];
+        up
+          ..bytes(
+            '/live.m3u8',
+            utf8.encode('#EXTM3U\n#EXTINF:1,\ns0\n#EXTINF:1,\ns1\n'),
+          )
+          ..routes['/s0'] = (req) {
+            requests.add(req.headers.value('range'));
+            req.response.add(fakeMp4());
+            return req.response.close();
+          };
+        final session = openCrafted('/live.m3u8');
+        final first = await player.text(session.url);
+        final second = await player.text(session.url);
+        expect(names(first), ['media.mp4', 'media.mp4']);
+        expect(proxiedUris(second), proxiedUris(first));
+        expect(requests, ['bytes=0-1023']);
+        // 已确认：从中间开始的区间请求不再单独探测开头。
+        final (status, _, _) = await player.get(
+          proxiedUris(first).first,
+          headers: {'range': 'bytes=100-'},
+        );
+        expect(status, anyOf(200, 206));
+        expect(requests, ['bytes=0-1023', 'bytes=100-']);
+      });
+
+      test('探测失败时用 .ts，下次刷新重新探测', () async {
+        var ready = false;
+        up
+          ..bytes('/later.m3u8', utf8.encode('#EXTM3U\n#EXTINF:1,\nx\n'))
+          ..routes['/x'] = (req) {
+            if (ready) {
+              req.response.add(fakeMp4());
+            } else {
+              req.response.statusCode = 404;
+            }
+            return req.response.close();
+          };
+        final session = openCrafted('/later.m3u8');
+        expect(names(await player.text(session.url)), ['media.ts']);
+        ready = true;
+        expect(names(await player.text(session.url)), ['media.mp4']);
+      });
+
+      test('主播放列表与字幕播放列表不探测', () async {
+        var probed = 0;
+        up
+          ..bytes(
+            '/m.m3u8',
+            utf8.encode(
+              '#EXTM3U\n'
+              '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="s",NAME="ja",URI="s.m3u8"\n'
+              '#EXT-X-STREAM-INF:BANDWIDTH=1,SUBTITLES="s"\nv.m3u8\n',
+            ),
+          )
+          ..bytes('/s.m3u8', utf8.encode('#EXTM3U\n#EXTINF:1,\n0.vtt\n'))
+          ..routes['/v.m3u8'] = (req) {
+            probed++;
+            req.response.statusCode = 404;
+            return req.response.close();
+          }
+          ..routes['/0.vtt'] = (req) {
+            probed++;
+            req.response.add(utf8.encode('WEBVTT\n'));
+            return req.response.close();
+          };
+        final master = await player.text(openCrafted('/m.m3u8').url);
+        final subs = await player.text(proxiedUris(master).first);
+        expect(names(subs), ['sub.vtt']);
+        expect(probed, 0);
+      });
     });
 
     test('字幕播放列表中的 WebVTT 可以取得，其他文本不行', () async {
