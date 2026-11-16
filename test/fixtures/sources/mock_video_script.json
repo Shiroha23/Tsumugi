@@ -1,0 +1,16 @@
+{
+  "apiVersion": 1,
+  "id": "com.example.mock.video.script",
+  "name": "Mock 视频（脚本，多线路）",
+  "type": "video",
+  "version": "1.0.0",
+  "author": "tsumugi",
+  "lang": "zh",
+  "description": "虚构源（脚本内联自 test/fixtures/script/video/source.js），配合 tool/mock_server 的 /video/api/* 使用：两条线路、每集两个清晰度。",
+  "baseUrl": "http://127.0.0.1:8080",
+  "headers": {
+    "Referer": "http://127.0.0.1:8080/video/"
+  },
+  "engine": "script",
+  "script": "// 虚构脚本视频源：JSON 接口来自 tool/mock_server（/video/api/*）。\n// 两条线路（Detail.groups）、每集两个清晰度（StreamRef.quality）。\n// test/fixtures/sources/mock_video_script.json 内联了本文件，测试会检查两者一致。\n\nexport async function search(keyword, page) {\n  if (page > 1) return { items: [], hasMore: false };\n  const r = await tsumugi.http.getJson(\n    `/video/api/search?q=${encodeURIComponent(keyword)}`,\n  );\n  return {\n    items: r.list.map((x) => ({ id: x.id, title: x.title, subtitle: x.note })),\n    hasMore: false,\n  };\n}\n\nexport async function detail(id) {\n  const r = await tsumugi.http.getJson(id);\n  const groups = r.lines.map((line) => ({\n    name: line.name,\n    units: line.episodes.map((e, i) => ({ id: e.id, title: e.title, index: i })),\n  }));\n  return {\n    id,\n    title: r.title,\n    description: r.intro,\n    units: groups[0].units,\n    groups,\n  };\n}\n\nexport async function content(unitId) {\n  const r = await tsumugi.http.getJson(unitId);\n  return {\n    streams: r.streams.map((s) => ({\n      url: s.url,\n      type: s.type,\n      quality: s.quality,\n    })),\n  };\n}\n"
+}

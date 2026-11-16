@@ -5,6 +5,7 @@ import '../../core/network/media/media_proxy.dart';
 import '../../core/network/network_exception.dart';
 import '../../core/network/source_http_client.dart';
 import '../../sources/model/content.dart';
+import '../../sources/model/manifest.dart';
 import '../../sources/registry/providers.dart';
 import '../../sources/session/source_sessions.dart';
 import '../../sources/source.dart';
@@ -40,6 +41,13 @@ class ProxiedStream {
   }
 }
 
+/// 代理请求上游所用的客户端：使用该源 `SourceSession`（Cookie、UA）的新客户端。
+/// 集成测试覆盖它，把请求接到 mock 服务器。
+final mediaProxyClientProvider =
+    Provider<SourceHttpClient Function(SourceManifest manifest)>(
+      (ref) => ref.read(sourceSessionsProvider).clientFor,
+    );
+
 /// 为某个源的 [stream] 建立代理会话。
 ///
 /// 每次播放新建一个使用该源 `SourceSession`（Cookie、UA、令牌桶）的客户端，因此白名单、默认 headers
@@ -63,7 +71,7 @@ final openProxiedStreamProvider =
           throw SourceException(SourceErrorCode.parse, '无效的视频地址');
         }
         final proxy = await ref.read(mediaProxyProvider.future);
-        final client = ref.read(sourceSessionsProvider).clientFor(manifest);
+        final client = ref.read(mediaProxyClientProvider)(manifest);
         try {
           final session = proxy.open(
             client: client,

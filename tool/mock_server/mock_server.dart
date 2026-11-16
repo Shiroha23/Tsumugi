@@ -49,6 +49,9 @@
 /// | `GET /video/show/1/ep/1..6` | 剧集页：`<video><source src=…>` 指向下面的素材 |
 /// | `GET\|HEAD /video/media/<文件>` | `test/fixtures/mock_site/video/` 中的测试视频（`clip.mp4`、`hls/*`），支持 `Range` |
 /// | `GET\|HEAD /video/protected/<文件>` | 同上，但要求 `Referer` 的路径以 `/video/` 开头（否则 403）；`hls/key.bin` 另需 `vtoken` Cookie |
+/// | `GET /video/api/search?q=` | 视频 JSON 接口（脚本源）：搜索，一部多线路的虚构剧集 |
+/// | `GET /video/api/show/2` | JSON 详情：两条线路（A：需要 Referer / Cookie；B：无保护）各 3 集；种下 `vtoken=1` Cookie |
+/// | `GET /video/api/play/<a\|b>/<1..3>` | JSON 剧集：两个清晰度（`720p` 为 AES-128 HLS，`360p` 为 MP4） |
 library;
 
 import 'dart:async';
@@ -239,6 +242,7 @@ class MockServer {
       }
       return _video(req, file);
     }
+    if (path.startsWith('/video/api/')) return _videoApi(req, path);
     if (segments.length == 5 &&
         path.startsWith('/video/show/1/ep/') &&
         _episodes[segments[4]] != null) {
@@ -438,6 +442,55 @@ class MockServer {
       return res.close();
     }
 
+    res.statusCode = HttpStatus.notFound;
+    return _json(res, {'error': 'not found', 'path': path});
+  }
+
+  /// 多线路 / 多清晰度的 JSON 接口（`mock_video_script.json` 使用）。
+  Future<void> _videoApi(HttpRequest req, String path) {
+    final res = req.response;
+    const lines = {
+      'a': ('线路 A', '/video/protected/'),
+      'b': ('线路 B', '/video/media/'),
+    };
+    if (path == '/video/api/search') {
+      return _json(res, {
+        'list': [
+          {
+            'id': '/video/api/show/2',
+            'title': '测试彩条（多线路）',
+            'note': '2 条线路 × 3 集，每集 2 个清晰度',
+          },
+        ],
+      });
+    }
+    if (path == '/video/api/show/2') {
+      res.cookies.add(Cookie('vtoken', '1')..path = '/');
+      return _json(res, {
+        'title': '测试彩条（多线路）',
+        'intro': '虚构剧集：线路 A 需要 Referer 与 Cookie，线路 B 不需要。',
+        'lines': [
+          for (final MapEntry(:key, value: (name, _)) in lines.entries)
+            {
+              'name': name,
+              'episodes': [
+                for (var i = 1; i <= 3; i++)
+                  {'id': '/video/api/play/$key/$i', 'title': '第 $i 集'},
+              ],
+            },
+        ],
+      });
+    }
+    final m = RegExp(r'^/video/api/play/([ab])/([1-3])$').firstMatch(path);
+    if (m != null) {
+      final (_, base) = lines[m[1]]!;
+      return _json(res, {
+        'streams': [
+          {'url': '${base}hls/master.m3u8', 'type': 'hls', 'quality': '720p'},
+          {'url': '${base}clip.mp4', 'type': 'mp4', 'quality': '360p'},
+        ],
+      });
+    }
     res.statusCode = HttpStatus.notFound;
     return _json(res, {'error': 'not found', 'path': path});
   }
