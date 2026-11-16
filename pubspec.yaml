@@ -49,5 +49,15 @@ dev_dependencies:
   integration_test:
     sdk: flutter
 
+dependency_overrides:
+  # media_kit_video 2.0.1 + 一处补丁（#39，architecture §6.4.2）：Android 视频输出就绪时，
+  # 位置仍为 0 或已播完则不 seek。fork 在维护者账号下，只改 widListener；
+  # 上游发布包含修复的版本后删除这里，回到 pub.dev 的正式版本。
+  media_kit_video:
+    git:
+      url: https://github.com/Shiroha23/media-kit.git
+      ref: c644ac662d013dc2435c3b999f6f9189f5499f07
+      path: media_kit_video
+
 flutter:
   uses-material-design: true

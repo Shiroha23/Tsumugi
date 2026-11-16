@@ -66,83 +66,59 @@ const videoPlayerMpvOptions = {
   'cache-on-disk': 'no',
 };
 
-/// 打开 [url]，视频输出就绪后从头开始播放。
+/// 从 [start] 开始播放 [url]（[start] 为 0 时从头开始；mpv 的 `start` 选项，media_kit 在 unload 时清除）。
 ///
-/// Android 上 media_kit 在拿到视频参数之后才创建 Surface；Surface 到达时它会重新初始化输出并
-/// seek 到“当前位置”。这次 seek 落在 HLS 解复用器初始化期间，真机上常常停在分片边界或结尾
-/// （首个进度 2.05 / 4.09 / 6.04 s），之后再 seek 到 0 也不生效（Windows 上同样的 seek 正常，无法复现）。
-/// 因此不靠 seek 修正，而是：
-///
-/// 1. 暂停状态打开；
-/// 2. 打开时视频输出尚未就绪的，等它就绪（最多 [timeout]）并稍候 [settle]，让上述重新初始化完成；
-/// 3. **重新打开**同一地址：Surface 尺寸不变，media_kit 不会再创建 Surface、也不会再 seek，
-///    新的解复用器从头读取（代理缓存了解密后的分片，几乎不增加网络请求）；
-/// 4. 开始播放。
-///
-/// 打开时视频输出已就绪（如 Windows）则不重新打开。[alwaysReopen] 只用于在桌面上测试第 3 步。
-/// [log] 接收每一步的状态（诊断用）。
-Future<void> openWhenVideoReady(
+/// Android 上 media_kit 拿到视频参数后才创建 Surface，到达时重新初始化输出并 seek 到“当前位置”；
+/// HLS 初始化期间的这次 seek 曾让播放停在分片边界或结尾。依赖的 media_kit_video fork 在位置 ≤ 0
+/// 或已播完时不执行这次 seek（#39，architecture §6.4.2），因此这里直接打开，不再等待视频输出或重新打开。
+Future<void> openVideo(
   Player player,
-  VideoController video,
   String url, {
-  Duration timeout = const Duration(seconds: 5),
-  Duration settle = const Duration(milliseconds: 500),
-  bool Function()? stillCurrent,
-  void Function(String message)? log,
-  bool alwaysReopen = false,
-}) async {
-  bool current() => stillCurrent == null || stillCurrent();
-  String state() =>
-      'position=${player.state.position} duration=${player.state.duration} '
-      'completed=${player.state.completed}';
+  Duration start = Duration.zero,
+}) => player.open(Media(url, start: start > Duration.zero ? start : null));
 
-  final started = DateTime.now();
-  final outputWasReady = video.id.value != null;
-  final reopen = !outputWasReady || alwaysReopen;
-  await player.open(Media(url), play: false);
-  if (reopen) {
-    await waitForVideoOutput(video.id, timeout: timeout);
-    if (!current()) return;
-    await Future<void>.delayed(settle);
-    if (!current()) return;
-    await player.open(Media(url), play: false);
-    if (!current()) return;
-  }
-  if (needsRestart(player.state.position, completed: player.state.completed)) {
-    // 重新打开后仍不在开头（不应出现）。
-    log?.call('unexpected start position: ${state()}');
-  }
-  await player.play();
-  log?.call(
-    'started: reopened=$reopen '
-    '${DateTime.now().difference(started).inMilliseconds} ms ${state()}',
-  );
-}
-
-/// 是否已离开开头：已到结尾，或位置离开头超过 [tolerance]（诊断用）。
-bool needsRestart(
-  Duration position, {
-  required bool completed,
-  Duration tolerance = const Duration(milliseconds: 500),
-}) => completed || position > tolerance;
-
-/// 等待视频输出就绪（[id] 为纹理编号，Android 上与 Surface 一同到达）；
-/// 超过 [timeout]（例如只有音轨的流）时直接返回。
-Future<void> waitForVideoOutput(
-  ValueListenable<int?> id, {
-  Duration timeout = const Duration(seconds: 5),
+/// 等到播放器真正从 [start] 开始播放（播放页在此之前用加载遮罩盖住画面并隐藏控件）：
+/// 位置越过 0 且不早于 `start - tolerance`。播放完成、出错（[failed]）或超过 [timeout]
+/// 时同样返回，遮罩不会一直留着。须在 `open` 之前调用，以免漏掉事件。
+Future<void> waitForPlaybackStart({
+  required Stream<Duration> position,
+  required Stream<bool> completed,
+  Stream<Object?>? failed,
+  Duration start = Duration.zero,
+  Duration tolerance = const Duration(seconds: 2),
+  Duration timeout = const Duration(seconds: 20),
 }) {
-  if (id.value != null) return Future.value();
-  final ready = Completer<void>();
-  void listener() {
-    if (id.value != null && !ready.isCompleted) ready.complete();
+  final done = Completer<void>();
+  final subscriptions = <StreamSubscription<Object?>>[];
+  void finish([Object? _]) {
+    if (!done.isCompleted) done.complete();
   }
 
-  id.addListener(listener);
-  return ready.future
-      .timeout(timeout, onTimeout: () {})
-      .whenComplete(() => id.removeListener(listener));
+  subscriptions
+    ..add(
+      position.listen((p) {
+        if (hasStartedAt(p, start, tolerance: tolerance)) finish();
+      }),
+    )
+    ..add(
+      completed.listen((c) {
+        if (c) finish();
+      }),
+    );
+  if (failed != null) subscriptions.add(failed.listen(finish));
+  return done.future.timeout(timeout, onTimeout: () {}).whenComplete(() {
+    for (final s in subscriptions) {
+      s.cancel().ignore();
+    }
+  });
 }
+
+/// 位置 [p] 是否表示已从 [start] 开始播放（见 [waitForPlaybackStart]）。
+bool hasStartedAt(
+  Duration p,
+  Duration start, {
+  Duration tolerance = const Duration(seconds: 2),
+}) => p > Duration.zero && p >= start - tolerance;
 
 /// 应用 [videoPlayerMpvOptions]。
 Future<void> hardenVideoPlayer(Player player) async {
