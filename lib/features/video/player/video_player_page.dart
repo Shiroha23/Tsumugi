@@ -254,6 +254,9 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
 
   /// 取当前剧集的 content 并播放。
   Future<void> _load({Duration? start}) async {
+    // 上一集的流在新一集的 content 到达前不可再选（否则会以旧流播放、进度记到新一集）。
+    _streams = const [];
+    _streamIndex = -1;
     final generation = _begin();
     try {
       final source = await ref.read(
