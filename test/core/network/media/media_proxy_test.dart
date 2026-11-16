@@ -9,6 +9,7 @@ import 'package:tsumugi/core/network/dio_source_http_client.dart';
 import 'package:tsumugi/core/network/media/media_proxy.dart';
 import 'package:tsumugi/core/network/network_exception.dart';
 import 'package:tsumugi/core/network/source_http_client.dart';
+import 'package:tsumugi/core/network/source_session.dart';
 
 import '../mock_support.dart';
 
@@ -74,12 +75,17 @@ class _Upstream {
     return req.response.close();
   };
 
-  DioSourceHttpClient client() => DioSourceHttpClient(
+  DioSourceHttpClient client({
+    RateLimitConfig? rateLimit,
+    SourceSession? session,
+  }) => DioSourceHttpClient(
+    session: session,
     SourceNetworkConfig(
       sourceId: 'com.example.crafted',
       baseUrl: Uri.parse('http://video.example.com'),
       timeout: const Duration(seconds: 5),
       retryBaseDelay: const Duration(milliseconds: 10),
+      rateLimit: rateLimit,
     ),
     adapter: IOHttpClientAdapter(
       createHttpClient: () =>
@@ -386,6 +392,93 @@ void main() {
     });
   });
 
+  group('限速通道（source-spec §5）', () {
+    test('rateLimit 很小时：播放列表计入 rateLimit，密钥与分片走媒体配额照常取得', () async {
+      // 每 30 s 2 个：正好够主 / 子播放列表，之后再计入 rateLimit 的请求都要排队。
+      const limit = RateLimitConfig(requests: 2, per: Duration(seconds: 30));
+      final counting = CountingSession();
+      final limited = mockClient(
+        server,
+        sourceId: 'com.example.video',
+        baseUrl: 'http://video.example.com',
+        allowedHosts: const ['cdn.example.com'],
+        rateLimit: limit,
+        session: counting.session,
+      );
+      addTearDown(limited.close);
+      final session = proxy.open(
+        client: limited,
+        url: Uri.parse('http://video.example.com/video/media/hls/master.m3u8'),
+      );
+
+      final sw = Stopwatch()..start();
+      final master = await player.text(session.url);
+      final media = await player.text(proxiedUris(master).single);
+      final segments = proxiedUris(media);
+      // 并发请求全部分片（含首个分片触发的取密钥）。
+      final results = await Future.wait([
+        for (final u in segments) player.get(u),
+      ]);
+      for (final (status, _, _) in results) {
+        expect(status, 200);
+      }
+      expect(sw.elapsedMilliseconds, lessThan(10000));
+      expect(counting.acquiredWith(limit), 2); // master、index
+      // 密钥 + 3 个分片
+      expect(counting.acquiredWith(SourceSession.mediaRateLimit), 4);
+
+      // 与源实例共用同一个桶：此时源的请求要排队。
+      final cancel = NetCancellation();
+      final queued = limited.request(
+        NetRequest('/echo?q=after-play', cancellation: cancel),
+      );
+      var done = false;
+      queued.then((_) => done = true, onError: (Object _) => done = true);
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(done, isFalse);
+      cancel.cancel();
+      await expectLater(queued, throwsA(isA<NetworkException>()));
+    });
+
+    test('单文件：确认是媒体之前计入 rateLimit，之后的区间请求走媒体配额', () async {
+      const limit = RateLimitConfig(requests: 100, per: Duration(seconds: 1));
+      final counting = CountingSession();
+      final limited = mockClient(
+        server,
+        sourceId: 'com.example.video',
+        baseUrl: 'http://video.example.com',
+        rateLimit: limit,
+        session: counting.session,
+      );
+      addTearDown(limited.close);
+
+      // 从中间开始：先探测开头（未确认 → rateLimit），再取区间（已确认 → 媒体配额）。
+      final s1 = proxy.open(
+        client: limited,
+        url: Uri.parse('http://video.example.com/video/media/clip.mp4'),
+      );
+      expect(
+        (await player.get(s1.url, headers: {'range': 'bytes=100-199'})).$1,
+        206,
+      );
+      expect(counting.acquiredWith(limit), 1);
+      expect(counting.acquiredWith(SourceSession.mediaRateLimit), 1);
+
+      // 从开头开始：首个请求未确认 → rateLimit；之后跳转的区间请求 → 媒体配额。
+      final s2 = proxy.open(
+        client: limited,
+        url: Uri.parse('http://video.example.com/video/media/clip.mp4'),
+      );
+      expect((await player.get(s2.url)).$1, 200);
+      expect(counting.acquiredWith(limit), 2);
+      for (final range in ['bytes=4-7', 'bytes=500-']) {
+        expect((await player.get(s2.url, headers: {'range': range})).$1, 206);
+      }
+      expect(counting.acquiredWith(limit), 2);
+      expect(counting.acquiredWith(SourceSession.mediaRateLimit), 3);
+    });
+  });
+
   group('构造的上游响应', () {
     late _Upstream up;
     late DioSourceHttpClient crafted;
@@ -425,6 +518,32 @@ void main() {
       // 根地址是 HLS 播放列表时照常改写（白名单外的地址交给代理判断）。
       final hls = await player.text(openCrafted('/fake.mp4').url);
       expect(hls, isNot(contains('outside')));
+    });
+
+    test('根地址确认是媒体后换成播放列表：从开头开始的请求仍计入 rateLimit', () async {
+      const limit = RateLimitConfig(requests: 100, per: Duration(seconds: 1));
+      final counting = CountingSession();
+      final limited = up.client(rateLimit: limit, session: counting.session);
+      addTearDown(limited.close);
+      var calls = 0;
+      up.routes['/switch-lane'] = (req) {
+        calls++;
+        req.response.add(
+          calls == 1
+              ? fakeMp4()
+              : utf8.encode('#EXTM3U\n#EXTINF:1,\nseg.ts\n#EXT-X-ENDLIST\n'),
+        );
+        return req.response.close();
+      };
+      final session = proxy.open(
+        client: limited,
+        url: Uri.parse('http://video.example.com/switch-lane'),
+      );
+      expect((await player.get(session.url)).$1, 200); // 媒体，已确认
+      final hls = await player.text(session.url); // 换成了播放列表
+      expect(hls, startsWith('#EXTM3U'));
+      expect(counting.acquiredWith(limit), 2);
+      expect(counting.acquiredWith(SourceSession.mediaRateLimit), 0);
     });
 
     test('上游换了内容：从开头开始的响应每次都重新识别', () async {

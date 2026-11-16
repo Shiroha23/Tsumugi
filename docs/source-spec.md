@@ -505,7 +505,12 @@ export async function search(keyword, page) {
   跨主机重定向时不转发源显式设置的 `Authorization` / `Cookie` 头（Cookie 域中的 Cookie 照常按主机附加）。
 - `timeoutMs` 是单次尝试（连接 + 等待响应 + 读取响应体）的上限，不含限速排队；超时 → `E_NETWORK`。
 - `rateLimit` 按令牌桶执行：允许突发 `requests` 个，之后每 `perSeconds / requests` 秒放行一个；
-  重试与重定向的每一跳都计入。
+  重试与重定向的每一跳都计入。**一个源只有一个令牌桶**：规则 / 脚本的请求、图片加载与音视频代理的请求共用，
+  按请求顺序排队；不同源的令牌桶互不影响。
+  - **音视频例外**：HLS 分片（含字幕分片、加密分片的密文）、密钥（`EXT-X-KEY`，轮换密钥时可能每个分片一个），
+    以及单文件媒体在确认是媒体之后、不从开头开始的请求（跳转时的区间请求）**不计入** `rateLimit`，而是计入本源单独的**媒体配额**——固定为突发 10 个、之后每秒 10 个，不可配置，
+    未声明 `rateLimit` 的源同样受此限制。播放列表（含直播刷新）与根地址从开头开始的请求仍计入 `rateLimit`。
+    这样 `rateLimit` 很小的源也能连续播放（分片数量由片长决定，不由源控制），一个异常的播放列表也无法让客户端无节制地请求。
 - 幂等请求（GET / HEAD / PUT / DELETE / OPTIONS）在连接错误或 5xx 时最多自动重试 2 次（指数退避），
   超时与非幂等请求（POST / PATCH）不重试。
 - 检测到人机验证页面（403 / 429 / 503 且带有验证页特征）时返回 `E_CHALLENGE`，不重试、不尝试绕过；
@@ -530,7 +535,7 @@ export async function search(keyword, page) {
 - 图片、音视频流的 headers 由内容结构中的 `headers` 字段携带给加载器/播放器。
 - **音视频**：播放器不直接访问网络，所有请求（HLS 的主 / 子播放列表、分片、密钥、初始化分片，MP4 的区间请求）都经客户端的
   本地媒体代理由本源的网络层发出（architecture §6.4），因此与其他请求一样受白名单（含每一跳重定向）、Cookie 域、默认 headers
-  与限速约束，`StreamRef.headers` 随**每个**请求发送。播放列表中白名单外的地址会播放失败。
+  与限速约束（分片走媒体配额，见上文 `rateLimit`），`StreamRef.headers` 随**每个**请求发送。播放列表中白名单外的地址会播放失败。
   - apiVersion 1 只支持 HLS（`type: "hls"`）与单文件（`mp4` / `auto`）。**`dash` 不支持**：客户端跳过 `type: "dash"` 的流，
     MPD 一律拒绝；只有 DASH 的站点请用脚本源返回 HLS 或单文件地址。将来是否支持见 [#42](https://github.com/Shiroha23/Tsumugi/issues/42)。
   - 分片与单文件的响应必须是可识别的媒体容器（MPEG-TS、MP4 / fMP4、Matroska / WebM、FLV、Ogg、ADTS / MP3、AC-3、FLAC、AVI / WAV），

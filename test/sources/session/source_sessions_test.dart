@@ -2,8 +2,10 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tsumugi/core/network/rate_limiter.dart';
 import 'package:tsumugi/core/network/session_persistence.dart';
 import 'package:tsumugi/core/storage/app_database.dart';
+import 'package:tsumugi/sources/model/manifest.dart';
 import 'package:tsumugi/sources/registry/source_registry.dart';
 import 'package:tsumugi/sources/session/source_sessions.dart';
 
@@ -133,5 +135,68 @@ void main() {
           .map((c) => c.name),
       ['other'],
     );
+  });
+
+  group('限速令牌桶（source-spec §5）', () {
+    SourceManifest manifestOf(String sourceId, {Map<String, Object?>? rate}) =>
+        SourceManifest.fromJson({
+          ...jsonDecode(fixture('declarative_comic.json')) as Map,
+          'id': sourceId,
+          'rateLimit': rate ?? {'requests': 1, 'perSeconds': 30},
+        });
+
+    test('同一源的 clientFor（源实例 / 图片 / 每次播放）共用令牌桶；不同源互不相通', () {
+      sessions = SourceSessions();
+      final a1 = sessions.clientFor(manifestOf('com.example.a'));
+      final a2 = sessions.clientFor(manifestOf('com.example.a'));
+      final b = sessions.clientFor(manifestOf('com.example.b'));
+      addTearDown(() {
+        a1.close();
+        a2.close();
+        b.close();
+      });
+
+      expect(identical(a1.session, a2.session), isTrue);
+      final bucketA = a1.session.rateLimiter(a1.config.rateLimit);
+      expect(bucketA, isNotNull);
+      expect(
+        identical(bucketA, a2.session.rateLimiter(a2.config.rateLimit)),
+        isTrue,
+      );
+      expect(
+        identical(
+          a1.session.rateLimiter(null, lane: RateLimitLane.media),
+          a2.session.rateLimiter(null, lane: RateLimitLane.media),
+        ),
+        isTrue,
+      );
+
+      expect(identical(a1.session, b.session), isFalse);
+      expect(
+        identical(bucketA, b.session.rateLimiter(b.config.rateLimit)),
+        isFalse,
+      );
+      expect(
+        identical(
+          a1.session.rateLimiter(null, lane: RateLimitLane.media),
+          b.session.rateLimiter(null, lane: RateLimitLane.media),
+        ),
+        isFalse,
+      );
+    });
+
+    test('删除后重新安装的源从新会话（新令牌桶）开始', () {
+      sessions = SourceSessions();
+      final before = sessions.clientFor(manifestOf('com.example.a'));
+      addTearDown(before.close);
+      final bucket = before.session.rateLimiter(before.config.rateLimit);
+      sessions.remove('com.example.a');
+      final after = sessions.clientFor(manifestOf('com.example.a'));
+      addTearDown(after.close);
+      expect(
+        identical(bucket, after.session.rateLimiter(after.config.rateLimit)),
+        isFalse,
+      );
+    });
   });
 }

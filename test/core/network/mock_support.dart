@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:dio/io.dart';
 import 'package:tsumugi/core/network/dio_source_http_client.dart';
+import 'package:tsumugi/core/network/rate_limiter.dart';
 import 'package:tsumugi/core/network/source_http_client.dart';
 import 'package:tsumugi/core/network/source_session.dart';
 
@@ -46,3 +47,37 @@ DioSourceHttpClient mockClient(
   adapter: mockAdapter(server),
   session: session,
 );
+
+/// 记录取得令牌次数的令牌桶（不改变限速行为）。
+class CountingBucket extends TokenBucket {
+  CountingBucket(this.limit) : super(requests: limit.requests, per: limit.per);
+
+  final RateLimitConfig limit;
+  int acquired = 0;
+
+  @override
+  Future<bool> acquire({Future<void>? abort}) async {
+    final ok = await super.acquire(abort: abort);
+    if (ok) acquired++;
+    return ok;
+  }
+}
+
+/// 一个会话及其创建过的全部令牌桶。
+class CountingSession {
+  CountingSession() {
+    session = SourceSession(
+      newRateLimiter: (c) {
+        final b = CountingBucket(c);
+        buckets.add(b);
+        return b;
+      },
+    );
+  }
+
+  late final SourceSession session;
+  final buckets = <CountingBucket>[];
+
+  int acquiredWith(RateLimitConfig c) =>
+      buckets.where((b) => b.limit == c).fold(0, (sum, b) => sum + b.acquired);
+}

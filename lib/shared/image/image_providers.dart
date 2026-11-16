@@ -17,8 +17,8 @@ part 'image_providers.g.dart';
 /// 图片请求使用的按源 HTTP 客户端。
 ///
 /// 默认实现按已安装源的清单为每个源构造一个独立的客户端（白名单、限速、默认 headers 与清单一致），
-/// 但与源实例**共用该源的 `SourceSession`**（Cookie 与 WebView 同步的 UA，architecture §5.3），
-/// 因此需要登录 / 验证 Cookie 的图片也能加载。限速队列不共用。
+/// 但与源实例**共用该源的 `SourceSession`**（Cookie、WebView 同步的 UA 与限速令牌桶，architecture §5.3 / §5.4），
+/// 因此需要登录 / 验证 Cookie 的图片也能加载，图片请求与源实例按同一个 `rateLimit` 排队。
 abstract interface class ImageHttpClients {
   Future<SourceHttpClient> clientFor(String sourceId);
 }
