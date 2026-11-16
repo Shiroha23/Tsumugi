@@ -192,8 +192,23 @@ class MediaProxySession {
       : _entries[index];
 
   /// 登记一个上游地址，返回对应的代理地址。非 http(s)、无法解析或超出数量上限的地址
-  /// 也会得到一个代理地址，但请求它总是返回 403。
-  String _register(Uri? uri, _Kind kind, [HlsAes128? aes]) {
+  /// 也会得到一个代理地址，但请求它总是返回 403。[segmentExtension] 为 HLS 分片的扩展名
+  /// （按所在播放列表第一个媒体地址的内容决定，见 [_segmentExtension]）。
+  String _register(
+    Uri? uri,
+    _Kind kind, [
+    HlsAes128? aes,
+    String? segmentExtension,
+  ]) {
+    final index = _registerEntry(uri, kind, aes);
+    final name = _fileName(_entryAt(index)?.url, kind, segmentExtension);
+    return _proxy.origin
+        .replace(pathSegments: [_token, '${index < 0 ? 'x' : index}', name])
+        .toString();
+  }
+
+  /// 登记一个上游地址，返回编号；超出数量上限时为 -1。
+  int _registerEntry(Uri? uri, _Kind kind, HlsAes128? aes) {
     bool httpUrl(Uri? u) =>
         u != null &&
         (u.scheme == 'http' || u.scheme == 'https') &&
@@ -211,10 +226,7 @@ class MediaProxySession {
         _indexOf[key] = index;
       }
     }
-    final name = _fileName(ok ? uri : null, kind);
-    return _proxy.origin
-        .replace(pathSegments: [_token, '${index < 0 ? 'x' : index}', name])
-        .toString();
+    return index;
   }
 
   Future<void> _serve(HttpRequest req, _Entry entry) async {
@@ -283,7 +295,7 @@ class MediaProxySession {
           }
           final body = await _collect(bytes, rest, maxPlaylistBytes);
           if (body == null) return await _status(res, HttpStatus.badGateway);
-          final out = _rewrite(body, up.url, entry.kind);
+          final out = await _rewrite(body, up.url, entry, cancel);
           if (out == null) return await _status(res, HttpStatus.badGateway);
           res
             ..statusCode = HttpStatus.ok
@@ -635,47 +647,204 @@ class MediaProxySession {
     _Entry entry,
     NetCancellation cancel,
   ) async {
+    final (bytes, status) = await _head(upstream, entry, cancel);
+    if (bytes == null) return status;
+    final ok = entry.kind == _Kind.subtitle
+        ? looksLikeWebVtt(bytes)
+        : looksLikeMediaContainer(bytes);
+    if (!ok) return HttpStatus.unsupportedMediaType;
+    entry.verified = true;
+    return null;
+  }
+
+  /// 资源从 [offset] 起的 [length] 字节（默认开头 [_sniffBytes] 字节）：成功时为 (字节, 200)，
+  /// 失败时为 (null, 应答状态码)。[offset] 不为 0 时上游必须按区间返回（206，起点一致）。
+  Future<(Uint8List?, int)> _head(
+    Uri upstream,
+    _Entry entry,
+    NetCancellation cancel, [
+    int length = _sniffBytes,
+    int offset = 0,
+  ]) async {
     final up = await _open(
       upstream,
-      'bytes=0-${_sniffBytes - 1}',
+      'bytes=$offset-${offset + length - 1}',
       cancel,
       lane: _laneFor(entry, rangeStart: 0),
     );
-    if (up == null) return _failureStatus();
+    if (up == null) return (null, _failureStatus());
     try {
       if (up.status != HttpStatus.ok &&
           up.status != HttpStatus.partialContent) {
-        return up.status >= 400 && up.status < 600
-            ? up.status
-            : HttpStatus.badGateway;
+        return (
+          null,
+          up.status >= 400 && up.status < 600
+              ? up.status
+              : HttpStatus.badGateway,
+        );
       }
-      final (bytes, rest) = await _peek(up.body, _sniffBytes);
+      if (offset != 0 &&
+          (up.status != HttpStatus.partialContent ||
+              _contentRangeStart(up) != offset)) {
+        return (null, HttpStatus.badGateway);
+      }
+      final (bytes, rest) = await _peek(up.body, length);
       await rest.cancel();
-      final ok = entry.kind == _Kind.subtitle
-          ? looksLikeWebVtt(bytes)
-          : looksLikeMediaContainer(bytes);
-      if (!ok) return HttpStatus.unsupportedMediaType;
-      entry.verified = true;
-      return null;
+      return (bytes, HttpStatus.ok);
     } finally {
       up.cancel();
     }
   }
 
-  Uint8List? _rewrite(Uint8List body, Uri base, _Kind kind) {
+  /// 探测分片内容时最多读取的字节数（ID3 标签较大时补读到其后的帧头）。
+  static const _maxProbeBytes = 64 * 1024;
+
+  /// 每个播放列表最多探测几次分片内容（失败后直播刷新时再试，之后固定为 `ts`）。
+  static const maxSegmentProbes = 2;
+
+  /// 按 [entry]（FFmpeg 起播时探测的那个媒体地址）的内容决定该播放列表中分片的扩展名；
+  /// 无法取得或识别时为 null。
+  ///
+  /// FFmpeg 7.1.1 起，HLS 解复用器要求每个分片地址的扩展名与探测出的格式一致（architecture §6.4.3）。
+  /// 只取开头一段（区间请求）：加密分片只解密开头几块（CBC 按块解密，不需要整段）。
+  /// 整个过程受播放列表请求的 [cancel]（断开、`prepareTimeout`）约束。
+  ///
+  /// [range] 为该地址在播放列表中的字节区间（`EXT-X-BYTERANGE` / `EXT-X-MAP` 的 `BYTERANGE`）：
+  /// FFmpeg 探测的是这一段，因此从它的起点读（不超过它的长度）。
+  Future<String?> _segmentExtension(
+    _Entry entry,
+    NetCancellation cancel, [
+    (int, int)? range,
+  ]) async {
+    final (offset, limit) = range ?? (0, _maxProbeBytes);
+    if (limit <= 0) return null;
+    var head = await _probeHead(entry, min(_sniffBytes, limit), cancel, offset);
+    var container = head == null ? null : sniffMediaContainer(head);
+    if (container == MediaContainer.id3) {
+      final need = id3FrameOffset(head!)! + 6;
+      if (need <= min(_maxProbeBytes, limit)) {
+        head = await _probeHead(entry, need, cancel, offset);
+        if (head != null) container = sniffMediaContainer(head) ?? container;
+      }
+    }
+    if (container == null) return null;
+    // 只有从资源开头识别时才算确认了资源本身（之后从中间开始的区间请求沿用）。
+    if (entry.aes == null && offset == 0) entry.verified = true;
+    return container.extension;
+  }
+
+  /// [entry] 开头最多 [length] 字节的明文；失败或被取消时为 null。
+  Future<Uint8List?> _probeHead(
+    _Entry entry,
+    int length,
+    NetCancellation cancel, [
+    int offset = 0,
+  ]) async {
+    final upstream = entry.url;
+    if (upstream == null) return null;
+    final aes = entry.aes;
+    if (aes == null) {
+      return (await _head(upstream, entry, cancel, length, offset)).$1;
+    }
+    // AES-128 与字节区间同时使用不支持（地址总是 403），不会走到这里。
+    if (offset != 0) return null;
+    // 密钥按会话缓存、与分片请求共用；探测不等到它超出播放列表请求的时限（取密钥本身继续，结果照常缓存）。
+    final keyResult = await Future.any([
+      _key(aes.keyUri!).then<(Uint8List?, int)?>((r) => r),
+      cancel.whenCancelled.then<(Uint8List?, int)?>((_) => null),
+    ]);
+    final key = keyResult?.$1;
+    if (key == null || cancel.isCancelled) return null;
+    final blocks = (length + 15) ~/ 16 * 16;
+    final (cipherText, _) = await _head(upstream, entry, cancel, blocks);
+    if (cipherText == null || cipherText.length < 16) return null;
     try {
+      final cipher = CBCBlockCipher(AESEngine())
+        ..init(false, ParametersWithIV(KeyParameter(key), aes.iv));
+      final n = cipherText.length ~/ 16 * 16;
+      final plain = Uint8List(n);
+      for (var off = 0; off < n; off += 16) {
+        cipher.processBlock(cipherText, off, plain, off);
+      }
+      // 末块可能含 PKCS7 填充：只用于识别，不影响结果。
+      return Uint8List.sublistView(plain, 0, min(n, length));
+    } on Object {
+      return null;
+    }
+  }
+
+  /// 选出 FFmpeg 起播时用来探测格式的媒体地址（n7.1.1 / n8.0.1 `hls_read_header` 与 `select_cur_seq_no`）：
+  /// 有 `EXT-X-MAP` 时为初始化分片（与分片一起探测，由它决定格式）；否则点播为第一个分片，
+  /// 直播（没有 `EXT-X-ENDLIST`）为倒数第 3 个分片（`live_start_index` 默认 -3）。
+  /// 部分分片（`EXT-X-PART` / `EXT-X-PRELOAD-HINT`）不算。没有可用地址时为 null。
+  static (Uri, HlsAes128?, (int, int)?)? _probeTarget(String text, Uri base) {
+    (Uri?, HlsAes128?, (int, int)?)? init;
+    final segments = <(Uri?, HlsAes128?, (int, int)?)>[];
+    (int, int)? range;
+    rewriteHlsPlaylist(
+      text,
+      base: base,
+      onByteRange: (o, n) => range = (o, n),
+      map: (uri, k, [aes]) {
+        if (k == HlsUriKind.init) init ??= (uri, aes, range);
+        if (k == HlsUriKind.media) segments.add((uri, aes, range));
+        range = null;
+        return '';
+      },
+    );
+    final live = !_endList.hasMatch(text);
+    final target =
+        init ??
+        (segments.isEmpty
+            ? null
+            : segments[live ? max(0, segments.length - 3) : 0]);
+    return switch (target) {
+      (final Uri uri, final aes, final range) => (uri, aes, range),
+      _ => null,
+    };
+  }
+
+  static final _endList = RegExp(r'^\s*#EXT-X-ENDLIST\s*$', multiLine: true);
+
+  /// 改写 [playlist] 的响应。其中有分片时，分片的扩展名按 FFmpeg 起播时探测的那个媒体地址的内容决定
+  /// （[_probeTarget]、[_segmentExtension]；识别成功后沿用，最多探测 [maxSegmentProbes] 次）；
+  /// 识别失败时用 `ts`。
+  Future<Uint8List?> _rewrite(
+    Uint8List body,
+    Uri base,
+    _Entry playlist,
+    NetCancellation cancel,
+  ) async {
+    final text = utf8.decode(body, allowMalformed: true);
+    _Kind kindOf(HlsUriKind k) => switch (k) {
+      HlsUriKind.playlist => _Kind.playlist,
+      HlsUriKind.subtitlePlaylist => _Kind.subtitlePlaylist,
+      HlsUriKind.media || HlsUriKind.init || HlsUriKind.part
+          when playlist.kind == _Kind.subtitlePlaylist =>
+        _Kind.subtitle,
+      HlsUriKind.media || HlsUriKind.init || HlsUriKind.part => _Kind.media,
+      HlsUriKind.key => _Kind.key,
+    };
+    try {
+      var ext = playlist.segmentExtension;
+      if (ext == null &&
+          playlist.kind != _Kind.subtitlePlaylist &&
+          playlist.segmentProbes < maxSegmentProbes) {
+        // 第一遍只找要探测的地址（不登记任何地址）。
+        if (_probeTarget(text, base) case (final uri, final aes, final range)) {
+          playlist.segmentProbes++;
+          final entry = _entryAt(_registerEntry(uri, _Kind.media, aes));
+          ext = entry == null
+              ? null
+              : await _segmentExtension(entry, cancel, range);
+          playlist.segmentExtension = ext;
+        }
+      }
       return utf8.encode(
         rewriteHlsPlaylist(
-          utf8.decode(body, allowMalformed: true),
+          text,
           base: base,
-          map: (uri, k, [aes]) => _register(uri, switch (k) {
-            HlsUriKind.playlist => _Kind.playlist,
-            HlsUriKind.subtitlePlaylist => _Kind.subtitlePlaylist,
-            HlsUriKind.media when kind == _Kind.subtitlePlaylist =>
-              _Kind.subtitle,
-            HlsUriKind.media => _Kind.media,
-            HlsUriKind.key => _Kind.key,
-          }, aes),
+          map: (uri, k, [aes]) => _register(uri, kindOf(k), aes, ext),
         ),
       );
     } on FormatException {
@@ -686,9 +855,11 @@ class MediaProxySession {
   static final _hlsType = ContentType('application', 'vnd.apple.mpegurl');
   static final _vttType = ContentType('text', 'vtt', charset: 'utf-8');
 
-  /// 代理地址中的文件名：只用于让 FFmpeg 的 HLS 分片扩展名检查通过，不参与查找。
-  /// 扩展名只保留常见媒体扩展名，其余换成 `.bin`，避免播放器按扩展名把内容当成其他播放列表格式。
-  static String _fileName(Uri? uri, _Kind kind) {
+  /// 代理地址中的文件名：只给播放器看（FFmpeg 的 HLS 分片扩展名检查），不参与查找。
+  /// 扩展名只用媒体或 HLS 的扩展名，避免播放器按扩展名把内容当成其他播放列表格式（architecture §6.4.3）：
+  /// HLS 分片用 [segmentExtension]（按内容决定，见 [MediaContainer.extension]；未知时为 `ts`），
+  /// 根地址按上游扩展名只保留常见媒体扩展名，其余换成 `.bin`。
+  static String _fileName(Uri? uri, _Kind kind, String? segmentExtension) {
     switch (kind) {
       case _Kind.playlist || _Kind.subtitlePlaylist:
         return 'index.m3u8';
@@ -696,12 +867,14 @@ class MediaProxySession {
         return 'key.bin';
       case _Kind.subtitle:
         return 'sub.vtt';
-      case _Kind.root || _Kind.media:
+      case _Kind.media:
+        return 'media.${segmentExtension ?? 'ts'}';
+      case _Kind.root:
         final last =
             uri?.pathSegments.where((s) => s.isNotEmpty).lastOrNull ?? '';
         final dot = last.lastIndexOf('.');
         final ext = dot < 0 ? '' : last.substring(dot + 1).toLowerCase();
-        if (kind == _Kind.root && (ext == 'm3u8' || ext == 'm3u')) {
+        if (ext == 'm3u8' || ext == 'm3u') {
           return 'index.m3u8';
         }
         return _mediaExtensions.contains(ext) ? 'media.$ext' : 'media.bin';
@@ -729,6 +902,12 @@ class _Entry {
 
   /// 已从资源开头确认是可识别的媒体（之后从中间开始的区间请求沿用；从开头开始的响应每次都重新识别）。
   bool verified = false;
+
+  /// 播放列表：其中分片的扩展名（探测分片内容成功后记下，之后的刷新沿用）。
+  String? segmentExtension;
+
+  /// 播放列表：已探测分片内容的次数（上限 [MediaProxySession.maxSegmentProbes]）。
+  int segmentProbes = 0;
 }
 
 /// 读出前 [n] 字节（或直到流结束），剩余部分由返回的 [_Rest] 继续读取。
