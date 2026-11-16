@@ -4,8 +4,8 @@
 # 平台为逗号分隔的 windows / android / ios。修改 media_kit_libs_*_video 版本时必须同步更新本文件。
 #
 # ---- 构建脚本（含补丁） ----
-windows	libmpv-win32-video-build (master, archived)	35a3be3cd7b8039ad1a75dd8bf7df08f80532418	NOASSERTION	https://github.com/media-kit/libmpv-win32-video-build/archive/35a3be3cd7b8039ad1a75dd8bf7df08f80532418.tar.gz	d60043361f9ea0bf906b5b2f957e8bdb13e29d455b26233c10eb753764070219	windows/libmpv-win32-video-build-35a3be3.tar.gz
-windows	libmpv-win32-video-build (master as of 2023-09-24)	f5a6f879c9b8bef6a73e52c8c0f35e51636c96e5	NOASSERTION	https://github.com/media-kit/libmpv-win32-video-build/archive/f5a6f879c9b8bef6a73e52c8c0f35e51636c96e5.tar.gz	5e6f7eee77922273b862ffecfe71a72fc3d8f2e3ce6037bc6ac529b2aac7b0ef	windows/libmpv-win32-video-build-f5a6f87.tar.gz
+# Windows 构建仓库 media-kit/libmpv-win32-video-build 没有许可证文件，不收存档，只在 SOURCES_README.md /
+# THIRD_PARTY_NOTICES.md 中给出上游地址与确切提交（architecture §6.4.1）。
 android	libmpv-android-video-build	v1.1.7 (fe8c3ac1a91c09aa6fb1deccbc833f1bafa54768)	MIT	https://github.com/media-kit/libmpv-android-video-build/archive/fe8c3ac1a91c09aa6fb1deccbc833f1bafa54768.tar.gz	c278bc8789ebaad45a23afd9588bb77e051714892f7f0367356e1cc6ebfe4c62	android/libmpv-android-video-build-v1.1.7.tar.gz
 android	media-kit-android-helper	42054e5d479f39ccbb0ae604862e2bcaf59b74c2	MIT	https://github.com/media-kit/media-kit-android-helper/archive/42054e5d479f39ccbb0ae604862e2bcaf59b74c2.tar.gz	53ea71476d1cbc9a5d63d4898c6b027af4ccb6525800c7b42e267e6128652423	android/media-kit-android-helper-42054e5.tar.gz
 ios	libmpv-darwin-build	v0.6.0 (4286f5557bdccc0747030e3c376ce5cd160a96a0)	MIT	https://github.com/media-kit/libmpv-darwin-build/archive/4286f5557bdccc0747030e3c376ce5cd160a96a0.tar.gz	092a4bc3dcabcd1d9f931e98664616093e6cad969ddf9be03bf259c1c23bd8e0	ios/libmpv-darwin-build-v0.6.0.tar.gz

@@ -74,6 +74,16 @@ void main() {
       expect(uchardet[0], 'ios');
     });
 
+    test('源码清单不收没有许可证的 Windows 构建仓库', () {
+      final rows = File('tool/release/native_sources.tsv')
+          .readAsLinesSync()
+          .where((l) => l.isNotEmpty && !l.startsWith('#'));
+      expect(
+        rows.where((r) => r.contains('libmpv-win32-video-build')),
+        isEmpty,
+      );
+    });
+
     test('THIRD_PARTY_NOTICES.md 列出了每个原生组件', () {
       final notices = File('THIRD_PARTY_NOTICES.md').readAsStringSync();
       for (final c in nativeComponents) {

@@ -586,7 +586,9 @@ media_kit 的 Dart / 插件代码都是 MIT；许可证问题在它下载的**�
 - **`d3dcompiler_47.dll`**（微软可再分发组件，非开源）：**不再随包分发**（`windows/CMakeLists.txt` 从插件的打包列表中排除），
   ANGLE 改用 Windows 10 起系统自带的同名 DLL。
 - **`WebView2Loader.dll`**（Windows，`flutter_inappwebview_windows` 经 NuGet 取得的 Microsoft.Web.WebView2 SDK，M3 起随包）：
-  微软的闭源二进制，SDK 许可证为 BSD-3 风格的宽松条款，允许再分发；没有源码。与 `d3dcompiler_47.dll` 性质相近，见 §6.4.6。
+  微软的闭源二进制，SDK 许可证为 BSD-3 风格的宽松条款，允许再分发；没有源码。**保持以动态库随包**（已决定，2026-11）：
+  改为静态链接 `WebView2LoaderStatic.lib` 同样把闭源代码放进程序，并不更合规。在「关于」页与 `THIRD_PARTY_NOTICES.md` 中注明是
+  微软闭源组件、按其条款再分发。
 - 应用自身的原生库：QuickJS-ng 0.17.0（MIT，经 `qjs` 0.2.3 从源码构建）、SQLite（公有领域，`sqlite3` 包）。
 
 新增的传递依赖 `wakelock_plus`、`package_info_plus`、`http`（BSD-3）与 `image`、`synchronized`、`safe_local_storage`、
@@ -604,8 +606,13 @@ Apache-2.0 与 GPL-3.0 兼容。**再分发（CI 产物、Release）需要满足
    `.github/workflows/release.yml`（推送 `v*` 标签时触发；`workflow_dispatch` 为 dry-run，只上传为构建产物）构建三平台安装包，
    并用 `tool/release/fetch_native_sources.sh` 按 `tool/release/native_sources.tsv` 下载各组件源码与构建脚本、校验 sha256、
    打成 `tsumugi-<版本>-native-sources.tar`（约 120 MB，其中两个版本的 HarfBuzz 源码各约 35 MB），与安装包上传到同一个 Release。
-   清单收录：三个构建仓库在确切提交处的存档（Windows 另含构建时的 `master` 状态）、三平台的 mpv / FFmpeg、Android / iOS 锁定的全部
-   依赖、Windows 能确定版本的 LGPL / MPL 组件；Windows 版本未知的宽松许可证依赖与 ANGLE 只在 `THIRD_PARTY_NOTICES.md` 中给出上游地址。
+   清单收录：Android / iOS 构建仓库在确切提交处的存档、三平台的 mpv / FFmpeg、Android / iOS 锁定的全部依赖、Windows 能确定版本的
+   LGPL 组件，以及从 Windows 二进制提取的构建配置。**已决定（2026-11）**：
+   - Windows 构建仓库没有许可证文件（即保留所有权利），**不收其存档**，只在 `SOURCES_README.md` / `THIRD_PARTY_NOTICES.md` 中给出上游
+     归档仓库与确切提交（构建时的 `master` `f5a6f87`、归档时的 `master` `35a3be3`）；
+   - Windows libmpv 的对应源码**只能尽力提供**（缺多数依赖的确切提交与当时的定制脚本，原因见上文），接受此状态，直到自建 libmpv
+     （§6.4.6 后续 2）落地后提供完整的对应源码与构建脚本；
+   - Windows 版本未知的宽松许可证依赖与 ANGLE（源码体积达 GB 级）只在 `THIRD_PARTY_NOTICES.md` 中给出上游地址。
 3. LGPL 要求用户能替换库：Windows / Android 为动态库，天然满足；iOS 的 xcframework 内是动态 framework（Mach-O `MH_DYLIB`，
    M4-B 实测；此前误记为静态库），同样可以替换。此外整个应用以 GPL-3.0 提供完整源码与构建方式，用户也可以重新构建。
 
@@ -750,10 +757,10 @@ M5 音乐复用同一 libmpv，不再增加体积。预编译库内部的组件�
   ANGLE 使用系统自带的。Windows 11 上验证（2026-11）：`integration_test/video_playback_test.dart` 在不含该 DLL 的构建中通过
   （MP4 与 AES-128 HLS，解码 `d3d11va-copy`）；release 构建启动后进程加载的是 `C:\Windows\System32\d3dcompiler_47.dll`。
   release 构建的界面内手动播放尚未执行，**Windows 10 未测试**。
-- **`WebView2Loader.dll`**（M3 起随包）：同为微软的闭源再分发组件，但没有系统自带的副本可用。是否改为静态链接
-  （WebView2 SDK 提供 `WebView2LoaderStatic.lib`）或保持现状，待定。
+- **`WebView2Loader.dll`**（M3 起随包）：同为微软的闭源再分发组件，但没有系统自带的副本可用。**保持以动态库随包**（已决定，
+  静态链接并不更合规），见 §6.4.1。
 - **Windows libmpv 的对应源码不完整**：见 §6.4.1——除 mpv / FFmpeg 等少数组件外，依赖的确切提交与当时的定制脚本都没有记录，
-  Release 中的源码包只能尽力而为。
+  Release 中的源码包只能尽力而为；已决定接受到自建 libmpv（后续 2）落地为止。
 - media_kit 主要由一人维护。播放器只出现在 `features/video/player/` 与 `shared/video/player_options.dart`，代理与播放器无关，
   必要时可以换播放器实现。
 

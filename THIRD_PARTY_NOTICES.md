@@ -49,6 +49,18 @@ Windows 的构建脚本（[shinchiro/mpv-winbuild-cmake](https://github.com/shin
 （[`tool/release/windows_libmpv_build_config.txt`](tool/release/windows_libmpv_build_config.txt)）与字符串确定；
 “推断”表示版本取自构建时（2023-09-24 之前）上游脚本固定的版本，未能从二进制确认。
 
+**Windows 对应源码的现状（已决定，2026-11）**：
+
+- **缺什么**：下表多数组件的确切源码提交，以及 media-kit 当时的定制构建脚本（裁剪解码器等）。
+- **为什么**：上游构建脚本构建时取各依赖 git 的最新提交且不记录；定制脚本未提交进构建仓库的历史，仓库也已归档。
+- **现在提供**：mpv `652a1dd`、FFmpeg n6.0、FriBidi 1.0.13、libsoxr 0.1.3、GNU libiconv 1.17 的源码（Release 源码包），
+  二进制内嵌的构建配置 [`windows_libmpv_build_config.txt`](tool/release/windows_libmpv_build_config.txt)，以及构建仓库在确切提交处的
+  上游地址——[`f5a6f87`](https://github.com/media-kit/libmpv-win32-video-build/tree/f5a6f879c9b8bef6a73e52c8c0f35e51636c96e5)
+  （构建时的 `master`）与 [`35a3be3`](https://github.com/media-kit/libmpv-win32-video-build/tree/35a3be3cd7b8039ad1a75dd8bf7df08f80532418)
+  （归档时的 `master`）。该仓库**没有许可证文件**，所以不收进源码包。
+- **计划**：改用自建 / fork 的 LGPL libmpv（`docs/architecture.md` §6.4.6 后续 2），固定所有依赖版本，随 Release 提供完整的对应源码与构建脚本。
+  在此之前接受上述“尽力提供”的状态。
+
 | 组件 | 许可证 | 版本 | 源码 |
 |---|---|---|---|
 | GNU libiconv | LGPL-2.1-or-later | 1.17（推断；二进制中有 GNU libiconv 的字符集表） | https://www.gnu.org/software/libiconv/ |
@@ -88,7 +100,7 @@ Windows 的构建脚本（[shinchiro/mpv-winbuild-cmake](https://github.com/shin
 | `vk_swiftshader.dll` | SwiftShader | Apache-2.0 | 5.0.0（ANGLE 上述提交的依赖） | https://swiftshader.googlesource.com/SwiftShader |
 | `vulkan-1.dll` | Vulkan Loader | Apache-2.0 | ANGLE 上述提交的依赖 | https://github.com/KhronosGroup/Vulkan-Loader |
 | `zlib.dll` | zlib | Zlib | 1.2.12（二进制） | https://zlib.net/ |
-| `WebView2Loader.dll` | Microsoft Edge WebView2 SDK (WebView2Loader.dll) | 微软 BSD-3 风格条款（`assets/licenses/webview2.txt`） | 1.0.3650.58 | 闭源二进制，https://www.nuget.org/packages/Microsoft.Web.WebView2 |
+| `WebView2Loader.dll` | Microsoft Edge WebView2 SDK (WebView2Loader.dll) | 微软 BSD-3 风格条款（`assets/licenses/webview2.txt`） | 1.0.3650.58 | **微软闭源组件**，按 SDK 条款以动态库随包再分发，无源码；https://www.nuget.org/packages/Microsoft.Web.WebView2 |
 | `flutter_inappwebview_windows_plugin.dll`（头文件库） | Windows Implementation Libraries (WIL)、C++/WinRT、nlohmann/json | MIT | 随插件构建 | https://github.com/microsoft/wil 、https://github.com/microsoft/cppwinrt 、https://github.com/nlohmann/json |
 
 ANGLE 包来自 [alexmercerind/flutter-windows-ANGLE-OpenGL-ES](https://github.com/alexmercerind/flutter-windows-ANGLE-OpenGL-ES) `v1.0.1`（作者自行编译）。

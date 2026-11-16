@@ -76,7 +76,10 @@ const nativeComponents = <NativeComponent>[
     source: 'https://github.com/mpv-player/mpv',
     licenseFiles: ['mpv.txt', 'lgpl-2.1.txt'],
     bundledSources: _wai,
-    note: '以 -Dgpl=false 构建，按 LGPL-2.1-or-later 提供。',
+    note:
+        '以 -Dgpl=false 构建，按 LGPL-2.1-or-later 提供。'
+        'Windows 预编译库的构建仓库没有许可证文件，其脚本不收进源码包，'
+        '上游地址与确切提交见 THIRD_PARTY_NOTICES.md。',
   ),
   NativeComponent(
     name: 'FFmpeg',
@@ -400,7 +403,7 @@ const nativeComponents = <NativeComponent>[
     versions: {_w: '1.0.3650.58'},
     source: 'https://www.nuget.org/packages/Microsoft.Web.WebView2',
     licenseFiles: ['webview2.txt'],
-    note: '微软提供的二进制，无源码（architecture §6.4.6）。',
+    note: '微软闭源组件，按 WebView2 SDK 的条款以动态库随包再分发，无源码。',
   ),
   NativeComponent(
     name: 'Windows Implementation Libraries (WIL)',
