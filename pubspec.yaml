@@ -29,6 +29,7 @@ dependencies:
   media_kit_libs_ios_video: 1.1.4
   media_kit_libs_windows_video: 1.0.11
   media_kit_video: 2.0.1
+  package_info_plus: ^10.2.2
   path_provider: ^2.1.6
   pointycastle: ^4.0.0
   # 固定版本：native_stack.dart 依赖 qjs 内部的 JSRuntime.ptr 布局，升级前须复查（#28）。
@@ -51,3 +52,6 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    # 原生组件的许可证全文（lib/features/settings/about/native_licenses.dart）。
+    - assets/licenses/
