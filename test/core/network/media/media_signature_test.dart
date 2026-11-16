@@ -51,9 +51,9 @@ void main() {
         MediaContainer.eac3,
       ),
       (
-        'ID3 之后超出已读范围：按 AAC',
+        'ID3 之后超出已读范围：待补读（扩展名按 AAC）',
         _pad([...ascii.encode('ID3'), 4, 0, 0, 0, 0, 0x7F, 0x7F]),
-        MediaContainer.adts,
+        MediaContainer.id3,
       ),
       ('AC-3', _pad([0x0B, 0x77, 0, 0, 0, 8 << 3]), MediaContainer.ac3),
       ('E-AC-3', _pad([0x0B, 0x77, 0, 0, 0, 16 << 3]), MediaContainer.eac3),

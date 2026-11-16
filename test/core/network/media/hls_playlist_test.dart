@@ -34,7 +34,7 @@ https://cdn.example.com/seg1.ts?x=1
 ''';
     final out = rewriteHlsPlaylist(text, base: base, map: map);
     expect(seen, [
-      (Uri.parse('http://video.example.com/init.mp4'), HlsUriKind.media),
+      (Uri.parse('http://video.example.com/init.mp4'), HlsUriKind.init),
       (
         Uri.parse('http://video.example.com/show/1/hls/seg0.ts'),
         HlsUriKind.media,
@@ -184,6 +184,7 @@ a.ts
       '/show/1/hls/part.mp4',
       '/show/1/hls/a.ts',
     ]);
+    expect(seen.map((e) => e.$2), [HlsUriKind.part, HlsUriKind.media]);
   });
 
   test('SERVER-URI 不被当作 URI 属性改写', () {

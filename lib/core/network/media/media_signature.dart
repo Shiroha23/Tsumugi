@@ -24,6 +24,9 @@ enum MediaContainer {
   flv('flv'),
   ogg('ogg'),
   adts('aac'),
+
+  /// ID3v2 标签之后的帧头不在已读的范围内（调用方可按 [id3FrameOffset] 补读）；扩展名按最常见的 ADTS AAC。
+  id3('aac'),
   mpegAudio('mp3'),
   ac3('ac3'),
   eac3('eac3'),
@@ -94,15 +97,23 @@ MediaContainer? _audioFrame(List<int> b, int at) {
 }
 
 /// ID3v2 标签之后的音频帧决定格式（HLS 打包音频以 ID3 时间戳开头）；
-/// 标签之后不在已读的范围内或无法识别时按最常见的 ADTS AAC。
+/// 帧头不在已读的范围内时为 [MediaContainer.id3]，在范围内但无法识别时按最常见的 ADTS AAC。
 MediaContainer _afterId3(List<int> b) {
+  final at = id3FrameOffset(b)!;
+  if (b.length < at + 6) return MediaContainer.id3;
+  return _audioFrame(b, at) ?? MediaContainer.adts;
+}
+
+/// 以 ID3v2 标签开头时，标签之后第一个字节的位置（含标签尾部）；不以 ID3v2 标签开头时为 null。
+int? id3FrameOffset(List<int> b) {
+  if (b.length < 10 || !_has(b, 0, const [0x49, 0x44, 0x33])) return null;
   final size =
       (b[6] & 0x7F) << 21 |
       (b[7] & 0x7F) << 14 |
       (b[8] & 0x7F) << 7 |
       b[9] & 0x7F;
   final footer = (b[5] & 0x10) != 0 ? 10 : 0;
-  return _audioFrame(b, 10 + size + footer) ?? MediaContainer.adts;
+  return 10 + size + footer;
 }
 
 MediaContainer? _otherSignature(List<int> b) {

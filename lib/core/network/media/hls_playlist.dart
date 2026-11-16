@@ -10,8 +10,14 @@ enum HlsUriKind {
   /// 字幕子播放列表（`EXT-X-MEDIA:TYPE=SUBTITLES` 的 `URI`），其中的分片为 WebVTT。
   subtitlePlaylist,
 
-  /// 分片、初始化分片（`EXT-X-MAP`）、部分分片（`EXT-X-PART` / `EXT-X-PRELOAD-HINT`）。
+  /// 分片（`EXTINF` 之后的 URI 行）。
   media,
+
+  /// 初始化分片（`EXT-X-MAP`）。
+  init,
+
+  /// 部分分片（`EXT-X-PART` / `EXT-X-PRELOAD-HINT`）。
+  part,
 
   /// 密钥（`EXT-X-KEY` / `EXT-X-SESSION-KEY`）。
   key,
@@ -166,7 +172,7 @@ String rewriteHlsPlaylist(
       if (iv == null || unsupportedAes || uriValue == null) continue;
       if (_attribute(line, 'BYTERANGE') != null) continue;
       out.add(
-        '#EXT-X-MAP:URI="${map(_resolve(base, uriValue), HlsUriKind.media, HlsAes128(key, iv))}"',
+        '#EXT-X-MAP:URI="${map(_resolve(base, uriValue), HlsUriKind.init, HlsAes128(key, iv))}"',
       );
       continue;
     }
@@ -274,7 +280,7 @@ const _uriKindOf = {
   '#EXT-X-MEDIA': HlsUriKind.playlist,
   '#EXT-X-I-FRAME-STREAM-INF': HlsUriKind.playlist,
   '#EXT-X-RENDITION-REPORT': HlsUriKind.playlist,
-  '#EXT-X-MAP': HlsUriKind.media,
-  '#EXT-X-PART': HlsUriKind.media,
-  '#EXT-X-PRELOAD-HINT': HlsUriKind.media,
+  '#EXT-X-MAP': HlsUriKind.init,
+  '#EXT-X-PART': HlsUriKind.part,
+  '#EXT-X-PRELOAD-HINT': HlsUriKind.part,
 };

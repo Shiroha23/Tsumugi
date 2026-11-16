@@ -657,15 +657,16 @@ class MediaProxySession {
     return null;
   }
 
-  /// 资源开头的 [_sniffBytes] 字节：成功时为 (字节, 200)，失败时为 (null, 应答状态码)。
+  /// 资源开头的 [length] 字节（默认 [_sniffBytes]）：成功时为 (字节, 200)，失败时为 (null, 应答状态码)。
   Future<(Uint8List?, int)> _head(
     Uri upstream,
     _Entry entry,
-    NetCancellation cancel,
-  ) async {
+    NetCancellation cancel, [
+    int length = _sniffBytes,
+  ]) async {
     final up = await _open(
       upstream,
-      'bytes=0-${_sniffBytes - 1}',
+      'bytes=0-${length - 1}',
       cancel,
       lane: _laneFor(entry, rangeStart: 0),
     );
@@ -680,7 +681,7 @@ class MediaProxySession {
               : HttpStatus.badGateway,
         );
       }
-      final (bytes, rest) = await _peek(up.body, _sniffBytes);
+      final (bytes, rest) = await _peek(up.body, length);
       await rest.cancel();
       return (bytes, HttpStatus.ok);
     } finally {
@@ -688,33 +689,104 @@ class MediaProxySession {
     }
   }
 
-  /// 按 [entry]（播放列表中第一个媒体地址）的内容决定该播放列表中分片的扩展名；无法取得或识别时为 null。
+  /// 探测分片内容时最多读取的字节数（ID3 标签较大时补读到其后的帧头）。
+  static const _maxProbeBytes = 64 * 1024;
+
+  /// 每个播放列表最多探测几次分片内容（失败后直播刷新时再试，之后固定为 `ts`）。
+  static const maxSegmentProbes = 2;
+
+  /// 按 [entry]（FFmpeg 起播时探测的那个媒体地址）的内容决定该播放列表中分片的扩展名；
+  /// 无法取得或识别时为 null。
   ///
-  /// FFmpeg 7.1.1 起，HLS 解复用器要求每个分片地址的扩展名与按第一个分片探测出的格式一致
-  /// （architecture §6.4.3）。加密分片取整段解密（明文进缓存，播放器随后的请求不再取上游）。
+  /// FFmpeg 7.1.1 起，HLS 解复用器要求每个分片地址的扩展名与探测出的格式一致（architecture §6.4.3）。
+  /// 只取开头一段（区间请求）：加密分片只解密开头几块（CBC 按块解密，不需要整段）。
+  /// 整个过程受播放列表请求的 [cancel]（断开、`prepareTimeout`）约束。
   Future<String?> _segmentExtension(
     _Entry entry,
     NetCancellation cancel,
   ) async {
-    final upstream = entry.url;
-    if (upstream == null) return null;
-    final Uint8List? head;
-    if (entry.aes case final aes?) {
-      final (plain, _) = await _plaintext(entry, upstream, aes);
-      head = plain == null
-          ? null
-          : Uint8List.sublistView(plain, 0, min(plain.length, _sniffBytes));
-    } else {
-      (head, _) = await _head(upstream, entry, cancel);
+    var head = await _probeHead(entry, _sniffBytes, cancel);
+    var container = head == null ? null : sniffMediaContainer(head);
+    if (container == MediaContainer.id3) {
+      final need = id3FrameOffset(head!)! + 6;
+      if (need <= _maxProbeBytes) {
+        head = await _probeHead(entry, need, cancel);
+        if (head != null) container = sniffMediaContainer(head) ?? container;
+      }
     }
-    final container = head == null ? null : sniffMediaContainer(head);
     if (container == null) return null;
     if (entry.aes == null) entry.verified = true;
     return container.extension;
   }
 
-  /// 改写 [playlist] 的响应。其中有分片时，分片的扩展名按第一个媒体地址的内容决定
-  /// （[_segmentExtension]，每个播放列表识别成功一次后沿用）；识别失败时用 `ts`。
+  /// [entry] 开头最多 [length] 字节的明文；失败或被取消时为 null。
+  Future<Uint8List?> _probeHead(
+    _Entry entry,
+    int length,
+    NetCancellation cancel,
+  ) async {
+    final upstream = entry.url;
+    if (upstream == null) return null;
+    final aes = entry.aes;
+    if (aes == null) return (await _head(upstream, entry, cancel, length)).$1;
+    // 密钥按会话缓存、与分片请求共用；探测不等到它超出播放列表请求的时限（取密钥本身继续，结果照常缓存）。
+    final keyResult = await Future.any([
+      _key(aes.keyUri!).then<(Uint8List?, int)?>((r) => r),
+      cancel.whenCancelled.then<(Uint8List?, int)?>((_) => null),
+    ]);
+    final key = keyResult?.$1;
+    if (key == null || cancel.isCancelled) return null;
+    final blocks = (length + 15) ~/ 16 * 16;
+    final (cipherText, _) = await _head(upstream, entry, cancel, blocks);
+    if (cipherText == null || cipherText.length < 16) return null;
+    try {
+      final cipher = CBCBlockCipher(AESEngine())
+        ..init(false, ParametersWithIV(KeyParameter(key), aes.iv));
+      final n = cipherText.length ~/ 16 * 16;
+      final plain = Uint8List(n);
+      for (var off = 0; off < n; off += 16) {
+        cipher.processBlock(cipherText, off, plain, off);
+      }
+      // 末块可能含 PKCS7 填充：只用于识别，不影响结果。
+      return Uint8List.sublistView(plain, 0, min(n, length));
+    } on Object {
+      return null;
+    }
+  }
+
+  /// 选出 FFmpeg 起播时用来探测格式的媒体地址（n7.1.1 / n8.0.1 `hls_read_header` 与 `select_cur_seq_no`）：
+  /// 有 `EXT-X-MAP` 时为初始化分片（与分片一起探测，由它决定格式）；否则点播为第一个分片，
+  /// 直播（没有 `EXT-X-ENDLIST`）为倒数第 3 个分片（`live_start_index` 默认 -3）。
+  /// 部分分片（`EXT-X-PART` / `EXT-X-PRELOAD-HINT`）不算。没有可用地址时为 null。
+  static (Uri, HlsAes128?)? _probeTarget(String text, Uri base) {
+    (Uri?, HlsAes128?)? init;
+    final segments = <(Uri?, HlsAes128?)>[];
+    rewriteHlsPlaylist(
+      text,
+      base: base,
+      map: (uri, k, [aes]) {
+        if (k == HlsUriKind.init) init ??= (uri, aes);
+        if (k == HlsUriKind.media) segments.add((uri, aes));
+        return '';
+      },
+    );
+    final live = !_endList.hasMatch(text);
+    final target =
+        init ??
+        (segments.isEmpty
+            ? null
+            : segments[live ? max(0, segments.length - 3) : 0]);
+    return switch (target) {
+      (final Uri uri, final aes) => (uri, aes),
+      _ => null,
+    };
+  }
+
+  static final _endList = RegExp(r'^\s*#EXT-X-ENDLIST\s*$', multiLine: true);
+
+  /// 改写 [playlist] 的响应。其中有分片时，分片的扩展名按 FFmpeg 起播时探测的那个媒体地址的内容决定
+  /// （[_probeTarget]、[_segmentExtension]；识别成功后沿用，最多探测 [maxSegmentProbes] 次）；
+  /// 识别失败时用 `ts`。
   Future<Uint8List?> _rewrite(
     Uint8List body,
     Uri base,
@@ -725,25 +797,20 @@ class MediaProxySession {
     _Kind kindOf(HlsUriKind k) => switch (k) {
       HlsUriKind.playlist => _Kind.playlist,
       HlsUriKind.subtitlePlaylist => _Kind.subtitlePlaylist,
-      HlsUriKind.media when playlist.kind == _Kind.subtitlePlaylist =>
+      HlsUriKind.media || HlsUriKind.init || HlsUriKind.part
+          when playlist.kind == _Kind.subtitlePlaylist =>
         _Kind.subtitle,
-      HlsUriKind.media => _Kind.media,
+      HlsUriKind.media || HlsUriKind.init || HlsUriKind.part => _Kind.media,
       HlsUriKind.key => _Kind.key,
     };
     try {
       var ext = playlist.segmentExtension;
-      if (ext == null && playlist.kind != _Kind.subtitlePlaylist) {
-        // 第一遍只找第一个媒体地址（不登记任何地址）。
-        (Uri, HlsAes128?)? first;
-        rewriteHlsPlaylist(
-          text,
-          base: base,
-          map: (uri, k, [aes]) {
-            if (k == HlsUriKind.media && uri != null) first ??= (uri, aes);
-            return '';
-          },
-        );
-        if (first case (final uri, final aes)) {
+      if (ext == null &&
+          playlist.kind != _Kind.subtitlePlaylist &&
+          playlist.segmentProbes < maxSegmentProbes) {
+        // 第一遍只找要探测的地址（不登记任何地址）。
+        if (_probeTarget(text, base) case (final uri, final aes)) {
+          playlist.segmentProbes++;
           final entry = _entryAt(_registerEntry(uri, _Kind.media, aes));
           ext = entry == null ? null : await _segmentExtension(entry, cancel);
           playlist.segmentExtension = ext;
@@ -812,8 +879,11 @@ class _Entry {
   /// 已从资源开头确认是可识别的媒体（之后从中间开始的区间请求沿用；从开头开始的响应每次都重新识别）。
   bool verified = false;
 
-  /// 播放列表：其中分片的扩展名（按第一个媒体地址的内容识别成功后记下，之后的刷新沿用）。
+  /// 播放列表：其中分片的扩展名（探测分片内容成功后记下，之后的刷新沿用）。
   String? segmentExtension;
+
+  /// 播放列表：已探测分片内容的次数（上限 [MediaProxySession.maxSegmentProbes]）。
+  int segmentProbes = 0;
 }
 
 /// 读出前 [n] 字节（或直到流结束），剩余部分由返回的 [_Rest] 继续读取。

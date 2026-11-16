@@ -714,21 +714,28 @@ media_kit (libmpv / FFmpeg) ── http://127.0.0.1:<port>/<token>/<编号>/<文
   播放器不会按扩展名把内容当成其他播放列表格式：
   - 子播放列表 `index.m3u8`，密钥 `key.bin`，字幕分片 `sub.vtt`。
   - **HLS 分片按内容命名**（同一个子播放列表中的分片、初始化分片与部分分片用同一个扩展名）：改写子播放列表时分片还没取，
-    代理先取该列表第一个媒体地址（`EXT-X-MAP` 或第一个分片）的开头 1 KB（AES-128 加密的取整段并解密，明文进上述缓存，
-    播放器随后取同一分片不再请求上游），按识别出的容器决定扩展名：MPEG-TS → `ts`，ISO-BMFF / fMP4 → `mp4`，ADTS（含 ID3 前缀的
-    打包音频）→ `aac`，MPEG 音频 → `mp3`，AC-3 → `ac3`，E-AC-3 → `eac3`，Matroska / WebM → `mkv`，Ogg → `ogg`，FLAC → `flac`，
-    AVI → `avi`，WAV → `wav`，FLV → `flv`。结果记在该播放列表上（只在识别成功时记下，直播刷新不再探测）；
-    探测失败（上游错误、内容无法识别）时用 `ts`，分片本身照常按上一条检查。探测走 `media` 通道，计入该播放列表请求的 `prepareTimeout`。
+    代理先探测 **FFmpeg 起播时用来探测格式的那个媒体地址**——有 `EXT-X-MAP` 时为初始化分片；否则点播为第一个分片，直播（没有
+    `EXT-X-ENDLIST`）为倒数第 3 个分片（`live_start_index` 默认 -3，n8.0.1 `select_cur_seq_no`）；部分分片不算，只有部分分片时不探测。
+    探测只用区间请求取开头 1 KB；AES-128 加密的取密钥后只解密开头几块（CBC 可按块解密，不需要整段，不进明文缓存）；以 ID3 标签开头、
+    其后的帧头超出 1 KB 时补读到帧头（上限 64 KB）。按识别出的容器决定扩展名：MPEG-TS → `ts`，ISO-BMFF / fMP4 → `mp4`，
+    ADTS（含 ID3 前缀的打包音频）→ `aac`，MPEG 音频 → `mp3`，AC-3 → `ac3`，E-AC-3 → `eac3`，Matroska / WebM → `mkv`，Ogg → `ogg`，
+    FLAC → `flac`，AVI → `avi`，WAV → `wav`，FLV → `flv`。识别成功后记在该播放列表上，刷新不再探测；失败（上游错误、超时、内容无法识别）
+    时用 `ts`，每个播放列表最多探测 2 次（直播刷新时再试一次），之后固定为 `ts`；分片本身照常按上一条检查。探测走 `media` 通道，
+    整个过程（含取密钥）受该播放列表请求的 `prepareTimeout` 与断开约束，超时即回落（取密钥本身继续，结果照常缓存）。
+    多码率时每个子播放列表多一次 1 KB 的请求。
   - 根地址仍按上游扩展名取常见媒体扩展名（`media.mp4` 等，`.m3u8` / `.m3u` 为 `index.m3u8`，其余 `media.bin`）：根地址不经 HLS 的
     分片检查，FFmpeg 按内容识别。
-  - **为什么按内容**：FFmpeg 7.1.1 起 HLS 解复用器默认 `extension_picky=1`（`libavformat/hls.c` 的 `test_segment()`，n7.1.1 / n8.0.1
-    核对）：每个分片地址（播放列表中的地址，不看重定向后的）的扩展名必须在 `allowed_segment_extensions`（n8.0.1：`3gp,aac,avi,ac3,
-    eac3,flac,mkv,m3u8,m4a,m4s,m4v,mpg,mov,mp2,mp3,mp4,mpeg,mpegts,ogg,ogv,oga,ts,vob,vtt,wav,webvtt,cmfv,cmfa,ec3,fmp4,html`）中，
-    并且与按**该列表第一个分片**探测出的格式匹配——mpegts 接受 `ts,m2t,m2ts,mts,mpg,m4s,mpeg,mpegts`；mov/mp4 接受自身扩展名
-    （含 `mp4`）及上述 TS 系扩展名；aac 只接受 `aac`（n8.0 起也接受 TS 系）；mp3 为 `mp2,mp3,m2a,mpa`；eac3 为 `eac3,ec3`；
-    matroska 为 `mkv,…,webm`；webvtt 为 `vtt`。因此同一列表内用同一个扩展名。`flv` 不在允许列表中，`wav` 解复用器没有扩展名，
-    这两种分片在新版上无论叫什么都会被拒（HLS 中本不常见）。FFmpeg 6.0 只对 `file` 协议检查扩展名，按内容命名对它没有影响
-    （探测时扩展名只是加分项，与内容一致）。
+  - **为什么按内容**：FFmpeg 7.1.1 起 HLS 解复用器默认 `extension_picky=1`（`libavformat/hls.c` 的 `test_segment()`，按 n6.0 / n7.1.1 /
+    n8.0.1 的源码核对）。每个分片地址（播放列表中的地址，不看重定向后的；`EXT-X-MAP` 初始化分片不检查）的扩展名必须在允许列表中：
+    n7.1.1 用 `allowed_extensions`（`3gp,aac,avi,ac3,eac3,flac,mkv,m3u8,m4a,m4s,m4v,mpg,mov,mp2,mp3,mp4,mpeg,mpegts,ogg,ogv,oga,ts,vob,wav`，
+    **没有 `vtt`**），n8.0 起改用 `allowed_segment_extensions`（再加 `vtt,webvtt,cmfv,cmfa,ec3,fmp4,html`）。检查时机：首次解析播放列表时
+    只查允许列表（任何一个不通过，整份列表解析失败）；探测起播分片之后，按探测出的格式检查**全部**分片；刷新时按已确定的格式检查新分片。
+    与格式的对应：mpegts 接受 `ts,m2t,m2ts,mts,mpg,m4s,mpeg,mpegts`（n8.0.1 另有 `html`）；mov/mp4 接受自身扩展名（含 `mp4`）及 TS 系扩展名
+    （n8.0.1 另有 `cmfv,cmfa`）；aac 在 n7.1.1 只接受 `aac`，n8.0 起也接受 TS 系；mp3 为 `mp2,mp3,m2a,mpa`；eac3 为 `eac3,ec3`；
+    matroska 为 `mkv,…,webm`；webvtt 在 n8.0 起为 `vtt,webvtt`。因此同一列表内用同一个扩展名。`flv` 不在允许列表中，`wav` 解复用器没有
+    扩展名（n7.1.1 / n8.0.1 `wavdec.c`），这两种分片在新版上无论叫什么都会被拒（HLS 中本不常见）。n7.1.1 的允许列表没有 `vtt`，
+    HLS 字幕分片在 7.1.x 上会被拒（与本项目的命名无关，升级时应直接用 8.0+）。FFmpeg 6.0 只对 `file` 协议检查扩展名（n6.0 `hls.c`
+    中没有 `test_segment()`），按内容命名对它没有影响（探测时扩展名只是加分项，与内容一致）。
 - **Range / HEAD**：媒体的 `Range` 原样转发（根地址的 `bytes=0-` 不转发，以便识别是否为播放列表；播放列表、密钥、加密分片不转发给上游）。
   HEAD 按 GET 取上游后只返回代理自己的响应头（播放列表为改写后的长度）。加密分片的 `Range` 由代理按明文处理（见上）。上游请求固定 `Accept-Encoding: identity`（`StreamRef.headers`
   不能覆盖）；上游仍压缩时只接受整段的 gzip（由 dart:io 解压，不带长度），其他编码 502。只透传 `Content-Length` / `Content-Range` /
@@ -773,9 +780,10 @@ media_kit (libmpv / FFmpeg) ── http://127.0.0.1:<port>/<token>/<编号>/<文
 - **DASH 暂不支持**（MPD 中 `BaseURL` / `SegmentTemplate` 等地址需要另外改写）：播放页跳过 `type: dash` 的流，代理拒绝 MPD。
 - AES-128 与 `EXT-X-BYTERANGE` 同时使用、加密的低延迟部分分片（`EXT-X-PART`）暂不支持（对应地址总是 403）。
 - 伪装成图片等其他格式的分片（文件头不是媒体容器）会被拒绝。
-- 新版 FFmpeg（7.1.1+）的 HLS 分片扩展名检查：代理按每个子播放列表第一个媒体地址的内容命名（见上）。同一列表中容器不一致的分片
-  （例如 `EXT-X-DISCONTINUITY` 前后换了容器）、首个分片探测失败而实际不是 TS / fMP4 的列表、FLV / WAV 分片，在新版上仍会被拒；
-  FFmpeg 本身也按第一个分片的格式检查整个列表。当前三平台的 FFmpeg 为 6.0，不受影响。
+- 新版 FFmpeg（7.1.1+）的 HLS 分片扩展名检查：代理按每个子播放列表中 FFmpeg 起播时探测的那个媒体地址的内容命名（见上）。
+  同一列表中容器不一致的分片（例如 `EXT-X-DISCONTINUITY` 前后换了容器）、探测失败而实际不是 TS / fMP4 的列表、FLV / WAV 分片，
+  在新版上仍会被拒（FFmpeg 本身也按起播分片的格式检查整个列表）；7.1.x 上 HLS 字幕分片会被拒（允许列表没有 `vtt`）。
+  当前三平台的 FFmpeg 为 6.0，不受影响。
 - 代理只监听本机回环地址，其他本机程序没有令牌就无法使用。
 
 #### 6.4.4 安装包体积
