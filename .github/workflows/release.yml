@@ -1,0 +1,173 @@
+name: Release
+
+# 推送 v* 标签时构建三平台安装包，并把原生组件（libmpv / FFmpeg 等）的对应源码与构建脚本
+# 一并上传到同一个 Release（GPL-3.0 §6，architecture §6.4.1）。
+# 手动运行（workflow_dispatch）为 dry-run：只构建并上传为工作流产物，不创建 Release。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      skip_builds:
+        description: "只打包源码（跳过三平台构建，用于检查源码包）"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FLUTTER_VERSION: "3.47.7"
+  DRY_RUN: ${{ github.event_name != 'push' }}
+
+jobs:
+  meta:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [ "$REF_TYPE" = "tag" ]; then v="$REF_NAME"; else v="dryrun-${SHA:0:7}"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+  sources:
+    name: Native sources
+    needs: meta
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download and verify native sources
+        run: bash tool/release/fetch_native_sources.sh out "tsumugi-${{ needs.meta.outputs.version }}-native-sources"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-sources
+          path: |
+            out/*.tar
+            out/*.tar.sha256
+          retention-days: ${{ github.event_name == 'push' && 7 || 3 }}
+
+  android:
+    name: Build Android
+    needs: meta
+    if: github.event_name == 'push' || !inputs.skip_builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get
+      - run: dart run build_runner build
+      - run: flutter build apk --release --split-per-abi
+      - name: Rename
+        run: |
+          mkdir dist
+          for f in build/app/outputs/flutter-apk/app-*-release.apk; do
+            abi=$(basename "$f" | sed -E 's/^app-(.*)-release\.apk$/\1/')
+            cp "$f" "dist/tsumugi-${{ needs.meta.outputs.version }}-android-$abi.apk"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: dist/*
+          retention-days: ${{ github.event_name == 'push' && 7 || 3 }}
+
+  windows:
+    name: Build Windows
+    needs: meta
+    if: github.event_name == 'push' || !inputs.skip_builds
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get
+      - run: dart run build_runner build
+      - run: flutter build windows --release
+      - name: Package
+        shell: bash
+        run: |
+          rel=build/windows/x64/runner/Release
+          # 不随包分发微软的 d3dcompiler_47.dll（windows/CMakeLists.txt 已排除，这里再确认一次）。
+          if [ -e "$rel/d3dcompiler_47.dll" ]; then echo "d3dcompiler_47.dll must not be bundled" >&2; exit 1; fi
+          cp LICENSE THIRD_PARTY_NOTICES.md "$rel/"
+          mkdir dist
+          7z a -tzip -mx=9 "dist/tsumugi-${{ needs.meta.outputs.version }}-windows-x64.zip" "./$rel/*"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*
+          retention-days: ${{ github.event_name == 'push' && 7 || 3 }}
+
+  ios:
+    name: Build iOS (unsigned)
+    needs: meta
+    if: github.event_name == 'push' || !inputs.skip_builds
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get
+      - run: dart run build_runner build
+      - run: flutter build ios --release --no-codesign
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p Payload dist
+          cp -R build/ios/iphoneos/Runner.app Payload/
+          zip -qr "dist/tsumugi-${{ needs.meta.outputs.version }}-ios-unsigned.ipa" Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios
+          path: dist/*
+          retention-days: ${{ github.event_name == 'push' && 7 || 3 }}
+
+  release:
+    name: Publish release
+    needs: [meta, sources, android, windows, ios]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          ls -la dist
+          cat > notes.md <<'EOF'
+          Tsumugi 按 GPL-3.0-or-later 发布。
+
+          - `*-native-sources.tar`：安装包中原生组件（libmpv / FFmpeg 及其依赖等）的对应源码与构建脚本，清单见包内 `native_sources.tsv`。
+          - 第三方组件的版本与许可证见 `THIRD_PARTY_NOTICES.md`；应用内「设置 → 关于 → 第三方许可证」可查看全文。
+          - iOS 安装包未签名。
+          EOF
+          gh release create "$TAG" dist/* --title "$TAG" --notes-file notes.md --verify-tag
