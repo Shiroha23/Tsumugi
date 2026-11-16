@@ -536,7 +536,8 @@ export async function search(keyword, page) {
 - **音视频**：播放器不直接访问网络，所有请求（HLS 的主 / 子播放列表、分片、密钥、初始化分片，MP4 的区间请求）都经客户端的
   本地媒体代理由本源的网络层发出（architecture §6.4），因此与其他请求一样受白名单（含每一跳重定向）、Cookie 域、默认 headers
   与限速约束（分片走媒体配额，见上文 `rateLimit`），`StreamRef.headers` 随**每个**请求发送。播放列表中白名单外的地址会播放失败。
-  - 目前只支持 HLS（`type: "hls"`）与单文件（`mp4` / `auto`）；`dash` 暂不支持。
+  - apiVersion 1 只支持 HLS（`type: "hls"`）与单文件（`mp4` / `auto`）。**`dash` 不支持**：客户端跳过 `type: "dash"` 的流，
+    MPD 一律拒绝；只有 DASH 的站点请用脚本源返回 HLS 或单文件地址。将来是否支持见 [#42](https://github.com/Shiroha23/Tsumugi/issues/42)。
   - 分片与单文件的响应必须是可识别的媒体容器（MPEG-TS、MP4 / fMP4、Matroska / WebM、FLV、Ogg、ADTS / MP3、AC-3、FLAC、AVI / WAV），
     字幕播放列表中的分片必须是 WebVTT；HLS 以外的播放列表 / 清单、伪装成其他格式的分片会被拒绝。
   - `EXT-X-KEY:METHOD=AES-128` 由客户端取密钥并解密；与 `EXT-X-BYTERANGE` 同时使用暂不支持。
