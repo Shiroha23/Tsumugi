@@ -665,7 +665,7 @@ Apache-2.0 与 GPL-3.0 兼容。**再分发（CI 产物、Release）需要满足
   同一播放页内换集 / 换清晰度时输出已就绪，直接打开；Windows 上输出总是就绪。加载遮罩保留到播放器真正从起始位置开始播放
   （收到新媒体的时长或一次缓冲之后，位置到达起始位置附近）才撤下，期间不显示控件。
   真机验证（2026-11，Android 16）：PR #38 时从头播放 HLS 10 次中 10 次从 00:00 开始；M4 播放页 PR 中续播、换清晰度、自动下一集见 PR 描述。
-- **media_kit_video fork 不可行**（[#39](https://github.com/Shiroha23/Tsumugi/issues/39)，M4 播放页 PR 中实测后放弃）：曾在
+- **media_kit_video fork 不可行**（[#49](https://github.com/Shiroha23/Tsumugi/issues/49)，M4 播放页 PR 中实测后放弃）：曾在
   [`Shiroha23/media-kit`](https://github.com/Shiroha23/media-kit) 的 `tsumugi/android-wid-seek` 分支只改 Android 的 `widListener`
   （位置 ≤ 0 或已播完时不执行那次 seek，思路同上游已关闭的 [media-kit#1453](https://github.com/media-kit/media-kit/pull/1453)），
   并去掉重新打开。真机上新开页面从头播放 HLS 6 次中仍有 5 次一开始就在 2.11 s 或结尾——确认装的是打过补丁的版本后，
@@ -827,7 +827,7 @@ M5 音乐复用同一 libmpv，不再增加体积。预编译库内部的组件�
 6. **移动端**：Android 真机验证，横屏 / 全屏 / 手势、切到后台时暂停；iOS 真机（#31）。后台播放留给 M5。
 7. ~~**限速与缓存**~~（已完成）：令牌桶移到按源的 `SourceSession`，源实例、图片加载与媒体代理共用；分片走每源固定的媒体配额；
    mpv 磁盘缓存评估后保持关闭（§6.4.3「限速」「播放器缓存」）。
-8. ~~**media_kit_video fork**~~（[#39](https://github.com/Shiroha23/Tsumugi/issues/39)）：实测不可行，保留“重新打开”方案（§6.4.2）。
+8. ~~**media_kit_video fork**~~（[#49](https://github.com/Shiroha23/Tsumugi/issues/49)）：实测不可行，保留“重新打开”方案（§6.4.2）。
    上游修复 Android 输出初始化与 HLS 的冲突后，可去掉重新打开（升级 media_kit 时在真机上复测）。
 
 ## 7. 里程碑

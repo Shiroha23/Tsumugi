@@ -72,7 +72,7 @@ const videoPlayerMpvOptions = {
 ///
 /// Android 上 media_kit 拿到视频参数后才创建 Surface；Surface 到达时把视频输出从 `null` 换成真正的输出
 /// 并 seek 到“当前位置”。这一步落在 HLS 解复用器初始化期间时，播放会停在分片边界（2.1 s）或结尾。
-/// 只跳过 media_kit 那次 seek 不够（#39 的 fork 方案在真机上 6 次中仍有 5 次跳位，architecture §6.4.2），
+/// 只跳过 media_kit 那次 seek 不够（#49：fork 方案在真机上 6 次中仍有 5 次跳位，architecture §6.4.2），
 /// 因此：
 ///
 /// - 视频输出已就绪（Windows，或 Android 上同一播放页内换集、Surface 尺寸不变）：直接打开；
