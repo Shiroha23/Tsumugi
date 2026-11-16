@@ -16,12 +16,17 @@ import '../../../sources/runtime/source_runtime.dart';
 import '../../../sources/source.dart';
 import '../../common/detail/media_detail_provider.dart';
 import 'video_episode_panel.dart';
+import 'video_fullscreen.dart';
+import 'video_playback.dart';
+import 'video_player_layout.dart';
 import 'video_playlist.dart';
 import 'video_progress.dart';
+import 'video_touch_controls.dart';
 
 /// 视频播放页（architecture §5.2「视频播放」、§6.4）：取 `content(unitId)` 的流，经本地媒体代理交给
-/// media_kit（libmpv）播放。播放 / 暂停 / 进度 / 全屏由 media_kit 的自适应控件提供；清晰度与倍速在
-/// 标题栏菜单；选集与线路在画面下方（宽屏时在右侧）。
+/// media_kit（libmpv）播放。桌面用 media_kit 的桌面控件（快捷键、窗口全屏）；Android / iOS 用
+/// [VideoTouchControls] 与页面内全屏（[VideoFullscreenController]）。清晰度与倍速在标题栏菜单
+/// （移动端全屏时在顶栏）；选集与线路在画面下方（宽屏时在右侧）。
 ///
 /// 播放器只拿到 `http://127.0.0.1:<port>/…` 的代理地址；上游请求全部由该源的网络层发出。
 class VideoPlayerPage extends ConsumerStatefulWidget {
@@ -51,6 +56,17 @@ const _speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
   late final Player _player = createVideoPlayer();
   late final VideoController _video = createVideoController(_player);
+  late final PlayerVideoPlayback _playback = PlayerVideoPlayback(_player);
+  final _fullscreen = VideoFullscreenController();
+  late final _background = VideoBackgroundPause(
+    enabled: () => mounted && _touch,
+    onBackground: () {
+      if (_player.state.playing) _player.pause().ignore();
+    },
+  );
+
+  /// 播放器子树：全屏切换布局时保留状态。
+  final _playerKey = GlobalKey();
   final _subscriptions = <StreamSubscription<Object?>>[];
 
   late String _unitId = widget.unitId;
@@ -87,6 +103,9 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
   void initState() {
     super.initState();
     _recorder = ref.read(videoProgressRecorderProvider);
+    _playback; // 尽早订阅播放器状态
+    _fullscreen.addListener(_onFullscreenChanged);
+    _background.attach();
     _subscriptions
       ..add(_player.stream.error.listen(_onPlayerError))
       ..add(_player.stream.position.listen((_) => _report()))
@@ -121,6 +140,39 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
       fireImmediately: true,
     );
     _load();
+  }
+
+  // ---------------------------------------------------------------------------
+  // 移动端：全屏、切到后台
+
+  /// Android / iOS：触控控件、页面内全屏、切到后台时暂停。
+  bool get _touch => isTouchVideoPlatform(Theme.of(context).platform);
+
+  void _onFullscreenChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _toggleFullscreen() {
+    if (_fullscreen.isFullscreen) {
+      _exitFullscreen();
+      return;
+    }
+    final width = _player.state.width;
+    final height = _player.state.height;
+    _fullscreen
+        .enter(
+          aspectRatio:
+              width != null && height != null && width > 0 && height > 0
+              ? width / height
+              : null,
+        )
+        .ignore();
+  }
+
+  void _exitFullscreen() {
+    if (!mounted) return;
+    final phone = MediaQuery.sizeOf(context).shortestSide < phoneShortestSide;
+    _fullscreen.exit(phone: phone).ignore();
   }
 
   // ---------------------------------------------------------------------------
@@ -193,6 +245,7 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
     // 代理记录的上游失败（白名单、人机验证、超时……）比播放器的错误文字更有用：
     // 人机验证 / 登录时显示「打开验证页」，完成后重新加载。
     final failure = _stream?.lastFailure;
+    _exitFullscreen();
     setState(() {
       if (failure != null) {
         _error = failure.toSourceException();
@@ -332,6 +385,9 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
       stillCurrent: () => _current(generation),
     );
     if (!_current(generation)) return;
+    // 加载期间切到了后台（含后台播完自动打开下一集）：不在后台继续播放。
+    if (_background.inBackground) await _player.pause();
+    if (!_current(generation)) return;
     debugPrint(
       '[player] started: ${DateTime.now().difference(opened).inMilliseconds} ms '
       'start=$start position=${_player.state.position} '
@@ -350,6 +406,7 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
 
   void _fail(int generation, Object e) {
     if (!_current(generation)) return;
+    _exitFullscreen();
     setState(() {
       _error = e;
       _loading = false;
@@ -360,6 +417,12 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
   void dispose() {
     _report(immediate: true);
     _generation++; // 进行中的加载不再操作播放器
+    _background.detach();
+    _fullscreen
+      ..removeListener(_onFullscreenChanged)
+      ..restore().ignore()
+      ..dispose();
+    _playback.dispose();
     for (final s in _subscriptions) {
       s.cancel().ignore();
     }
@@ -387,70 +450,48 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
             onSwitchLine: _switchLine,
           );
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_unitTitle ?? '播放'),
-        actions: [
-          if (_streams.length > 1)
-            PopupMenuButton<int>(
-              tooltip: '清晰度',
-              initialValue: _streamIndex,
-              onSelected: _switchStream,
-              itemBuilder: (_) => [
-                for (var i = 0; i < _streams.length; i++)
-                  PopupMenuItem(
-                    value: i,
-                    child: Text(streamLabel(_streams, i)),
-                  ),
-              ],
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Center(
-                  child: Text(
-                    _streamIndex >= 0
-                        ? streamLabel(_streams, _streamIndex)
-                        : '',
-                  ),
-                ),
-              ),
-            ),
-          PopupMenuButton<double>(
-            tooltip: '倍速',
-            initialValue: _rate,
-            onSelected: _player.setRate,
-            itemBuilder: (_) => [
-              for (final s in _speeds)
-                PopupMenuItem(value: s, child: Text('${s}x')),
-            ],
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Center(child: Text('${_rate}x')),
-            ),
-          ),
-        ],
-      ),
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          final wide = constraints.maxWidth >= 900;
-          final player = _buildPlayer(context);
-          if (wide) {
-            return Row(
-              children: [
-                Expanded(child: player),
-                SizedBox(width: 320, child: panel),
-              ],
-            );
-          }
-          return Column(
-            children: [
-              AspectRatio(aspectRatio: 16 / 9, child: player),
-              Expanded(child: panel),
-            ],
-          );
-        },
-      ),
+    return VideoPlayerLayout(
+      fullscreen: _fullscreen.isFullscreen,
+      onExitFullscreen: _exitFullscreen,
+      appBar: AppBar(title: Text(_unitTitle ?? '播放'), actions: _menus()),
+      player: KeyedSubtree(key: _playerKey, child: _buildPlayer(context)),
+      panel: panel,
     );
   }
+
+  /// 清晰度与倍速菜单（标题栏；移动端全屏时在顶栏）。
+  List<Widget> _menus() => [
+    if (_streams.length > 1)
+      PopupMenuButton<int>(
+        tooltip: '清晰度',
+        initialValue: _streamIndex,
+        onSelected: _switchStream,
+        itemBuilder: (_) => [
+          for (var i = 0; i < _streams.length; i++)
+            PopupMenuItem(value: i, child: Text(streamLabel(_streams, i))),
+        ],
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Center(
+            child: Text(
+              _streamIndex >= 0 ? streamLabel(_streams, _streamIndex) : '',
+            ),
+          ),
+        ),
+      ),
+    PopupMenuButton<double>(
+      tooltip: '倍速',
+      initialValue: _rate,
+      onSelected: _player.setRate,
+      itemBuilder: (_) => [
+        for (final s in _speeds) PopupMenuItem(value: s, child: Text('${s}x')),
+      ],
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Center(child: Text('${_rate}x')),
+      ),
+    ),
+  ];
 
   Widget _buildPlayer(BuildContext context) {
     if (_error case final error?) {
@@ -467,6 +508,7 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
         ),
       );
     }
+    final touch = _touch;
     return Column(
       children: [
         Expanded(
@@ -474,15 +516,32 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
             alignment: Alignment.center,
             children: [
               // 真正从起始位置开始播放之前不显示控件，用加载遮罩盖住画面与进度。
+              // 常亮：Video 的 wakelock 随播放状态开关（architecture §5.2「屏幕常亮」）。
               Video(
                 controller: _video,
-                controls: _loading ? NoVideoControls : AdaptiveVideoControls,
+                controls: touch || _loading
+                    ? NoVideoControls
+                    : AdaptiveVideoControls,
+                // 移动端由 _background 处理（含加载期间切到后台）；桌面沿用 media_kit 的默认行为。
+                pauseUponEnteringBackgroundMode: !touch,
               ),
               if (_loading)
                 const Positioned.fill(
                   child: ColoredBox(
                     color: Colors.black,
                     child: Center(child: CircularProgressIndicator()),
+                  ),
+                ),
+              if (touch)
+                Positioned.fill(
+                  child: VideoTouchControls(
+                    playback: _playback,
+                    loading: _loading,
+                    fullscreen: _fullscreen.isFullscreen,
+                    onToggleFullscreen: _toggleFullscreen,
+                    onBack: _exitFullscreen,
+                    title: _unitTitle,
+                    actions: _menus(),
                   ),
                 ),
             ],
