@@ -186,7 +186,7 @@ detail(id) → 章节/剧集/曲目列表 → content(itemId)
 
 **视频播放（M4，`features/video/`）**：详情 `/video/:sourceId/:itemId`（通用详情页），播放页
 `/video/:sourceId/:itemId/play/:unitId?pos=<毫秒>`（`VideoRoutes`）。流经 `openProxiedStreamProvider`（`shared/video/`）
-建立代理会话后交给 media_kit；播放 / 暂停 / 进度 / 全屏为 media_kit 的自适应控件。
+建立代理会话后交给 media_kit；控件见下文「控件」。
 
 - **线路与选集**：线路即 `unitGroupsOf(detail)`（`groups` 非空时为各线路，否则 `units` 为唯一一条）。播放页下方列出当前线路的剧集，
   多于一条线路时可切换；切换线路时取另一线路中**标题相同**的剧集，没有则取同一下标，并保持当前位置。
@@ -198,7 +198,23 @@ detail(id) → 章节/剧集/曲目列表 → content(itemId)
   打开时的起始位置：`?pos`（详情页“继续播放”）→ 该剧集的 unit 进度 → 0。
 - **条目快照的封面请求头**（不重蹈 [#24](https://github.com/Shiroha23/Tsumugi/issues/24)）：`Detail` 没有 `coverHeaders`，
   写进度时依次取书架条目、已有历史中的值（封面地址相同时），最后回退到源清单的默认 headers（与详情页一致）。
-- 字幕、横屏 / 手势、切到后台暂停尚未实现（见 §6.4.6）。
+- **控件**：按 `Theme.platform` 区分。桌面（Windows）沿用 media_kit 的 `MaterialDesktopVideoControls`：空格播放 / 暂停、
+  左右方向键快退 / 快进、双击或按钮进入窗口全屏（media_kit 推入全屏路由），行为不变。
+  Android / iOS 用自己的触控控件（`VideoTouchControls`，`Video` 本身不带控件），只经 `VideoPlayback` 接口操作播放器（便于 widget 测试）：
+  - 单击显示 / 隐藏控件（播放中 3 s 无操作自动隐藏）；双击播放 / 暂停；横向拖动定位，拖动时在画面中央显示目标时间 /
+    时长，松手才 seek（整屏宽度对应 90 s，不超过时长）；长按临时 2 倍速，松手恢复原倍速（暂停时不生效）。
+  - 底栏为播放 / 暂停、进度条、时间与全屏按钮；全屏时顶栏为返回、标题与清晰度 / 倍速菜单（非全屏时它们在页面标题栏）。
+  - 加载中（见 §6.4.2 的加载遮罩）不响应手势、不显示底栏；全屏时仍显示顶栏的返回按钮。
+  - 音量 / 亮度手势未做：需要新的原生依赖（系统音量、窗口亮度），留待评估。
+- **移动端全屏**（`VideoFullscreenController`，只在 Android / iOS）：在同一页面内切换布局（不推新路由；播放器子树用 `GlobalKey`
+  保留状态），隐藏标题栏与选集面板，系统栏进入 `immersiveSticky`。方向按视频宽高比：宽 ≥ 高（或尚不知道尺寸）时锁定横屏
+  （左右两个方向），否则锁定竖屏。退出全屏时恢复系统栏（`edgeToEdge`），手机（最短边 < 600 dp）锁回竖屏、平板不限制方向；
+  离开页面时恢复系统栏并解除方向限制。返回键 / 返回手势在全屏时只退出全屏（`PopScope`），再按才离开页面。出错时自动退出全屏。
+- **屏幕常亮**：用 media_kit `Video` 的 `wakelock`（经 `wakelock_plus`，按播放状态开关，`Video` 销毁时释放）：播放时常亮，
+  暂停、播完、出错、离开页面时取消。全屏不另建 `Video`，不影响计数。
+- **切到后台**（Android / iOS）：应用进入 `hidden` / `paused` 时暂停，回到前台不自动播放；正在加载时进入后台的，加载完成后立即暂停
+  （包括后台播完自动打开下一集）。桌面沿用 media_kit 的默认行为（只在 `paused` 时暂停）。后台播放留给 M5。
+- 字幕尚未实现（见 §6.4.6）。
 
 **图片加载（M2，`shared/image/`）**：所有源图片（封面、漫画页）经 `SourceImageLoader` 加载：
 内存 LRU（编码后字节，默认 64 MB）→ 磁盘 LRU（应用缓存目录 `images/`，默认 512 MB，
@@ -824,7 +840,8 @@ M5 音乐复用同一 libmpv，不再增加体积。预编译库内部的组件�
 4. **字幕**：`SubtitleRef`（srt / vtt / ass）经代理加载与解析。
 5. **DASH**：**已决定（2026-11）：apiVersion 1 不支持**，已写入 source-spec §5。MPD 改写（`BaseURL`、`SegmentTemplate`、`SegmentList` 等）
    涉及代理的地址边界，推迟到有实际需求时单独评估（[#42](https://github.com/Shiroha23/Tsumugi/issues/42)）。
-6. **移动端**：Android 真机验证，横屏 / 全屏 / 手势、切到后台时暂停；iOS 真机（#31）。后台播放留给 M5。
+6. ~~**移动端交互**~~（已完成，见 §5.2「视频播放」）：横竖屏全屏、触控手势、屏幕常亮、切到后台时暂停。
+   未做：音量 / 亮度手势（需新原生依赖）、转动手机自动进入全屏；iOS 真机（#31）。后台播放留给 M5。
 7. ~~**限速与缓存**~~（已完成）：令牌桶移到按源的 `SourceSession`，源实例、图片加载与媒体代理共用；分片走每源固定的媒体配额；
    mpv 磁盘缓存评估后保持关闭（§6.4.3「限速」「播放器缓存」）。
 8. ~~**media_kit_video fork**~~（[#49](https://github.com/Shiroha23/Tsumugi/issues/49)）：实测不可行，保留“重新打开”方案（§6.4.2）。
