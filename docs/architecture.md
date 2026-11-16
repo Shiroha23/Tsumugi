@@ -353,7 +353,7 @@ tsumugi.ui.openWebView ────────┘   （单飞 / 节流） └�
   `rateLimit` 时，按旧清单构造、尚未关闭的客户端（图片客户端失效后延迟 30 s 关闭）继续用旧桶，新客户端用新桶，二者不会互相重置。
   请求分两条**通道**（`RateLimitLane`）：`source`（默认，`request` 只用它）计入清单的 `rateLimit`；`media` 只经
   `openStream(lane: media)` 使用，计入每个源单独的固定媒体配额（`SourceSession.mediaRateLimit`，突发 10、每秒 10）。
-  只有媒体代理会选 `media`（HLS 分片、确认是媒体后的单文件请求），脚本与声明式规则无法选择通道。
+  只有媒体代理会选 `media`（HLS 分片与密钥、确认是媒体后的单文件区间请求），脚本与声明式规则无法选择通道。
   图片加载器全局最多 6 个下载并发，因此源实例的请求在共用队列中最多排在几个图片请求之后。
 - `SourceNetworkConfig`：纯 core 类型；由清单生成的函数 `networkConfigFromManifest` 位于
   `lib/sources/network_error_mapping.dart`（core 不依赖 sources）。
@@ -671,13 +671,16 @@ media_kit (libmpv / FFmpeg) ── http://127.0.0.1:<port>/<token>/<编号>/<文
   都与 `request` 一致，但不受 20 MB 上限；挑战检测只读开头 `scanBytes`（64 KB），之后与剩余部分拼接返回。超时限制等待响应头的时间与
   读取响应体时相邻两块数据的间隔；调用方取消订阅或 `cancel()` 时中止请求、释放连接。
 - **限速**：每次播放的客户端用该源的 `SourceSession`，与源实例、图片加载共用令牌桶（§5.4）。代理按地址用途选通道：
-  播放列表、密钥、根地址（确认是媒体之前，含识别用的 1 KB 探测）走 `source`，计入清单 `rateLimit`；分片（含字幕分片、加密分片的密文）
-  与已确认是媒体的根地址（MP4 跳转时的区间请求）走 `media`，计入本源固定的媒体配额（突发 10、每秒 10）。
+  播放列表、根地址从开头开始的请求（每次都重新识别，可能是播放列表）与确认之前识别用的 1 KB 探测走 `source`，计入清单 `rateLimit`；
+  分片（含字幕分片、加密分片的密文）、密钥（轮换密钥时每个分片一个，数量同样不由源作者的 `rateLimit` 估计）与已确认是媒体的根地址
+  不从开头开始的请求（MP4 跳转时的区间请求）走 `media`，计入本源固定的媒体配额（突发 10、每秒 10）。
   **评估**：分片数由片长决定（2 s 分片 1 倍速约 0.5 个/s，跳转、多路音视频时短时突发几个），源作者无法据此设置 `rateLimit`；
   若计入 `rateLimit`，`1 / 3 s` 这样的源会每个分片排队数秒，播放必然卡顿，而分片多在 CDN 上，按站点礼貌限速的本意也不针对它们。
   另外两种方案：分片完全不限（异常播放列表——极短分片、大量地址——能让客户端无节制地请求）、清单新增可配置的媒体限速字段
   （改源格式，源作者同样不知道该填多少）。因此采用固定的媒体配额：正常播放远达不到，又给出硬上限。
   直播播放列表按目标时长刷新，计入 `rateLimit`；`rateLimit` 小于刷新频率的源上直播会落后，需由源作者调大。
+  `prepareTimeout`（60 s）包含限速排队时间：`rateLimit` 极小（如每 30 s 1 个）且图片也在排队时，打开播放所需的主 / 子播放列表
+  可能排队超过时限而播放失败，需由源作者调大 `rateLimit`。
 - **播放器缓存**（结论：**不启用 mpv 磁盘缓存**，`cache-on-disk=no`）：media_kit 默认 `cache-on-disk=yes` 但不设 `cache-dir`，
   所以两个平台都报 “Failed to create file cache” 并回落到内存。当前为内存缓存：向前 / 向后各 32 MB（media_kit `bufferSize` 默认，
   `demuxer-max-bytes` / `demuxer-max-back-bytes`）。不启用磁盘缓存的理由：

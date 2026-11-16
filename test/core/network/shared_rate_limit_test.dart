@@ -195,39 +195,40 @@ void main() {
       await expectQueued(queued, cancel, 'iso-a2', within: Duration.zero);
     });
 
-    test('一个源的媒体配额用尽不影响另一个源', () async {
-      final a = CountingSession();
-      final ca = mockClient(server, session: a.session);
-      final cb = mockClient(server, session: SourceSession());
-      addTearDown(ca.close);
-      addTearDown(cb.close);
-
-      // 用尽 a 的媒体配额（突发 10 个）。
+    test('一个源的媒体配额用尽不影响另一个源（虚拟时钟）', () async {
+      var now = Duration.zero;
+      SourceSession virtualSession(List<Duration> waits) => SourceSession(
+        newRateLimiter: (c) => TokenBucket(
+          requests: c.requests,
+          per: c.per,
+          clock: () => now,
+          delay: (d) async {
+            waits.add(d);
+            now += d;
+          },
+        ),
+      );
+      final waitsA = <Duration>[];
+      final waitsB = <Duration>[];
+      final a = virtualSession(waitsA)
+          .rateLimiter(null, lane: RateLimitLane.media)!;
+      final b = virtualSession(waitsB)
+          .rateLimiter(null, lane: RateLimitLane.media)!;
       final burst = SourceSession.mediaRateLimit.requests;
-      await Future.wait([
-        for (var i = 0; i < burst; i++)
-          ca
-              .openStream(
-                NetRequest('/echo?q=miso-a$i'),
-                lane: RateLimitLane.media,
-              )
-              .then((r) => r.cancel()),
-      ]);
-      expect(a.acquiredWith(SourceSession.mediaRateLimit), burst);
 
-      // b 的媒体请求立即放行（同样突发 10 个）。
-      final sw = Stopwatch()..start();
-      await Future.wait([
-        for (var i = 0; i < burst; i++)
-          cb
-              .openStream(
-                NetRequest('/echo?q=miso-b$i'),
-                lane: RateLimitLane.media,
-              )
-              .then((r) => r.cancel()),
-      ]);
-      // a 的下一个要等约 1 / 10 s；b 不受影响（宽松上限，避免 CI 抖动）。
-      expect(sw.elapsedMilliseconds, lessThan(2000));
+      for (var i = 0; i < burst; i++) {
+        await a.acquire();
+      }
+      // b 在同一时刻仍有完整的突发额度，不需要等待。
+      for (var i = 0; i < burst; i++) {
+        await b.acquire();
+      }
+      expect(waitsB, isEmpty);
+      expect(now, Duration.zero);
+      // a 已用尽：下一个要等。
+      await a.acquire();
+      expect(waitsA, isNotEmpty);
+      expect(now, const Duration(milliseconds: 100));
     });
   });
 
