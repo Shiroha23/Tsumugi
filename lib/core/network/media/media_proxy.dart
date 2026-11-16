@@ -241,7 +241,7 @@ class MediaProxySession {
         if (verdict != null) return await _status(res, verdict);
       }
 
-      up = await _open(upstream, range, cancel);
+      up = await _open(upstream, range, cancel, lane: _laneFor(entry));
       if (up == null) return await _status(res, _failureStatus());
       if (_closed) return await _status(res, HttpStatus.notFound);
 
@@ -431,7 +431,8 @@ class MediaProxySession {
     _inFlight.add(cancel);
     final deadline = Timer(_proxy.prepareTimeout, cancel.cancel);
     try {
-      final up = await _open(upstream, null, cancel);
+      // 加密分片的密文：与明文分片一样走媒体配额。
+      final up = await _open(upstream, null, cancel, lane: RateLimitLane.media);
       if (up == null) return (null, _failureStatus());
       try {
         if (up.status != HttpStatus.ok) {
@@ -507,7 +508,7 @@ class MediaProxySession {
     _inFlight.add(cancel);
     final deadline = Timer(_proxy.prepareTimeout, cancel.cancel);
     try {
-      final up = await _open(uri, null, cancel);
+      final up = await _open(uri, null, cancel, lane: RateLimitLane.source);
       if (up == null) return (null, _failureStatus());
       try {
         if (up.status != HttpStatus.ok) {
@@ -561,13 +562,23 @@ class MediaProxySession {
         '',
   );
 
+  /// [entry] 的上游请求计入哪个令牌桶（source-spec §5）：分片与已确认是媒体的根地址走本源的媒体配额，
+  /// 播放列表、密钥与尚未确认的根地址计入清单的 `rateLimit`。
+  static RateLimitLane _laneFor(_Entry entry) => switch (entry.kind) {
+    _Kind.media || _Kind.subtitle => RateLimitLane.media,
+    _Kind.root when entry.verified => RateLimitLane.media,
+    _ => RateLimitLane.source,
+  };
+
   Future<NetStreamResponse?> _open(
     Uri upstream,
     String? range,
-    NetCancellation cancel,
-  ) async {
+    NetCancellation cancel, {
+    required RateLimitLane lane,
+  }) async {
     try {
       return await _client.openStream(
+        lane: lane,
         NetRequest(
           upstream.toString(),
           headers: {
@@ -604,7 +615,12 @@ class MediaProxySession {
     _Entry entry,
     NetCancellation cancel,
   ) async {
-    final up = await _open(upstream, 'bytes=0-${_sniffBytes - 1}', cancel);
+    final up = await _open(
+      upstream,
+      'bytes=0-${_sniffBytes - 1}',
+      cancel,
+      lane: _laneFor(entry),
+    );
     if (up == null) return _failureStatus();
     try {
       if (up.status != HttpStatus.ok &&

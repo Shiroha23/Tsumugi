@@ -8,7 +8,10 @@ import '../encoding/text_decoding.dart';
 import 'challenge_detector.dart';
 import 'host_policy.dart';
 import 'network_exception.dart';
+import 'rate_limiter.dart';
 import 'source_session.dart';
+
+export 'rate_limiter.dart' show RateLimitConfig, RateLimitLane;
 
 /// 声明式引擎与脚本宿主 API（`tsumugi.http` / `tsumugi.cookies`）共用的按源 HTTP 客户端。
 ///
@@ -17,7 +20,7 @@ import 'source_session.dart';
 abstract interface class SourceHttpClient {
   SourceNetworkConfig get config;
 
-  /// 本源的会话（Cookie Jar、WebView 同步来的 UA）。同一源的多个客户端可共用一个会话。
+  /// 本源的会话（Cookie Jar、WebView 同步来的 UA、限速令牌桶）。同一源的多个客户端共用一个会话。
   SourceSession get session;
 
   /// 发出请求。
@@ -35,7 +38,13 @@ abstract interface class SourceHttpClient {
   /// 逐块读取，**不受** `maxResponseBytes` 限制。[NetRequest.timeout]（默认
   /// [SourceNetworkConfig.timeout]）限制等待响应头的时间，以及读取响应体时相邻两块数据的间隔。
   /// [NetRequest.cancellation] 在读取响应体期间同样有效。不支持 [NetRequest.throwOnHttpError]。
-  Future<NetStreamResponse> openStream(NetRequest request);
+  ///
+  /// [lane] 选择限速通道（source-spec §5）：默认 [RateLimitLane.source] 计入清单的 `rateLimit`；
+  /// [RateLimitLane.media] 计入本源固定的媒体配额，只供本地媒体代理请求分片等媒体数据使用。
+  Future<NetStreamResponse> openStream(
+    NetRequest request, {
+    RateLimitLane lane = RateLimitLane.source,
+  });
 
   /// 读取本源 Cookie 域中会发往 [url] 的 Cookie（name → value）。[url] 必须在白名单内。
   Future<Map<String, String>> getCookies(String url);
@@ -108,14 +117,6 @@ class SourceNetworkConfig {
   final int maxResponseBytes;
 
   final ChallengeDetector challengeDetector;
-}
-
-/// 每 [per] 时间内最多 [requests] 个请求（令牌桶，允许突发 [requests] 个）。
-class RateLimitConfig {
-  const RateLimitConfig({required this.requests, required this.per});
-
-  final int requests;
-  final Duration per;
 }
 
 /// 请求体。

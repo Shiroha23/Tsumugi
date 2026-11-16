@@ -7,7 +7,6 @@ import 'package:dio/dio.dart';
 import 'package:dio_cookie_manager/dio_cookie_manager.dart';
 
 import 'network_exception.dart';
-import 'rate_limiter.dart';
 import 'source_http_client.dart';
 import 'source_session.dart';
 
@@ -15,7 +14,7 @@ import 'source_session.dart';
 ///
 /// 重定向由本类逐跳处理（dio 本身不跟随），以便对每一跳执行白名单检查。
 class DioSourceHttpClient implements SourceHttpClient {
-  /// [session] 为本源的会话（与同一源的其他客户端共用 Cookie 与 UA）；未给出时新建一个，
+  /// [session] 为本源的会话（与同一源的其他客户端共用 Cookie、UA 与限速令牌桶）；未给出时新建一个，
   /// 其 Cookie Jar 为 [cookieJar]（默认内存 Jar）。
   /// [adapter] 仅用于测试或特殊传输层（例如把虚构域名路由到本地 mock 服务器）。
   DioSourceHttpClient(
@@ -24,11 +23,7 @@ class DioSourceHttpClient implements SourceHttpClient {
     CookieJar? cookieJar,
     HttpClientAdapter? adapter,
   }) : assert(session == null || cookieJar == null),
-       session = session ?? SourceSession(cookieJar: cookieJar),
-       _bucket = switch (config.rateLimit) {
-         final r? => TokenBucket(requests: r.requests, per: r.per),
-         null => null,
-       } {
+       session = session ?? SourceSession(cookieJar: cookieJar) {
     // 不使用 dio 自带的超时：每次尝试的总时长由 [_attempt] 的计时器统一控制，
     // 这样请求级 timeout 可以放宽或收紧默认值。
     _dio = Dio();
@@ -41,7 +36,6 @@ class DioSourceHttpClient implements SourceHttpClient {
   @override
   final SourceSession session;
   CookieJar get cookieJar => session.cookieJar;
-  final TokenBucket? _bucket;
   late final Dio _dio;
 
   static const _methods = {
@@ -133,7 +127,10 @@ class DioSourceHttpClient implements SourceHttpClient {
   }
 
   @override
-  Future<NetStreamResponse> openStream(NetRequest request) async {
+  Future<NetStreamResponse> openStream(
+    NetRequest request, {
+    RateLimitLane lane = RateLimitLane.source,
+  }) async {
     final method = request.method.toUpperCase();
     if (method != 'GET' && method != 'HEAD') {
       throw NetworkException(
@@ -158,6 +155,7 @@ class DioSourceHttpClient implements SourceHttpClient {
         headers,
         timeout,
         request.cancellation,
+        lane,
       );
       final location = raw.headers['location']?.firstOrNull;
       if (request.followRedirects &&
@@ -254,18 +252,10 @@ class DioSourceHttpClient implements SourceHttpClient {
     Map<String, String> headers,
     Duration timeout,
     NetCancellation? cancellation,
+    RateLimitLane lane,
   ) async {
     for (var attempt = 0; ; attempt++) {
-      _throwIfCancelled(cancellation, uri);
-      if (_bucket case final bucket?) {
-        final acquired = await bucket.acquire(
-          abort: cancellation?.whenCancelled,
-        );
-        if (!acquired) {
-          throw NetworkException(NetworkErrorKind.cancelled, uri: uri);
-        }
-      }
-      _throwIfCancelled(cancellation, uri);
+      await _acquire(lane, uri, cancellation);
 
       final canRetry = attempt < config.maxRetries;
       _RawStream raw;
@@ -513,17 +503,7 @@ class DioSourceHttpClient implements SourceHttpClient {
   ) async {
     final retryable = _idempotent.contains(method);
     for (var attempt = 0; ; attempt++) {
-      _throwIfCancelled(cancellation, uri);
-      if (_bucket case final bucket?) {
-        // 排队等待期间被取消时立即失败，且不消耗令牌。
-        final acquired = await bucket.acquire(
-          abort: cancellation?.whenCancelled,
-        );
-        if (!acquired) {
-          throw NetworkException(NetworkErrorKind.cancelled, uri: uri);
-        }
-      }
-      _throwIfCancelled(cancellation, uri);
+      await _acquire(RateLimitLane.source, uri, cancellation);
 
       final canRetry = retryable && attempt < config.maxRetries;
       _RawResponse raw;
@@ -556,6 +536,23 @@ class DioSourceHttpClient implements SourceHttpClient {
       }
       return raw;
     }
+  }
+
+  /// 从本源会话的 [lane] 令牌桶取一个令牌（每次尝试、每一跳重定向各一次）。
+  /// 排队等待期间被取消时立即失败，且不消耗令牌。
+  Future<void> _acquire(
+    RateLimitLane lane,
+    Uri uri,
+    NetCancellation? cancellation,
+  ) async {
+    _throwIfCancelled(cancellation, uri);
+    if (session.rateLimiter(config.rateLimit, lane: lane) case final bucket?) {
+      final acquired = await bucket.acquire(abort: cancellation?.whenCancelled);
+      if (!acquired) {
+        throw NetworkException(NetworkErrorKind.cancelled, uri: uri);
+      }
+    }
+    _throwIfCancelled(cancellation, uri);
   }
 
   Future<void> _backoff(int attempt) =>

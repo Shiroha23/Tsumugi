@@ -1,5 +1,36 @@
 import 'dart:async';
 
+/// 每 [per] 时间内最多 [requests] 个请求（令牌桶，允许突发 [requests] 个）。
+///
+/// 按值比较：同一个会话中取值相同的配置共用一个令牌桶（`SourceSession.rateLimiter`）。
+class RateLimitConfig {
+  const RateLimitConfig({required this.requests, required this.per});
+
+  final int requests;
+  final Duration per;
+
+  @override
+  bool operator ==(Object other) =>
+      other is RateLimitConfig &&
+      other.requests == requests &&
+      other.per == per;
+
+  @override
+  int get hashCode => Object.hash(requests, per);
+
+  @override
+  String toString() => 'RateLimitConfig($requests / $per)';
+}
+
+/// 请求计入哪一个令牌桶（docs/source-spec.md §5）。
+enum RateLimitLane {
+  /// 清单的 `rateLimit`（未声明时不限速）：规则 / 脚本请求、图片、播放列表、密钥等。
+  source,
+
+  /// 本源固定的媒体配额：本地媒体代理转发的 HLS 分片与已确认是媒体的单文件请求。
+  media,
+}
+
 /// 令牌桶限速器（docs/source-spec.md §1 `rateLimit`）。
 ///
 /// 容量为 [requests]，每 [per] 补充 [requests] 个令牌（匀速补充）。

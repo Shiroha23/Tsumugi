@@ -42,8 +42,9 @@ class ProxiedStream {
 
 /// 为某个源的 [stream] 建立代理会话。
 ///
-/// 每次播放新建一个使用该源 `SourceSession`（Cookie、UA）的客户端，因此白名单、默认 headers、
-/// Cookie 与限速都与源实例一致；`StreamRef.headers` 随每个请求发送。
+/// 每次播放新建一个使用该源 `SourceSession`（Cookie、UA、令牌桶）的客户端，因此白名单、默认 headers
+/// 与 Cookie 都与源实例一致，并与源实例、图片加载共用限速令牌桶（分片走本源的媒体配额，
+/// source-spec §5）；`StreamRef.headers` 随每个请求发送。
 final openProxiedStreamProvider =
     Provider<Future<ProxiedStream> Function(String sourceId, StreamRef stream)>(
       (ref) => (sourceId, stream) async {

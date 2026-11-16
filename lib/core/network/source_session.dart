@@ -4,21 +4,29 @@ import 'package:cookie_jar/cookie_jar.dart';
 
 import 'host_policy.dart';
 import 'network_exception.dart';
+import 'rate_limiter.dart';
 import 'session_persistence.dart';
 
 /// 一个源的会话状态：Cookie Jar、从 WebView 同步来的 User-Agent、最近一次检测到挑战的地址
-/// （docs/architecture.md §5.3）。
+/// （docs/architecture.md §5.3），以及限速令牌桶（§5.4）。
 ///
-/// 同一个源的所有 [SourceHttpClient]（源实例、图片加载）共用同一个会话，
-/// 因此登录 / 验证得到的 Cookie 对它们都有效。不同源的会话互不相通。
+/// 同一个源的所有 [SourceHttpClient]（源实例、图片加载、媒体代理）共用同一个会话，
+/// 因此登录 / 验证得到的 Cookie 对它们都有效，并且按同一个令牌桶限速（docs/source-spec.md §5）。
+/// 不同源的会话互不相通。
 ///
 /// 用 [SourceSession.persistent] 创建的会话把 Cookie 与 [userAgent] 持久化到
 /// [SessionPersistence] 中本源的文件（§5.3「会话持久化」）。
 class SourceSession {
   /// 只在内存中的会话。未给出 [cookieJar] 时使用不落盘的 [PersistingCookieJar]。
-  SourceSession({CookieJar? cookieJar, DateTime Function()? clock})
-    : sourceId = null,
-      _persistence = null {
+  ///
+  /// [newRateLimiter] 只用于测试（例如虚拟时钟的令牌桶）。
+  SourceSession({
+    CookieJar? cookieJar,
+    DateTime Function()? clock,
+    TokenBucket Function(RateLimitConfig config)? newRateLimiter,
+  }) : sourceId = null,
+       _persistence = null,
+       _newRateLimiter = newRateLimiter ?? _defaultRateLimiter {
     final jar = cookieJar ?? PersistingCookieJar(clock: clock);
     _jar = jar is PersistingCookieJar ? jar : null;
     this.cookieJar = SecureCookieJar(jar);
@@ -31,13 +39,47 @@ class SourceSession {
     String this.sourceId,
     SessionPersistence persistence, {
     DateTime Function()? clock,
-  }) : _persistence = persistence {
+    TokenBucket Function(RateLimitConfig config)? newRateLimiter,
+  }) : _persistence = persistence,
+       _newRateLimiter = newRateLimiter ?? _defaultRateLimiter {
     final jar = PersistingCookieJar(clock: clock, onChanged: _persist);
     _jar = jar;
     cookieJar = SecureCookieJar(jar);
     ready = persistence.load(sourceId!, _restore);
     jar.ready = ready;
   }
+
+  /// 媒体通道（[RateLimitLane.media]）的固定配额：突发 10 个，之后每秒 10 个（docs/source-spec.md §5）。
+  static const mediaRateLimit = RateLimitConfig(
+    requests: 10,
+    per: Duration(seconds: 1),
+  );
+
+  final TokenBucket Function(RateLimitConfig config) _newRateLimiter;
+  final _rateLimiters = <RateLimitConfig, TokenBucket>{};
+  TokenBucket? _mediaRateLimiter;
+
+  static TokenBucket _defaultRateLimiter(RateLimitConfig c) =>
+      TokenBucket(requests: c.requests, per: c.per);
+
+  /// 本源 [lane] 通道的令牌桶；[RateLimitLane.source] 且 [config]（清单的 `rateLimit`）为 null 时不限速，返回 null。
+  ///
+  /// 同一会话中取值相同的 [config] 总是得到同一个桶，因此同一源的所有客户端共用它。源升级改了 `rateLimit` 时，
+  /// 按旧清单构造的客户端继续用旧值的桶，新客户端用新值的桶（不互相重置）。
+  /// [RateLimitLane.media] 忽略 [config]，总是 [mediaRateLimit] 的桶。
+  TokenBucket? rateLimiter(
+    RateLimitConfig? config, {
+    RateLimitLane lane = RateLimitLane.source,
+  }) => switch (lane) {
+    RateLimitLane.media => _mediaRateLimiter ??= _newRateLimiter(
+      mediaRateLimit,
+    ),
+    RateLimitLane.source when config == null => null,
+    RateLimitLane.source => _rateLimiters.putIfAbsent(
+      config!,
+      () => _newRateLimiter(config),
+    ),
+  };
 
   /// 持久化会话的源 id；内存会话为 null。
   final String? sourceId;
