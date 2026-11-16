@@ -61,6 +61,7 @@ void main() {
       WidgetTester tester,
       Uri url, {
       Duration start = Duration.zero,
+      bool alwaysReopen = false,
     }) async {
       final player = createVideoPlayer();
       final controller = createVideoController(player);
@@ -76,16 +77,15 @@ void main() {
         );
         await hardenVideoPlayer(player);
         await player.setRate(2);
-        final completed = player.stream.completed.firstWhere((c) => c);
-        // 与播放页相同：先订阅，再直接打开（Android 依赖 media_kit_video fork，#39）。
-        final started = waitForPlaybackStart(
-          position: player.stream.position,
-          completed: player.stream.completed,
-          failed: player.stream.error,
+        // 与播放页相同；返回时已真正开始播放。
+        await openVideo(
+          player,
+          controller,
+          url.toString(),
           start: start,
+          alwaysReopen: alwaysReopen,
         );
-        await openVideo(player, url.toString(), start: start);
-        await started;
+        final completed = player.stream.completed.firstWhere((c) => c);
         final startedAt = player.state.position;
 
         if (start == Duration.zero) {
@@ -154,24 +154,45 @@ void main() {
       });
     }
 
+    testWidgets('HLS：视频输出就绪后重新打开（Android 的路径）也从头播放', (tester) async {
+      final session = proxy.open(
+        client: client,
+        url: Uri.parse('http://video.example.com/video/media/hls/master.m3u8'),
+      );
+      final (w, h, duration, startedAt) = await playToEnd(
+        tester,
+        session.url,
+        alwaysReopen: true,
+      );
+      expect((w, h), (320, 180));
+      expect(duration.inMilliseconds, closeTo(6000, 300));
+      expect(startedAt, lessThan(const Duration(seconds: 1)));
+      session.close();
+    });
+
     for (final (name, file) in [
       ('HLS', 'hls/master.m3u8'),
       ('MP4', 'clip.mp4'),
     ]) {
-      testWidgets('$name：从起始位置打开（续播 / 换清晰度）', (tester) async {
-        final session = proxy.open(
-          client: client,
-          url: Uri.parse('http://video.example.com/video/media/$file'),
-        );
-        final (_, _, duration, startedAt) = await playToEnd(
+      for (final reopen in [false, true]) {
+        testWidgets('$name：从起始位置打开（续播 / 换清晰度）${reopen ? '，重新打开' : ''}', (
           tester,
-          session.url,
-          start: const Duration(seconds: 3),
-        );
-        expect(duration.inMilliseconds, closeTo(6000, 300));
-        expect(startedAt.inMilliseconds, inInclusiveRange(2000, 4500));
-        session.close();
-      });
+        ) async {
+          final session = proxy.open(
+            client: client,
+            url: Uri.parse('http://video.example.com/video/media/$file'),
+          );
+          final (_, _, duration, startedAt) = await playToEnd(
+            tester,
+            session.url,
+            start: const Duration(seconds: 3),
+            alwaysReopen: reopen,
+          );
+          expect(duration.inMilliseconds, closeTo(6000, 300));
+          expect(startedAt.inMilliseconds, inInclusiveRange(2000, 4500));
+          session.close();
+        });
+      }
     }
 
     testWidgets('HLS（AES-128，需要 Referer 与 Cookie）', (tester) async {

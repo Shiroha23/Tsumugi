@@ -320,15 +320,14 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
       _hardened = true;
       if (!_current(generation)) return;
     }
-    final started = waitForPlaybackStart(
-      position: _player.stream.position,
-      completed: _player.stream.completed,
-      failed: _player.stream.error,
-      start: start,
-    );
     final opened = DateTime.now();
-    await openVideo(_player, proxied.url.toString(), start: start);
-    await started;
+    await openVideo(
+      _player,
+      _video,
+      proxied.url.toString(),
+      start: start,
+      stillCurrent: () => _current(generation),
+    );
     if (!_current(generation)) return;
     debugPrint(
       '[player] started: ${DateTime.now().difference(opened).inMilliseconds} ms '

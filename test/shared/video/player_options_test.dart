@@ -1,10 +1,45 @@
 import 'dart:async';
 
 import 'package:fake_async/fake_async.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tsumugi/shared/video/player_options.dart';
 
 void main() {
+  group('waitForVideoOutput', () {
+    test('输出已就绪时立即返回', () async {
+      await waitForVideoOutput(ValueNotifier<int?>(1));
+    });
+
+    test('等到纹理编号到达（Android 上与 Surface 一同到达）才返回', () {
+      fakeAsync((async) {
+        final id = ValueNotifier<int?>(null);
+        var done = false;
+        waitForVideoOutput(id).then((_) => done = true);
+        async.elapse(const Duration(seconds: 1));
+        expect(done, isFalse);
+        id.value = 42;
+        async.flushMicrotasks();
+        expect(done, isTrue);
+      });
+    });
+
+    test('超时（如只有音轨）后照常返回，并移除监听', () {
+      fakeAsync((async) {
+        final id = _CountingNotifier();
+        var done = false;
+        waitForVideoOutput(
+          id,
+          timeout: const Duration(seconds: 2),
+        ).then((_) => done = true);
+        expect(id.listeners, 1);
+        async.elapse(const Duration(seconds: 2));
+        expect(done, isTrue);
+        expect(id.listeners, 0);
+      });
+    });
+  });
+
   group('hasStartedAt', () {
     test('从头播放：位置越过 0 才算开始', () {
       expect(hasStartedAt(Duration.zero, Duration.zero), isFalse);
@@ -59,6 +94,55 @@ void main() {
       });
     });
 
+    group('收到新媒体的时长或一次缓冲之前忽略位置（换集时旧媒体残留的位置）', () {
+      late StreamController<Duration> duration;
+      late StreamController<bool> buffering;
+      setUp(() {
+        duration = StreamController.broadcast();
+        buffering = StreamController.broadcast();
+      });
+
+      Future<void> gated() => waitForPlaybackStart(
+        position: position.stream,
+        completed: completed.stream,
+        duration: duration.stream,
+        buffering: buffering.stream,
+      );
+
+      test('时长到达后', () {
+        fakeAsync((async) {
+          var done = false;
+          gated().then((_) => done = true);
+          position.add(const Duration(seconds: 6)); // 旧媒体的结尾
+          buffering.add(false); // 旧媒体残留的“缓冲结束”不算
+          duration.add(Duration.zero); // 打开新媒体时清零
+          async.flushMicrotasks();
+          expect(done, isFalse);
+          duration.add(const Duration(seconds: 6));
+          position.add(const Duration(milliseconds: 100));
+          async.flushMicrotasks();
+          expect(done, isTrue);
+          expect(duration.hasListener, isFalse);
+          expect(buffering.hasListener, isFalse);
+        });
+      });
+
+      test('没有时长的直播流：缓冲开始 → 结束后', () {
+        fakeAsync((async) {
+          var done = false;
+          gated().then((_) => done = true);
+          buffering.add(true);
+          position.add(const Duration(seconds: 6));
+          async.flushMicrotasks();
+          expect(done, isFalse);
+          buffering.add(false);
+          position.add(const Duration(milliseconds: 100));
+          async.flushMicrotasks();
+          expect(done, isTrue);
+        });
+      });
+    });
+
     test('播放完成、出错或超时时同样返回', () {
       fakeAsync((async) {
         final done = <String>[];
@@ -86,4 +170,21 @@ void main() {
     expect(videoPlayerMpvOptions['cache-on-disk'], 'no');
     expect(videoPlayerMpvOptions['ytdl'], 'no');
   });
+}
+
+class _CountingNotifier extends ValueNotifier<int?> {
+  _CountingNotifier() : super(null);
+  int listeners = 0;
+
+  @override
+  void addListener(VoidCallback listener) {
+    listeners++;
+    super.addListener(listener);
+  }
+
+  @override
+  void removeListener(VoidCallback listener) {
+    listeners--;
+    super.removeListener(listener);
+  }
 }

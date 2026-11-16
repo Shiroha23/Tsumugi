@@ -192,7 +192,7 @@ detail(id) → 章节/剧集/曲目列表 → content(itemId)
   多于一条线路时可切换；切换线路时取另一线路中**标题相同**的剧集，没有则取同一下标，并保持当前位置。
   上一集 / 下一集按当前线路的顺序；播放完成后自动播放下一集（最后一集停在结尾）。换集在页面内完成，不改变路由。
 - **清晰度**：`content.streams` 中非 DASH 的流即可选的清晰度（标签为 `quality`，缺省为“流 n”），多于一个时在标题栏菜单中切换。
-  切换时为新流建立代理会话，并以 `Media.start`（mpv `start`）从当前位置打开。换集时优先选与当前标签相同的流，否则取第一个。
+  切换时为新流建立代理会话，并以 `Media.start`（mpv `start`）从当前位置打开（Android 上见 §6.4.2 的重新打开）。换集时优先选与当前标签相同的流，否则取第一个。
 - **进度**（`VideoProgressRecorder`）：`HistoryRepository.recordProgress(position:)`，`position` 为毫秒。播放中按条目节流（5 s），
   暂停、换集 / 换线路 / 换清晰度、离开页面时立即写入。播放完成或位置到达时长的 97% 时标记已读并把位置记为 0（再次打开从头播放）。
   打开时的起始位置：`?pos`（详情页“继续播放”）→ 该剧集的 unit 进度 → 0。
@@ -622,14 +622,18 @@ Apache-2.0 与 GPL-3.0 兼容。**再分发（CI 产物、Release）需要满足
   这次 seek 停在分片边界（2.05 / 4.09 s）或结尾，之后再 seek 到 0 也不生效；Windows 的视频输出没有这一步，同样的 seek 在 Windows 上正常。
   排查过程排除了：代理（所有请求正常）、解码器（`hwdec=no` 同样复现）、MPEG-TS 时间戳（单个 TS 文件正常）、FFmpeg 版本（两平台相同）。
   上游已有同类问题（[media-kit#1417](https://github.com/media-kit/media-kit/issues/1417)，由 [media-kit#1294](https://github.com/media-kit/media-kit/pull/1294) 引入）。
-- **处理：media_kit_video fork**（[#39](https://github.com/Shiroha23/Tsumugi/issues/39)）：`pubspec.yaml` 的 `dependency_overrides`
-  以 git + 固定 commit 引用 [`Shiroha23/media-kit`](https://github.com/Shiroha23/media-kit) 的 `tsumugi/android-wid-seek` 分支
-  （基于上游 `5a50cb2`，即 pub.dev 上的 `media_kit_video` 2.0.1，先去掉 pub 包中没有的 Cupertino 控件使 `lib/` 与发布版一致）。
-  补丁只改 Android 的 `widListener`：位置 ≤ 0 或已播完时不执行那次 seek（思路同上游已关闭的
-  [media-kit#1453](https://github.com/media-kit/media-kit/pull/1453)）。播放页直接 `open(Media(url, start: 起始位置))`，
-  不再“暂停打开 → 等待视频输出 → 重新打开”（PR #38 的临时方案，已删除）。加载遮罩保留到播放器真正开始播放
-  （正在播放且位置到达起始位置附近）才撤下，期间不显示控件。**不向上游提交补丁**；上游发布包含修复的版本后删除 override，回到正式版本。
-  续播（`start` > 0）时 Surface 就绪后的那次 seek 仍会执行（目标为起始位置附近），真机结果见 PR。
+- **处理：暂停打开 → 等待视频输出 → 重新打开**（`openVideo`，`shared/video/player_options.dart`）：打开时视频输出未就绪的
+  （Android 上每个播放页的第一次播放），先暂停打开，等它就绪（最多 5 s）并稍候 0.5 s，再**重新打开**同一地址（带起始位置）：
+  Surface 尺寸不变，media_kit 不再更换输出、也不再 seek；代理缓存了解密后的分片，几乎不增加网络请求。
+  同一播放页内换集 / 换清晰度时输出已就绪，直接打开；Windows 上输出总是就绪。加载遮罩保留到播放器真正从起始位置开始播放
+  （收到新媒体的时长或一次缓冲之后，位置到达起始位置附近）才撤下，期间不显示控件。
+  真机验证（2026-11，Android 16）：PR #38 时从头播放 HLS 10 次中 10 次从 00:00 开始；M4 播放页 PR 中续播、换清晰度、自动下一集见 PR 描述。
+- **media_kit_video fork 不可行**（[#39](https://github.com/Shiroha23/Tsumugi/issues/39)，M4 播放页 PR 中实测后放弃）：曾在
+  [`Shiroha23/media-kit`](https://github.com/Shiroha23/media-kit) 的 `tsumugi/android-wid-seek` 分支只改 Android 的 `widListener`
+  （位置 ≤ 0 或已播完时不执行那次 seek，思路同上游已关闭的 [media-kit#1453](https://github.com/media-kit/media-kit/pull/1453)），
+  并去掉重新打开。真机上新开页面从头播放 HLS 6 次中仍有 5 次一开始就在 2.11 s 或结尾——确认装的是打过补丁的版本后，
+  跳位仍发生在 Surface 到达、视频输出从 `null` 换成 `gpu` 之时，与是否执行 media_kit 的那次 seek 无关（推测为 mpv 更换输出时自己的刷新定位）。
+  只改 `widListener` 绕不开这一步，因此回到上面的重新打开方案，`pubspec.yaml` 仍用 pub.dev 的 `media_kit_video` 2.0.1，不使用 fork。
 - 另关闭了在两个平台上都建不起来的 mpv 磁盘缓存（`cache-on-disk=no`，是否启用的结论见 §6.4.3「播放器缓存」）。
 - **诊断开关**（`shared/video/player_options.dart`）：
   - `--dart-define=TSUMUGI_VIDEO_LOG=true`：在 release 构建中开启详细日志——代理的逐个请求（编号 / 文件名、Range、状态、字节数、耗时，不含令牌）、
@@ -763,7 +767,6 @@ M5 音乐复用同一 libmpv，不再增加体积。预编译库内部的组件�
 - **`d3dcompiler_47.dll`**：`media_kit_libs_windows_video` 随 ANGLE 打包的微软可再分发组件（非开源，按 Windows SDK 的再分发条款）。
   Windows 10 起系统目录自带同名 DLL，可视为 GPL-3.0 的“系统库”，但**由我们随包分发是否合适不确定**。建议在 CMake 中不打包它，
   并在 Windows 10 / 11 上验证播放。
-- **依赖 fork**：`media_kit_video` 经 `dependency_overrides` 固定在维护者账号下的 fork（§6.4.2），升级上游时须手动 rebase 补丁。
 - media_kit 主要由一人维护。播放器只出现在 `features/video/player/` 与 `shared/video/player_options.dart`，代理与播放器无关，
   必要时可以换播放器实现。
 
@@ -779,8 +782,8 @@ M5 音乐复用同一 libmpv，不再增加体积。预编译库内部的组件�
 6. **移动端**：Android 真机验证，横屏 / 全屏 / 手势、切到后台时暂停；iOS 真机（#31）。后台播放留给 M5。
 7. ~~**限速与缓存**~~（已完成）：令牌桶移到按源的 `SourceSession`，源实例、图片加载与媒体代理共用；分片走每源固定的媒体配额；
    mpv 磁盘缓存评估后保持关闭（§6.4.3「限速」「播放器缓存」）。
-8. ~~**media_kit_video fork**~~（已完成，[#39](https://github.com/Shiroha23/Tsumugi/issues/39)，见 §6.4.2）。剩余工作：上游发布包含修复的版本后
-   删除 `dependency_overrides`；升级 media_kit 时须把补丁 rebase 到对应版本。
+8. ~~**media_kit_video fork**~~（[#39](https://github.com/Shiroha23/Tsumugi/issues/39)）：实测不可行，保留“重新打开”方案（§6.4.2）。
+   上游修复 Android 输出初始化与 HLS 的冲突后，可去掉重新打开（升级 media_kit 时在真机上复测）。
 
 ## 7. 里程碑
 
