@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:dio/io.dart';
@@ -882,7 +883,93 @@ void main() {
           'media.mp4',
         ]);
         await player.get(uris[1], headers: {'range': 'bytes=1000-1999'});
-        expect(ranges, ['bytes=0-1023', 'bytes=1000-1999']);
+        // 探测只读起播分片的区间（1000 字节），不超出它。
+        expect(ranges, ['bytes=0-999', 'bytes=1000-1999']);
+      });
+
+      group('起播分片在资源中间（BYTERANGE 起点不为 0）', () {
+        // 资源开头是 TS，后面是 fMP4：FFmpeg 探测的是区间内的内容。
+        final ts = fixture('clip.ts').sublist(0, 188 * 10);
+        final object = Uint8List.fromList([...ts, ...fakeMp4(3000)]);
+        final ranges = <String?>[];
+        setUp(() {
+          ranges.clear();
+          up.routes['/obj.bin'] = (req) {
+            final range = req.headers.value('range');
+            ranges.add(range);
+            final m = RegExp(r'^bytes=(\d+)-(\d+)$').firstMatch(range ?? '');
+            if (m == null) {
+              req.response.add(object);
+            } else {
+              final from = int.parse(m[1]!);
+              final to = min(int.parse(m[2]!), object.length - 1);
+              req.response
+                ..statusCode = 206
+                ..headers.set(
+                  'content-range',
+                  'bytes $from-$to/${object.length}',
+                )
+                ..add(object.sublist(from, to + 1));
+            }
+            return req.response.close();
+          };
+        });
+
+        test('EXT-X-BYTERANGE：从区间起点探测（省略起点时接着上一个区间）', () async {
+          up.bytes(
+            '/mid.m3u8',
+            utf8.encode(
+              '#EXTM3U\n#EXT-X-BYTERANGE:500@${ts.length}\n#EXTINF:1,\nobj.bin\n'
+              '#EXT-X-BYTERANGE:500\n#EXTINF:1,\nobj.bin\n#EXT-X-ENDLIST\n',
+            ),
+          );
+          final uris = proxiedUris(
+            await player.text(openCrafted('/mid.m3u8').url),
+          );
+          expect(
+            uris.map((u) => u.pathSegments.last),
+            everyElement('media.mp4'),
+          );
+          expect(ranges, ['bytes=${ts.length}-${ts.length + 499}']);
+        });
+
+        test('EXT-X-MAP 的 BYTERANGE：从初始化分片的区间起点探测', () async {
+          up.bytes(
+            '/map.m3u8',
+            utf8.encode(
+              '#EXTM3U\n#EXT-X-MAP:URI="obj.bin",BYTERANGE="2000@${ts.length}"\n'
+              '#EXTINF:1,\nobj.bin\n#EXT-X-ENDLIST\n',
+            ),
+          );
+          final uris = proxiedUris(
+            await player.text(openCrafted('/map.m3u8').url),
+          );
+          expect(
+            uris.map((u) => u.pathSegments.last),
+            everyElement('media.mp4'),
+          );
+          expect(ranges, ['bytes=${ts.length}-${ts.length + 1023}']);
+        });
+
+        test('上游不按区间返回：探测失败（.ts），不会把资源开头当成区间内容', () async {
+          // 这里资源开头是 MP4：若误把开头当成区间内容，会得到 .mp4。
+          up
+            ..routes['/obj.bin'] = (req) {
+              ranges.add(req.headers.value('range'));
+              req.response.add([...fakeMp4(ts.length), ...ts]);
+              return req.response.close();
+            }
+            ..bytes(
+              '/norange.m3u8',
+              utf8.encode(
+                '#EXTM3U\n#EXT-X-BYTERANGE:500@${ts.length}\n#EXTINF:1,\nobj.bin\n',
+              ),
+            );
+          final uris = proxiedUris(
+            await player.text(openCrafted('/norange.m3u8').url),
+          );
+          expect(uris.single.pathSegments.last, 'media.ts');
+        });
       });
 
       test('直播探测 FFmpeg 起播的倒数第 3 个分片；点播探测第一个；部分分片不算', () async {

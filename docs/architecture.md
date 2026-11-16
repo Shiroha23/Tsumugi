@@ -716,6 +716,7 @@ media_kit (libmpv / FFmpeg) ── http://127.0.0.1:<port>/<token>/<编号>/<文
   - **HLS 分片按内容命名**（同一个子播放列表中的分片、初始化分片与部分分片用同一个扩展名）：改写子播放列表时分片还没取，
     代理先探测 **FFmpeg 起播时用来探测格式的那个媒体地址**——有 `EXT-X-MAP` 时为初始化分片；否则点播为第一个分片，直播（没有
     `EXT-X-ENDLIST`）为倒数第 3 个分片（`live_start_index` 默认 -3，n8.0.1 `select_cur_seq_no`）；部分分片不算，只有部分分片时不探测。
+    该地址以字节区间引用资源（`EXT-X-BYTERANGE`、`EXT-X-MAP` 的 `BYTERANGE`）时从区间起点读、不超过区间长度（上游必须按区间返回，否则探测失败）。
     探测只用区间请求取开头 1 KB；AES-128 加密的取密钥后只解密开头几块（CBC 可按块解密，不需要整段，不进明文缓存）；以 ID3 标签开头、
     其后的帧头超出 1 KB 时补读到帧头（上限 64 KB）。按识别出的容器决定扩展名：MPEG-TS → `ts`，ISO-BMFF / fMP4 → `mp4`，
     ADTS（含 ID3 前缀的打包音频）→ `aac`，MPEG 音频 → `mp3`，AC-3 → `ac3`，E-AC-3 → `eac3`，Matroska / WebM → `mkv`，Ogg → `ogg`，

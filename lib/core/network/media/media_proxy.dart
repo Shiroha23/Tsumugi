@@ -657,16 +657,18 @@ class MediaProxySession {
     return null;
   }
 
-  /// 资源开头的 [length] 字节（默认 [_sniffBytes]）：成功时为 (字节, 200)，失败时为 (null, 应答状态码)。
+  /// 资源从 [offset] 起的 [length] 字节（默认开头 [_sniffBytes] 字节）：成功时为 (字节, 200)，
+  /// 失败时为 (null, 应答状态码)。[offset] 不为 0 时上游必须按区间返回（206，起点一致）。
   Future<(Uint8List?, int)> _head(
     Uri upstream,
     _Entry entry,
     NetCancellation cancel, [
     int length = _sniffBytes,
+    int offset = 0,
   ]) async {
     final up = await _open(
       upstream,
-      'bytes=0-${length - 1}',
+      'bytes=$offset-${offset + length - 1}',
       cancel,
       lane: _laneFor(entry, rangeStart: 0),
     );
@@ -680,6 +682,11 @@ class MediaProxySession {
               ? up.status
               : HttpStatus.badGateway,
         );
+      }
+      if (offset != 0 &&
+          (up.status != HttpStatus.partialContent ||
+              _contentRangeStart(up) != offset)) {
+        return (null, HttpStatus.badGateway);
       }
       final (bytes, rest) = await _peek(up.body, length);
       await rest.cancel();
@@ -701,21 +708,28 @@ class MediaProxySession {
   /// FFmpeg 7.1.1 起，HLS 解复用器要求每个分片地址的扩展名与探测出的格式一致（architecture §6.4.3）。
   /// 只取开头一段（区间请求）：加密分片只解密开头几块（CBC 按块解密，不需要整段）。
   /// 整个过程受播放列表请求的 [cancel]（断开、`prepareTimeout`）约束。
+  ///
+  /// [range] 为该地址在播放列表中的字节区间（`EXT-X-BYTERANGE` / `EXT-X-MAP` 的 `BYTERANGE`）：
+  /// FFmpeg 探测的是这一段，因此从它的起点读（不超过它的长度）。
   Future<String?> _segmentExtension(
     _Entry entry,
-    NetCancellation cancel,
-  ) async {
-    var head = await _probeHead(entry, _sniffBytes, cancel);
+    NetCancellation cancel, [
+    (int, int)? range,
+  ]) async {
+    final (offset, limit) = range ?? (0, _maxProbeBytes);
+    if (limit <= 0) return null;
+    var head = await _probeHead(entry, min(_sniffBytes, limit), cancel, offset);
     var container = head == null ? null : sniffMediaContainer(head);
     if (container == MediaContainer.id3) {
       final need = id3FrameOffset(head!)! + 6;
-      if (need <= _maxProbeBytes) {
-        head = await _probeHead(entry, need, cancel);
+      if (need <= min(_maxProbeBytes, limit)) {
+        head = await _probeHead(entry, need, cancel, offset);
         if (head != null) container = sniffMediaContainer(head) ?? container;
       }
     }
     if (container == null) return null;
-    if (entry.aes == null) entry.verified = true;
+    // 只有从资源开头识别时才算确认了资源本身（之后从中间开始的区间请求沿用）。
+    if (entry.aes == null && offset == 0) entry.verified = true;
     return container.extension;
   }
 
@@ -723,12 +737,17 @@ class MediaProxySession {
   Future<Uint8List?> _probeHead(
     _Entry entry,
     int length,
-    NetCancellation cancel,
-  ) async {
+    NetCancellation cancel, [
+    int offset = 0,
+  ]) async {
     final upstream = entry.url;
     if (upstream == null) return null;
     final aes = entry.aes;
-    if (aes == null) return (await _head(upstream, entry, cancel, length)).$1;
+    if (aes == null) {
+      return (await _head(upstream, entry, cancel, length, offset)).$1;
+    }
+    // AES-128 与字节区间同时使用不支持（地址总是 403），不会走到这里。
+    if (offset != 0) return null;
     // 密钥按会话缓存、与分片请求共用；探测不等到它超出播放列表请求的时限（取密钥本身继续，结果照常缓存）。
     final keyResult = await Future.any([
       _key(aes.keyUri!).then<(Uint8List?, int)?>((r) => r),
@@ -758,15 +777,18 @@ class MediaProxySession {
   /// 有 `EXT-X-MAP` 时为初始化分片（与分片一起探测，由它决定格式）；否则点播为第一个分片，
   /// 直播（没有 `EXT-X-ENDLIST`）为倒数第 3 个分片（`live_start_index` 默认 -3）。
   /// 部分分片（`EXT-X-PART` / `EXT-X-PRELOAD-HINT`）不算。没有可用地址时为 null。
-  static (Uri, HlsAes128?)? _probeTarget(String text, Uri base) {
-    (Uri?, HlsAes128?)? init;
-    final segments = <(Uri?, HlsAes128?)>[];
+  static (Uri, HlsAes128?, (int, int)?)? _probeTarget(String text, Uri base) {
+    (Uri?, HlsAes128?, (int, int)?)? init;
+    final segments = <(Uri?, HlsAes128?, (int, int)?)>[];
+    (int, int)? range;
     rewriteHlsPlaylist(
       text,
       base: base,
+      onByteRange: (o, n) => range = (o, n),
       map: (uri, k, [aes]) {
-        if (k == HlsUriKind.init) init ??= (uri, aes);
-        if (k == HlsUriKind.media) segments.add((uri, aes));
+        if (k == HlsUriKind.init) init ??= (uri, aes, range);
+        if (k == HlsUriKind.media) segments.add((uri, aes, range));
+        range = null;
         return '';
       },
     );
@@ -777,7 +799,7 @@ class MediaProxySession {
             ? null
             : segments[live ? max(0, segments.length - 3) : 0]);
     return switch (target) {
-      (final Uri uri, final aes) => (uri, aes),
+      (final Uri uri, final aes, final range) => (uri, aes, range),
       _ => null,
     };
   }
@@ -809,10 +831,12 @@ class MediaProxySession {
           playlist.kind != _Kind.subtitlePlaylist &&
           playlist.segmentProbes < maxSegmentProbes) {
         // 第一遍只找要探测的地址（不登记任何地址）。
-        if (_probeTarget(text, base) case (final uri, final aes)) {
+        if (_probeTarget(text, base) case (final uri, final aes, final range)) {
           playlist.segmentProbes++;
           final entry = _entryAt(_registerEntry(uri, _Kind.media, aes));
-          ext = entry == null ? null : await _segmentExtension(entry, cancel);
+          ext = entry == null
+              ? null
+              : await _segmentExtension(entry, cancel, range);
           playlist.segmentExtension = ext;
         }
       }
