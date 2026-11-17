@@ -692,6 +692,52 @@ void main() {
       await expectLater(readAll(idle), throwsNet(NetworkErrorKind.timeout));
     });
 
+    test('onRateLimitWait：等待令牌前后各调用一次（虚拟时钟）；排队中取消也会结束等待', () async {
+      const limit = RateLimitConfig(requests: 1, per: Duration(seconds: 10));
+      final virtual = VirtualClockSession();
+      final limited = mockClient(
+        server,
+        rateLimit: limit,
+        session: virtual.session,
+      );
+      addTearDown(limited.close);
+      final events = <bool>[];
+
+      // 有令牌：立即取得。
+      final first = await limited.openStream(
+        const NetRequest('/echo'),
+        onRateLimitWait: events.add,
+      );
+      first.cancel();
+      expect(events, [true, false]);
+
+      // 没有令牌：排队，直到虚拟时钟走过 10 s。
+      events.clear();
+      final second = limited.openStream(
+        const NetRequest('/echo'),
+        onRateLimitWait: events.add,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(events, [true]);
+      virtual.clock.advance(const Duration(seconds: 10));
+      (await second).cancel();
+      expect(events, [true, false]);
+
+      // 排队中取消：等待结束（false），请求以 cancelled 失败，不消耗令牌。
+      events.clear();
+      final c = NetCancellation();
+      final third = limited.openStream(
+        NetRequest('/echo', cancellation: c),
+        onRateLimitWait: events.add,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(events, [true]);
+      c.cancel();
+      await expectLater(third, throwsNet(NetworkErrorKind.cancelled));
+      expect(events, [true, false]);
+      expect(virtual.acquiredWith(limit), 2);
+    });
+
     test('cancel() 放弃响应体', () async {
       final res = await client.openStream(
         const NetRequest('/slow-body?ms=2000'),

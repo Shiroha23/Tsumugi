@@ -41,9 +41,13 @@ abstract interface class SourceHttpClient {
   ///
   /// [lane] 选择限速通道（source-spec §5）：默认 [RateLimitLane.source] 计入清单的 `rateLimit`；
   /// [RateLimitLane.media] 计入本源固定的媒体配额，只供本地媒体代理请求分片等媒体数据使用。
+  ///
+  /// [onRateLimitWait] 在开始等待限速令牌时以 true、等待结束（取得令牌或被取消）时以 false 调用
+  /// （每次尝试、每一跳重定向各一对），供调用方把排队时间排除在自己的时限之外。
   Future<NetStreamResponse> openStream(
     NetRequest request, {
     RateLimitLane lane = RateLimitLane.source,
+    void Function(bool waiting)? onRateLimitWait,
   });
 
   /// 读取本源 Cookie 域中会发往 [url] 的 Cookie（name → value）。[url] 必须在白名单内。

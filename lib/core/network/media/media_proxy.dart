@@ -8,7 +8,9 @@ import 'dart:typed_data';
 import 'package:pointycastle/export.dart';
 
 import '../network_exception.dart';
+import '../pausable_deadline.dart';
 import '../source_http_client.dart';
+import 'connection_watch.dart';
 import 'hls_playlist.dart';
 import 'media_signature.dart';
 
@@ -26,7 +28,13 @@ import 'media_signature.dart';
 /// `Content-Type` 与地址中的扩展名都由代理决定，不透传上游的值，播放器不会把内容当成其他播放列表格式。
 /// 纯 Dart（dart:io），不依赖 Flutter。
 class MediaProxy {
-  MediaProxy._(this._server, this.prepareTimeout, this._onLog, this._onTrace) {
+  MediaProxy._(
+    this._socket,
+    this._server,
+    this.prepareTimeout,
+    this._onLog,
+    this._onTrace,
+  ) {
     _server.listen(_handle, onError: (Object e) => _log('server error: $e'));
   }
 
@@ -40,9 +48,12 @@ class MediaProxy {
     void Function(String message)? log,
     void Function(String message)? trace,
   }) async {
-    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    server.autoCompress = false;
-    return MediaProxy._(server, prepareTimeout, log, trace);
+    final socket = await WatchedServerSocket.bind(
+      InternetAddress.loopbackIPv4,
+      0,
+    );
+    final server = HttpServer.listenOn(socket)..autoCompress = false;
+    return MediaProxy._(socket, server, prepareTimeout, log, trace);
   }
 
   final void Function(String message)? _onLog;
@@ -59,10 +70,11 @@ class MediaProxy {
   }
 
   /// 开始向播放器发送响应体之前（取响应头、识别格式、读完播放列表 / 密钥 / 加密分片）的总时限，
-  /// 超时取消上游请求。dart:io 在写入之前察觉不到播放器断开，这个时限保证被放弃的请求不会一直挂着；
-  /// 开始发送之后，播放器断开会让写入失败并立即取消上游。
+  /// 超时取消上游请求。等待限速令牌的时间不计入（[SourceHttpClient.openStream] 的 `onRateLimitWait`）。
+  /// 播放器任何时候断开（含排队期间）都会立即取消上游（[WatchedServerSocket]）。
   final Duration prepareTimeout;
 
+  final WatchedServerSocket _socket;
   final HttpServer _server;
   final _sessions = <String, MediaProxySession>{};
   final _random = Random.secure();
@@ -97,6 +109,8 @@ class MediaProxy {
       s.close();
     }
     await _server.close(force: true);
+    // listenOn 不会关闭传入的 ServerSocket。
+    await _socket.close();
   }
 
   Future<void> _handle(HttpRequest req) async {
@@ -236,9 +250,13 @@ class MediaProxySession {
 
     final cancel = NetCancellation();
     _inFlight.add(cancel);
-    // 响应结束或写入失败（播放器断开）时立即取消上游请求，不等本方法返回。
+    // 播放器断开（任何阶段，含限速排队期间）、响应结束或写入失败时立即取消上游请求，不等本方法返回。
     res.done.then((_) {}, onError: (Object _) {}).whenComplete(cancel.cancel);
-    final deadline = Timer(_proxy.prepareTimeout, cancel.cancel);
+    final unwatch = switch (req.connectionInfo?.remotePort) {
+      final port? => _proxy._socket.watch(port, cancel.cancel),
+      null => null,
+    };
+    final deadline = _deadlineFor(cancel);
     NetStreamResponse? up;
     _Rest? rest;
     try {
@@ -349,6 +367,7 @@ class MediaProxySession {
           return await res.close();
       }
     } finally {
+      unwatch?.call();
       deadline.cancel();
       _inFlight.remove(cancel);
       cancel.cancel();
@@ -450,7 +469,7 @@ class MediaProxySession {
     if (key == null) return (null, keyStatus);
     final cancel = NetCancellation();
     _inFlight.add(cancel);
-    final deadline = Timer(_proxy.prepareTimeout, cancel.cancel);
+    final deadline = _deadlineFor(cancel);
     try {
       final up = await _open(
         upstream,
@@ -531,7 +550,7 @@ class MediaProxySession {
   Future<(Uint8List?, int)> _fetchKey(Uri uri) async {
     final cancel = NetCancellation();
     _inFlight.add(cancel);
-    final deadline = Timer(_proxy.prepareTimeout, cancel.cancel);
+    final deadline = _deadlineFor(cancel);
     try {
       // 密钥的数量同样由分片决定（轮换密钥时每个分片一个），走媒体配额。
       final up = await _open(uri, null, cancel, lane: RateLimitLane.media);
@@ -602,15 +621,24 @@ class MediaProxySession {
         _ => RateLimitLane.source,
       };
 
+  /// [cancel] 对应的 `prepareTimeout`：到时取消 [cancel]；经 [_open] 等待限速令牌期间暂停。
+  PausableDeadline _deadlineFor(NetCancellation cancel) => _deadlines[cancel] =
+      PausableDeadline(_proxy.prepareTimeout, cancel.cancel);
+  final _deadlines = Expando<PausableDeadline>();
+
   Future<NetStreamResponse?> _open(
     Uri upstream,
     String? range,
     NetCancellation cancel, {
     required RateLimitLane lane,
   }) async {
+    final deadline = _deadlines[cancel];
     try {
       return await _client.openStream(
         lane: lane,
+        onRateLimitWait: deadline == null
+            ? null
+            : (waiting) => waiting ? deadline.pause() : deadline.resume(),
         NetRequest(
           upstream.toString(),
           headers: {

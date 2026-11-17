@@ -813,8 +813,15 @@ media_kit (libmpv / FFmpeg) ── http://127.0.0.1:<port>/<token>/<编号>/<文
 - **错误**：白名单外（含重定向到白名单外）→ 403；`E_CHALLENGE` → 403；超时 → 504；其他网络错误 → 502；上游 4xx / 5xx 原样返回。
   网络层错误记在 `MediaProxySession.lastFailure`，播放页在播放器报错时据此显示 `SourceErrorView`（人机验证 / 登录时提供「打开验证页」，
   完成后重新加载）。
-- **取消与资源**：dart:io 在写入之前察觉不到播放器断开，因此“开始发送响应体之前”的阶段（取响应头、识别、读完播放列表 / 密钥 / 加密分片）
-  有总时限 `prepareTimeout`（默认 60 s），超时取消上游；开始发送之后，播放器断开会让写入失败并立即取消上游。播放列表限 4 MB、密钥限
+- **取消与资源**：播放器任何时候断开都立即取消该请求的上游（包括限速排队、等响应头、识别格式期间）。dart:io 的 `HttpServer` 处理请求时
+  暂停读取该连接，写入之前察觉不到断开（`HttpResponse.done` 不完成），因此代理经 `HttpServer.listenOn` 接上 `WatchedServerSocket`：
+  每个连接都由它一直读取（数据仍按 dart:io 的节奏交付，暂停期间缓存超过 64 KB 时才暂停底层读取），读到 EOF 或出错即通知该连接上
+  正在处理的请求（按对方端口对应）。对方半关闭（只关写方向）也视为断开，播放器不会这样做。另有“开始发送响应体之前”的总时限
+  `prepareTimeout`（默认 60 s，取响应头、识别、读完播放列表 / 密钥 / 加密分片），超时取消上游，用于上游迟迟不响应的情形；
+  **等待限速令牌的时间不计入**（`openStream` 的 `onRateLimitWait` 在排队期间暂停计时，`PausableDeadline`），拿到令牌后才继续计时。
+  上游连接：取消订阅响应体、`cancel()`、`NetCancellation` 与 `client.close()` 都会关闭上游 TCP 连接（dio 中止请求时 dart:io 销毁连接，
+  有测试从上游 socket 一侧确认）。注意测试上游若用 dart:io 的 `HttpResponse` 写，连接被对方关闭后写入仍“成功”、`done` 也不报错，
+  看不出连接已关闭，要接管 socket 判断。播放列表限 4 MB、密钥限
   4 KB（必须为 16 字节）、加密分片限 64 MB（整段在内存中解密），每个会话最多登记 20000 个地址。
 - **`openStream`**：`SourceHttpClient` 新增的流式 GET / HEAD。白名单、重定向、Cookie、headers、限速、重试（只在拿到响应头之前）与挑战检测
   都与 `request` 一致，但不受 20 MB 上限；挑战检测只读开头 `scanBytes`（64 KB），之后与剩余部分拼接返回。超时限制等待响应头的时间与
@@ -828,8 +835,8 @@ media_kit (libmpv / FFmpeg) ── http://127.0.0.1:<port>/<token>/<编号>/<文
   另外两种方案：分片完全不限（异常播放列表——极短分片、大量地址——能让客户端无节制地请求）、清单新增可配置的媒体限速字段
   （改源格式，源作者同样不知道该填多少）。因此采用固定的媒体配额：正常播放远达不到，又给出硬上限。
   直播播放列表按目标时长刷新，计入 `rateLimit`；`rateLimit` 小于刷新频率的源上直播会落后，需由源作者调大。
-  `prepareTimeout`（60 s）包含限速排队时间：`rateLimit` 极小（如每 30 s 1 个）且图片也在排队时，打开播放所需的主 / 子播放列表
-  可能排队超过时限而播放失败，需由源作者调大 `rateLimit`。
+  `prepareTimeout` 不含限速排队时间（见「取消与资源」），`rateLimit` 极小时打开播放只是变慢，不会因排队而 504；排队期间播放器放弃
+  （断开）时请求立即取消，不消耗令牌。播放器自己的网络超时仍可能先到，届时它断开（请求随即取消）并自行重试。
 - **播放器缓存**（结论：**不启用 mpv 磁盘缓存**，`cache-on-disk=no`）：media_kit 默认 `cache-on-disk=yes` 但不设 `cache-dir`，
   所以两个平台都报 “Failed to create file cache” 并回落到内存。当前为内存缓存：向前 / 向后各 32 MB（media_kit `bufferSize` 默认，
   `demuxer-max-bytes` / `demuxer-max-back-bytes`）。不启用磁盘缓存的理由：
@@ -919,7 +926,8 @@ M5 音乐复用同一 libmpv，不再增加体积。预编译库内部的组件�
    清晰度切换。
 4. ~~**字幕**~~（已完成，见 §5.2「视频播放」与 §6.4.7）：外挂字幕（srt / vtt / ass）由 Dart 侧经源的网络层取回、解析并显示，
    HLS 字幕轨可选。未做：ASS 样式（位置、颜色、特效，[#54](https://github.com/Shiroha23/Tsumugi/issues/54)）、声明式引擎的 `subtitles` 键（[#53](https://github.com/Shiroha23/Tsumugi/issues/53)）。
-   另：`openStream` 取消后上游连接似乎没有断开（[#52](https://github.com/Shiroha23/Tsumugi/issues/52)，待核实）。
+   另：`openStream` 取消后上游连接“似乎没有断开”（[#52](https://github.com/Shiroha23/Tsumugi/issues/52)）经核实是测试上游的假象，
+   连接实际已关闭，见 §6.4.3「取消与资源」。
 5. **DASH**：**已决定（2026-11）：apiVersion 1 不支持**，已写入 source-spec §5。MPD 改写（`BaseURL`、`SegmentTemplate`、`SegmentList` 等）
    涉及代理的地址边界，推迟到有实际需求时单独评估（[#42](https://github.com/Shiroha23/Tsumugi/issues/42)）。
 6. ~~**移动端交互**~~（已完成，见 §5.2「视频播放」）：横竖屏全屏、触控手势、屏幕常亮、切到后台时暂停。

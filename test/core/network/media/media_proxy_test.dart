@@ -483,6 +483,95 @@ void main() {
       expect(counting.acquiredWith(limit), 2);
       expect(counting.acquiredWith(SourceSession.mediaRateLimit), 3);
     });
+
+    group('排队等令牌（#47，虚拟时钟）', () {
+      const limit = RateLimitConfig(requests: 1, per: Duration(seconds: 30));
+      late VirtualClockSession virtual;
+      late DioSourceHttpClient limited;
+      setUp(() async {
+        virtual = VirtualClockSession();
+        limited = mockClient(
+          server,
+          sourceId: 'com.example.video',
+          baseUrl: 'http://video.example.com',
+          allowedHosts: const ['cdn.example.com'],
+          rateLimit: limit,
+          session: virtual.session,
+        );
+        // 用掉唯一的令牌：之后计入 rateLimit 的请求都要排队，直到虚拟时钟走过 30 s。
+        await limited.request(const NetRequest('/echo?q=warm-up'));
+      });
+      tearDown(() => limited.close());
+
+      test('排队时间不计入 prepareTimeout：排队超过它之后照常取得播放列表', () async {
+        final session = proxy.open(
+          client: limited,
+          url: Uri.parse(
+            'http://video.example.com/video/media/hls/master.m3u8',
+          ),
+        );
+        final result = player.get(session.url);
+        // 实际时间超过 prepareTimeout（800 ms）后仍在排队，没有被取消。
+        await Future<void>.delayed(const Duration(milliseconds: 1500));
+        expect(session.inFlight, 1);
+        virtual.clock.advance(const Duration(seconds: 30));
+        final (status, _, body) = await result.timeout(
+          const Duration(seconds: 5),
+        );
+        expect(status, 200);
+        expect(utf8.decode(body), startsWith('#EXTM3U'));
+        expect(virtual.acquiredWith(limit), 2);
+      });
+
+      test('排队中播放器断开：立即取消，不消耗令牌、不发出上游请求', () async {
+        final session = proxy.open(
+          client: limited,
+          url: Uri.parse(
+            'http://video.example.com/video/media/hls/master.m3u8',
+          ),
+        );
+        final before = upstream('/video/media/hls/master.m3u8').length;
+        final url = session.url;
+        final raw = await Socket.connect(url.host, url.port);
+        raw.write(
+          'GET ${url.path} HTTP/1.1\r\nhost: ${url.host}:${url.port}\r\n\r\n',
+        );
+        raw.listen((_) {}, onError: (Object _) {});
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        expect(session.inFlight, 1);
+        raw.destroy();
+
+        // 远早于 prepareTimeout（且它在排队期间暂停）就已取消。
+        final deadline = DateTime.now().add(const Duration(milliseconds: 500));
+        while (session.inFlight > 0 && DateTime.now().isBefore(deadline)) {
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+        expect(session.inFlight, 0);
+
+        // 之后的令牌留给其他请求。
+        virtual.clock.advance(const Duration(seconds: 30));
+        await limited.request(const NetRequest('/echo?q=next'));
+        expect(virtual.acquiredWith(limit), 2);
+        expect(upstream('/video/media/hls/master.m3u8').length, before);
+      });
+
+      test('拿到令牌之后才开始计时：之后仍受 prepareTimeout 约束', () async {
+        final session = proxy.open(
+          client: limited,
+          url: Uri.parse('http://video.example.com/slow?ms=3000'),
+        );
+        final result = player.get(session.url);
+        await Future<void>.delayed(const Duration(milliseconds: 1000));
+        expect(session.inFlight, 1);
+        final sw = Stopwatch()..start();
+        virtual.clock.advance(const Duration(seconds: 30));
+        final (status, _, _) = await result.timeout(const Duration(seconds: 5));
+        expect(status, anyOf(502, 504));
+        // 从取得令牌起约 800 ms 超时（不是排队开始时就超时，也不是等上游 3 s）。
+        expect(sw.elapsedMilliseconds, greaterThanOrEqualTo(700));
+        expect(sw.elapsedMilliseconds, lessThan(2500));
+      });
+    });
   });
 
   group('构造的上游响应', () {
@@ -1105,7 +1194,7 @@ void main() {
       expect((await player.get(uris.single)).$1, 403);
     });
 
-    test('播放器断开后，上游请求最晚在 prepareTimeout 时取消', () async {
+    test('等待上游响应体时播放器断开：立即取消上游（不等 prepareTimeout）', () async {
       final released = Completer<void>();
       up.routes['/hang.mp4'] = (req) async {
         // 只发响应头，迟迟不发响应体。
@@ -1122,13 +1211,74 @@ void main() {
       expect(session.inFlight, 1);
       req.abort();
       await pending;
-      final deadline = DateTime.now().add(const Duration(seconds: 2));
+      final deadline = DateTime.now().add(const Duration(milliseconds: 400));
       while (session.inFlight > 0 && DateTime.now().isBefore(deadline)) {
         await Future<void>.delayed(const Duration(milliseconds: 20));
       }
       expect(session.inFlight, 0);
       released.complete();
       raw.close(force: true);
+    });
+
+    test('发送响应体期间播放器断开：立即取消上游，上游连接被关闭', () async {
+      // 上游接管 socket 自己写（dart:io 的 HttpResponse 在连接被对方关闭后写入仍“成功”，
+      // 看不出连接是否还在）：慢速持续写 TS 数据，读到 EOF / 写入失败即视为连接已关闭。
+      final upstreamClosed = Completer<void>();
+      var written = 0;
+      up.routes['/endless.ts'] = (req) async {
+        final socket = await req.response.detachSocket(writeHeaders: false);
+        void closed([Object? _]) {
+          if (!upstreamClosed.isCompleted) upstreamClosed.complete();
+        }
+
+        socket.listen((_) {}, onDone: closed, onError: closed);
+        socket.done.then(closed, onError: closed);
+        socket.write(
+          'HTTP/1.1 200 OK\r\ncontent-type: video/mp2t\r\n'
+          'content-length: ${64 * 1024 * 1024}\r\n\r\n',
+        );
+        // TS 包（188 字节，以 0x47 开头）。
+        final chunk = Uint8List.fromList([
+          for (var i = 0; i < 188 * 348; i++) i % 188 == 0 ? 0x47 : 0,
+        ]);
+        try {
+          while (!upstreamClosed.isCompleted && written < 64 * 1024 * 1024) {
+            socket.add(chunk);
+            await socket.flush();
+            written += chunk.length;
+            await Future<void>.delayed(const Duration(milliseconds: 2));
+          }
+        } catch (e) {
+          closed(e);
+        }
+        socket.destroy();
+      };
+      final session = openCrafted('/endless.ts');
+
+      // 播放器：原始 socket，读到一部分响应体后直接断开。
+      final url = session.url;
+      final player = await Socket.connect(url.host, url.port);
+      player.write(
+        'GET ${url.path} HTTP/1.1\r\nhost: ${url.host}:${url.port}\r\n\r\n',
+      );
+      var received = 0;
+      final enough = Completer<void>();
+      final sub = player.listen((c) {
+        received += c.length;
+        if (received > 512 * 1024 && !enough.isCompleted) enough.complete();
+      });
+      await enough.future.timeout(const Duration(seconds: 5));
+      expect(upstreamClosed.isCompleted, isFalse);
+      await sub.cancel();
+      player.destroy();
+
+      await upstreamClosed.future.timeout(const Duration(seconds: 3));
+      final deadline = DateTime.now().add(const Duration(seconds: 2));
+      while (session.inFlight > 0 && DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(session.inFlight, 0);
+      expect(written, lessThan(64 * 1024 * 1024));
     });
 
     test('关闭会话取消进行中的请求', () async {
