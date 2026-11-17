@@ -130,6 +130,7 @@ class DioSourceHttpClient implements SourceHttpClient {
   Future<NetStreamResponse> openStream(
     NetRequest request, {
     RateLimitLane lane = RateLimitLane.source,
+    void Function(bool waiting)? onRateLimitWait,
   }) async {
     final method = request.method.toUpperCase();
     if (method != 'GET' && method != 'HEAD') {
@@ -156,6 +157,7 @@ class DioSourceHttpClient implements SourceHttpClient {
         timeout,
         request.cancellation,
         lane,
+        onRateLimitWait,
       );
       final location = raw.headers['location']?.firstOrNull;
       if (request.followRedirects &&
@@ -253,9 +255,10 @@ class DioSourceHttpClient implements SourceHttpClient {
     Duration timeout,
     NetCancellation? cancellation,
     RateLimitLane lane,
+    void Function(bool waiting)? onRateLimitWait,
   ) async {
     for (var attempt = 0; ; attempt++) {
-      await _acquire(lane, uri, cancellation);
+      await _acquire(lane, uri, cancellation, onRateLimitWait);
 
       final canRetry = attempt < config.maxRetries;
       _RawStream raw;
@@ -540,14 +543,22 @@ class DioSourceHttpClient implements SourceHttpClient {
 
   /// 从本源会话的 [lane] 令牌桶取一个令牌（每次尝试、每一跳重定向各一次）。
   /// 排队等待期间被取消时立即失败，且不消耗令牌。
+  /// [onWait] 见 [SourceHttpClient.openStream] 的 `onRateLimitWait`。
   Future<void> _acquire(
     RateLimitLane lane,
     Uri uri,
-    NetCancellation? cancellation,
-  ) async {
+    NetCancellation? cancellation, [
+    void Function(bool waiting)? onWait,
+  ]) async {
     _throwIfCancelled(cancellation, uri);
     if (session.rateLimiter(config.rateLimit, lane: lane) case final bucket?) {
-      final acquired = await bucket.acquire(abort: cancellation?.whenCancelled);
+      onWait?.call(true);
+      final bool acquired;
+      try {
+        acquired = await bucket.acquire(abort: cancellation?.whenCancelled);
+      } finally {
+        onWait?.call(false);
+      }
       if (!acquired) {
         throw NetworkException(NetworkErrorKind.cancelled, uri: uri);
       }

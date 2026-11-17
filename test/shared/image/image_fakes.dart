@@ -18,6 +18,7 @@ class FakeImageClient implements SourceHttpClient {
   Future<NetStreamResponse> openStream(
     NetRequest request, {
     RateLimitLane lane = RateLimitLane.source,
+    void Function(bool waiting)? onRateLimitWait,
   }) => throw UnimplementedError();
 
   @override

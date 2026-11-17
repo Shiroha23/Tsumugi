@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:dio/io.dart';
@@ -50,7 +51,8 @@ DioSourceHttpClient mockClient(
 
 /// 记录取得令牌次数的令牌桶（不改变限速行为）。
 class CountingBucket extends TokenBucket {
-  CountingBucket(this.limit) : super(requests: limit.requests, per: limit.per);
+  CountingBucket(this.limit, {super.clock, super.delay})
+    : super(requests: limit.requests, per: limit.per);
 
   final RateLimitConfig limit;
   int acquired = 0;
@@ -75,6 +77,42 @@ class CountingSession {
     );
   }
 
+  late final SourceSession session;
+  final buckets = <CountingBucket>[];
+
+  int acquiredWith(RateLimitConfig c) =>
+      buckets.where((b) => b.limit == c).fold(0, (sum, b) => sum + b.acquired);
+}
+
+/// 手动推进的虚拟时钟：令牌桶的等待只在 [advance] 时结束。
+class VirtualClock {
+  Duration now = Duration.zero;
+  var _tick = Completer<void>();
+
+  /// 给 [TokenBucket] 的 `delay`：等到下一次 [advance]。
+  Future<void> delay(Duration _) => _tick.future;
+
+  void advance(Duration d) {
+    now += d;
+    final t = _tick;
+    _tick = Completer<void>();
+    t.complete();
+  }
+}
+
+/// 令牌桶都用 [clock] 计时的会话（并记录取得令牌的次数）。
+class VirtualClockSession {
+  VirtualClockSession() {
+    session = SourceSession(
+      newRateLimiter: (c) {
+        final b = CountingBucket(c, clock: () => clock.now, delay: clock.delay);
+        buckets.add(b);
+        return b;
+      },
+    );
+  }
+
+  final clock = VirtualClock();
   late final SourceSession session;
   final buckets = <CountingBucket>[];
 

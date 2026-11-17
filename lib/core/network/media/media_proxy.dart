@@ -8,7 +8,9 @@ import 'dart:typed_data';
 import 'package:pointycastle/export.dart';
 
 import '../network_exception.dart';
+import '../pausable_deadline.dart';
 import '../source_http_client.dart';
+import 'connection_watch.dart';
 import 'hls_playlist.dart';
 import 'media_signature.dart';
 
@@ -26,7 +28,13 @@ import 'media_signature.dart';
 /// `Content-Type` 与地址中的扩展名都由代理决定，不透传上游的值，播放器不会把内容当成其他播放列表格式。
 /// 纯 Dart（dart:io），不依赖 Flutter。
 class MediaProxy {
-  MediaProxy._(this._server, this.prepareTimeout, this._onLog, this._onTrace) {
+  MediaProxy._(
+    this._socket,
+    this._server,
+    this.prepareTimeout,
+    this._onLog,
+    this._onTrace,
+  ) {
     _server.listen(_handle, onError: (Object e) => _log('server error: $e'));
   }
 
@@ -40,9 +48,12 @@ class MediaProxy {
     void Function(String message)? log,
     void Function(String message)? trace,
   }) async {
-    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    server.autoCompress = false;
-    return MediaProxy._(server, prepareTimeout, log, trace);
+    final socket = await WatchedServerSocket.bind(
+      InternetAddress.loopbackIPv4,
+      0,
+    );
+    final server = HttpServer.listenOn(socket)..autoCompress = false;
+    return MediaProxy._(socket, server, prepareTimeout, log, trace);
   }
 
   final void Function(String message)? _onLog;
@@ -59,10 +70,11 @@ class MediaProxy {
   }
 
   /// 开始向播放器发送响应体之前（取响应头、识别格式、读完播放列表 / 密钥 / 加密分片）的总时限，
-  /// 超时取消上游请求。dart:io 在写入之前察觉不到播放器断开，这个时限保证被放弃的请求不会一直挂着；
-  /// 开始发送之后，播放器断开会让写入失败并立即取消上游。
+  /// 超时取消上游请求。等待限速令牌的时间不计入（[SourceHttpClient.openStream] 的 `onRateLimitWait`）。
+  /// 播放器任何时候断开（含排队期间）都会立即取消上游（[WatchedServerSocket]）。
   final Duration prepareTimeout;
 
+  final WatchedServerSocket _socket;
   final HttpServer _server;
   final _sessions = <String, MediaProxySession>{};
   final _random = Random.secure();
@@ -97,6 +109,8 @@ class MediaProxy {
       s.close();
     }
     await _server.close(force: true);
+    // listenOn 不会关闭传入的 ServerSocket。
+    await _socket.close();
   }
 
   Future<void> _handle(HttpRequest req) async {
@@ -143,7 +157,7 @@ class MediaProxySession {
   final Map<String, String> _headers;
   final _entries = <_Entry>[];
   final _indexOf = <(String, _Kind, HlsAes128?), int>{};
-  final _keys = <Uri, Future<(Uint8List?, int)>>{};
+  final _keys = <Uri, _Shared>{};
   final _inFlight = <NetCancellation>{};
   late final String _root;
   bool _closed = false;
@@ -236,14 +250,22 @@ class MediaProxySession {
 
     final cancel = NetCancellation();
     _inFlight.add(cancel);
-    // 响应结束或写入失败（播放器断开）时立即取消上游请求，不等本方法返回。
+    // 播放器断开（任何阶段，含限速排队期间）、响应结束或写入失败时立即取消上游请求，不等本方法返回。
     res.done.then((_) {}, onError: (Object _) {}).whenComplete(cancel.cancel);
-    final deadline = Timer(_proxy.prepareTimeout, cancel.cancel);
+    final unwatch = switch (req.connectionInfo) {
+      final info? => _proxy._socket.watch(
+        info.remoteAddress,
+        info.remotePort,
+        cancel.cancel,
+      ),
+      null => null,
+    };
+    final deadline = _deadlineFor(cancel);
     NetStreamResponse? up;
     _Rest? rest;
     try {
       if (entry.aes case final aes?) {
-        return await _serveDecrypted(req, entry, upstream, aes);
+        return await _serveDecrypted(req, entry, upstream, aes, cancel);
       }
       final range = _forwardedRange(req, entry);
       final rangeStart = range == null ? 0 : _rangeStart(range);
@@ -349,6 +371,7 @@ class MediaProxySession {
           return await res.close();
       }
     } finally {
+      unwatch?.call();
       deadline.cancel();
       _inFlight.remove(cancel);
       cancel.cancel();
@@ -362,14 +385,25 @@ class MediaProxySession {
   /// 明文按地址缓存最近几段（[_plainCacheSize]），同一分片的并发 / 重复请求只取一次上游。
   /// 播放器的 `Range` 由代理按明文处理（206 / 416）：FFmpeg 会在分片内续传或定位，
   /// 若总从开头返回整段，它拿到的数据与请求的位置对不上（Android 真机上出现过卡在分片边界）。
+  ///
+  /// 共用的取数等待限速令牌期间，本请求的 `prepareTimeout` 同样暂停（[_setQueued]）；
+  /// 播放器断开时本请求不再等待，所有等待者都离开时取数本身被取消（[_Shared]）。
   Future<void> _serveDecrypted(
     HttpRequest req,
     _Entry entry,
     Uri upstream,
     HlsAes128 aes,
+    NetCancellation cancel,
   ) async {
     final res = req.response;
-    final (plain, status) = await _plaintext(entry, upstream, aes);
+    final result = await _plaintext(entry, upstream, aes).wait(cancel);
+    if (result == null) {
+      return _status(
+        res,
+        _closed ? HttpStatus.notFound : HttpStatus.badGateway,
+      );
+    }
+    final (plain, status) = result;
     if (plain == null) return _status(res, status);
     if (_closed) return _status(res, HttpStatus.notFound);
     final total = plain.length;
@@ -414,44 +448,46 @@ class MediaProxySession {
   }
 
   static const _plainCacheSize = 4;
-  final _plain = <_Entry, Future<(Uint8List?, int)>>{};
+  final _plain = <_Entry, _Shared>{};
 
   /// 一个加密分片的明文：成功时为 (明文, 200)，失败时为 (null, 应答状态码)。失败不缓存。
-  Future<(Uint8List?, int)> _plaintext(
-    _Entry entry,
-    Uri upstream,
-    HlsAes128 aes,
-  ) {
+  _Shared _plaintext(_Entry entry, Uri upstream, HlsAes128 aes) {
     final cached = _plain.remove(entry);
-    if (cached != null) {
+    // 已被取消（等待者都离开了）但尚未结束的取数不再复用。
+    if (cached != null && !cached.abandoned) {
       _plain[entry] = cached; // 移到最近使用
       return cached;
     }
-    final future = _fetchPlaintext(entry, upstream, aes);
-    _plain[entry] = future;
+    final cancel = NetCancellation();
+    final shared = _sharedOf[cancel] = _Shared(this, cancel);
+    shared.future = _fetchPlaintext(entry, upstream, aes, cancel);
+    _plain[entry] = shared;
     while (_plain.length > _plainCacheSize) {
       _plain.remove(_plain.keys.first);
     }
-    future.then((r) {
-      if (r.$1 == null && identical(_plain[entry], future)) {
+    shared.future.then((r) {
+      if (r.$1 == null && identical(_plain[entry], shared)) {
         _plain.remove(entry);
       }
     });
-    return future;
+    return shared;
   }
 
-  /// 与某个播放器请求无关（可能被多个请求共用）：取消只来自会话关闭与 [MediaProxy.prepareTimeout]。
+  /// 与某个播放器请求无关（可能被多个请求共用）：取消来自会话关闭、所有等待者离开（[_Shared]）
+  /// 与 [MediaProxy.prepareTimeout]（含取密钥，不含自身与密钥的排队时间）。
   Future<(Uint8List?, int)> _fetchPlaintext(
     _Entry entry,
     Uri upstream,
     HlsAes128 aes,
+    NetCancellation cancel,
   ) async {
-    final (key, keyStatus) = await _key(aes.keyUri!);
-    if (key == null) return (null, keyStatus);
-    final cancel = NetCancellation();
     _inFlight.add(cancel);
-    final deadline = Timer(_proxy.prepareTimeout, cancel.cancel);
+    final deadline = _deadlineFor(cancel);
     try {
+      final keyResult = await _key(aes.keyUri!).wait(cancel);
+      if (keyResult == null) return (null, HttpStatus.badGateway);
+      final (key, keyStatus) = keyResult;
+      if (key == null) return (null, keyStatus);
       final up = await _open(
         upstream,
         null,
@@ -515,23 +551,24 @@ class MediaProxySession {
   }
 
   /// 取 AES-128 密钥（每个会话按地址缓存）：成功时为 (密钥, 200)，失败时为 (null, 应答状态码)；
-  /// 网络层错误的原因记在 [lastFailure]。
-  Future<(Uint8List?, int)> _key(Uri uri) {
+  /// 网络层错误的原因记在 [lastFailure]。等待者（加密分片的取数、播放列表的探测）都离开时取消。
+  _Shared _key(Uri uri) {
     final cached = _keys[uri];
-    if (cached != null) return cached;
-    final future = _fetchKey(uri);
-    _keys[uri] = future;
+    if (cached != null && !cached.abandoned) return cached;
+    final cancel = NetCancellation();
+    final shared = _sharedOf[cancel] = _Shared(this, cancel);
+    shared.future = _fetchKey(uri, cancel);
+    _keys[uri] = shared;
     // 失败不缓存：下次分片请求重新取（例如用户完成验证之后）。
-    future.then((k) {
-      if (k.$1 == null && identical(_keys[uri], future)) _keys.remove(uri);
+    shared.future.then((k) {
+      if (k.$1 == null && identical(_keys[uri], shared)) _keys.remove(uri);
     });
-    return future;
+    return shared;
   }
 
-  Future<(Uint8List?, int)> _fetchKey(Uri uri) async {
-    final cancel = NetCancellation();
+  Future<(Uint8List?, int)> _fetchKey(Uri uri, NetCancellation cancel) async {
     _inFlight.add(cancel);
-    final deadline = Timer(_proxy.prepareTimeout, cancel.cancel);
+    final deadline = _deadlineFor(cancel);
     try {
       // 密钥的数量同样由分片决定（轮换密钥时每个分片一个），走媒体配额。
       final up = await _open(uri, null, cancel, lane: RateLimitLane.media);
@@ -602,15 +639,33 @@ class MediaProxySession {
         _ => RateLimitLane.source,
       };
 
+  /// [cancel] 对应的 `prepareTimeout`：到时取消 [cancel]；经 [_open] 等待限速令牌期间暂停。
+  PausableDeadline _deadlineFor(NetCancellation cancel) => _deadlines[cancel] =
+      PausableDeadline(_proxy.prepareTimeout, cancel.cancel);
+  final _deadlines = Expando<PausableDeadline>();
+
+  final _sharedOf = Expando<_Shared>();
+
+  /// [cancel] 对应的上游请求开始 / 结束等待限速令牌：暂停 / 恢复它的时限；若它是共用的取数，
+  /// 同样暂停 / 恢复正在等它的请求（逐层传递：等明文的分片请求 ← 明文取数 ← 取密钥）。
+  void _setQueued(NetCancellation cancel, bool queued) {
+    final deadline = _deadlines[cancel];
+    queued ? deadline?.pause() : deadline?.resume();
+    _sharedOf[cancel]?._setQueued(queued);
+  }
+
   Future<NetStreamResponse?> _open(
     Uri upstream,
     String? range,
     NetCancellation cancel, {
     required RateLimitLane lane,
   }) async {
+    final deadline = _deadlines[cancel];
+    assert(deadline != null, 'every upstream request needs _deadlineFor');
     try {
       return await _client.openStream(
         lane: lane,
+        onRateLimitWait: (waiting) => _setQueued(cancel, waiting),
         NetRequest(
           upstream.toString(),
           headers: {
@@ -748,11 +803,9 @@ class MediaProxySession {
     }
     // AES-128 与字节区间同时使用不支持（地址总是 403），不会走到这里。
     if (offset != 0) return null;
-    // 密钥按会话缓存、与分片请求共用；探测不等到它超出播放列表请求的时限（取密钥本身继续，结果照常缓存）。
-    final keyResult = await Future.any([
-      _key(aes.keyUri!).then<(Uint8List?, int)?>((r) => r),
-      cancel.whenCancelled.then<(Uint8List?, int)?>((_) => null),
-    ]);
+    // 密钥按会话缓存、与分片请求共用。取密钥排队期间播放列表请求的时限暂停（[_setQueued]）；
+    // 播放列表请求被取消时不再等待（没有其他等待者时取密钥随之取消）。
+    final keyResult = await _key(aes.keyUri!).wait(cancel);
     final key = keyResult?.$1;
     if (key == null || cancel.isCancelled) return null;
     final blocks = (length + 15) ~/ 16 * 16;
@@ -958,4 +1011,69 @@ Future<void> _status(HttpResponse res, int status) {
   res.statusCode = status;
   res.contentLength = 0;
   return res.close();
+}
+
+/// 多个请求共用的一次取数（加密分片的明文、密钥）。每个等待者经 [wait] 等结果；所有等待者都放弃
+/// （播放器断开、会话关闭）且取数尚未结束时取消取数本身，之后的请求重新取。取数等待限速令牌期间，
+/// 等待者的时限一并暂停（[MediaProxySession._setQueued]）。
+class _Shared {
+  _Shared(this._session, this._cancel);
+
+  final MediaProxySession _session;
+  final NetCancellation _cancel;
+  final _waiting = <NetCancellation>{};
+  int _queued = 0;
+
+  void _setQueued(bool queued) {
+    _queued += queued ? 1 : -1;
+    for (final w in _waiting.toList()) {
+      _session._setQueued(w, queued);
+    }
+  }
+
+  void _join(NetCancellation waiter) {
+    _waiting.add(waiter);
+    for (var i = 0; i < _queued; i++) {
+      _session._setQueued(waiter, true);
+    }
+  }
+
+  void _leave(NetCancellation waiter) {
+    if (!_waiting.remove(waiter)) return;
+    for (var i = 0; i < _queued; i++) {
+      _session._setQueued(waiter, false);
+    }
+  }
+
+  late final Future<(Uint8List?, int)> _future;
+  Future<(Uint8List?, int)> get future => _future;
+  set future(Future<(Uint8List?, int)> f) =>
+      _future = f.whenComplete(() => _done = true);
+
+  int _waiters = 0;
+  bool _done = false;
+
+  /// 已被取消（尚未结束），不应再复用。
+  bool get abandoned => _cancel.isCancelled && !_done;
+
+  /// 取数的结果；[abort] 先被取消时为 null。
+  Future<(Uint8List?, int)?> wait(NetCancellation abort) {
+    if (_done) return _future;
+    _waiters++;
+    _join(abort);
+    final result = Completer<(Uint8List?, int)?>();
+    _future.then((r) {
+      if (result.isCompleted) return;
+      _waiters--;
+      _leave(abort);
+      result.complete(r);
+    });
+    abort.whenCancelled.then((_) {
+      if (result.isCompleted) return;
+      _leave(abort);
+      result.complete(null);
+      if (--_waiters == 0 && !_done) _cancel.cancel();
+    });
+    return result.future;
+  }
 }
