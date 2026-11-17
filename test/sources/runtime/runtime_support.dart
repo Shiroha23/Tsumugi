@@ -57,6 +57,7 @@ String fakeManifestJson(
   String? name,
   String version = '1.0.0',
   MediaType type = MediaType.comic,
+  List<Map<String, Object?>>? settings,
 }) => jsonEncode({
   'apiVersion': 1,
   'id': id,
@@ -65,6 +66,7 @@ String fakeManifestJson(
   'version': version,
   'baseUrl': 'https://example.com',
   'engine': 'declarative',
+  'settings': ?settings,
   'rules': {
     'search': {
       'request': {'url': '/s?q={{keyword}}'},
@@ -126,13 +128,20 @@ class FakeFactory implements SourceFactory {
   final FakeSource Function(SourceManifest manifest)? build;
   final created = <FakeSource>[];
 
+  /// 每次创建时收到的设置值（与 [created] 一一对应）。
+  final settings = <Map<String, Object?>>[];
+
   @override
   SourceEngine get engine => SourceEngine.declarative;
 
   @override
-  Future<Source> create(SourceManifest manifest) async {
+  Future<Source> create(
+    SourceManifest manifest, {
+    Map<String, Object?> settings = const {},
+  }) async {
     final s = build?.call(manifest) ?? FakeSource(manifest);
     created.add(s);
+    this.settings.add(settings);
     return s;
   }
 }

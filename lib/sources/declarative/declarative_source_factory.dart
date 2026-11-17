@@ -77,13 +77,17 @@ class DeclarativeSourceFactory implements SourceFactory {
   SourceEngine get engine => SourceEngine.declarative;
 
   @override
-  Future<Source> create(SourceManifest manifest) async {
+  Future<Source> create(
+    SourceManifest manifest, {
+    Map<String, Object?> settings = const {},
+  }) async {
     final http = httpClientFor(manifest);
     try {
       final source = DeclarativeSource(
         manifest: manifest,
         fetcher: SourceHttpFetcher(http),
         scriptRuntimeFactory: scriptRuntimeFactory,
+        settings: settings,
         log: (m) => log('[${manifest.id}] $m'),
       );
       return ManagedDeclarativeSource(source, http);

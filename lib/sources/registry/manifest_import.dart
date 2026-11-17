@@ -75,6 +75,7 @@ const knownManifestFields = {
   'nsfw',
   'icon',
   'baseUrl',
+  'loginUrl',
   'allowedHosts',
   'headers',
   'rateLimit',

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
@@ -37,11 +38,13 @@ class SourceUnavailableException implements Exception {
   String toString() => 'SourceUnavailableException($sourceId: $reason)';
 }
 
-/// 决定缓存的实例是否过时的源状态：id、清单哈希（升级 / 覆盖安装）、启用状态、清单是否可用。
+/// 决定缓存的实例是否过时的源状态：id、清单哈希（升级 / 覆盖安装）、启用状态、清单是否可用、
+/// 源设置的有效值（source-spec §1.1：保存设置后重建实例）。
 final class SourceRevision {
-  const SourceRevision(this.installed);
+  SourceRevision(this.installed) : _settings = jsonEncode(installed.settings);
 
   final InstalledSource installed;
+  final String _settings;
 
   @override
   bool operator ==(Object other) =>
@@ -49,7 +52,8 @@ final class SourceRevision {
       other.installed.id == installed.id &&
       other.installed.manifestSha256 == installed.manifestSha256 &&
       other.installed.enabled == installed.enabled &&
-      (other.installed.manifest == null) == (installed.manifest == null);
+      (other.installed.manifest == null) == (installed.manifest == null) &&
+      other._settings == _settings;
 
   @override
   int get hashCode => Object.hash(
@@ -57,6 +61,7 @@ final class SourceRevision {
     installed.manifestSha256,
     installed.enabled,
     installed.manifest == null,
+    _settings,
   );
 }
 
@@ -126,7 +131,7 @@ class SourceRuntime {
         '「${installed.name}」的清单无法加载：${installed.loadError ?? '未知原因'}',
       );
     }
-    return _factories.create(manifest);
+    return _factories.create(manifest, settings: installed.settings);
   }
 
   void _onChange(List<InstalledSource> all) {

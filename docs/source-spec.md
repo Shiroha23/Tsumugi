@@ -28,14 +28,17 @@
   "nsfw": false,
   "icon": "https://example.com/favicon.ico",
   "baseUrl": "https://example.com",
+  "loginUrl": "/login",           // 可选：源菜单「登录 / 打开网页」打开的地址，缺省为 baseUrl
   "allowedHosts": ["example.com", "img.example.com"], // 网络白名单，见 §5
   "headers": { "User-Agent": "...", "Referer": "https://example.com/" },
   "rateLimit": { "requests": 5, "perSeconds": 1 },
   "timeoutMs": 15000,
 
-  "settings": [                   // 可选：用户可调的源设置
+  "settings": [                   // 可选：用户可调的源设置，见 §1.1
     { "key": "quality", "label": "画质", "type": "select",
-      "options": ["high", "low"], "default": "high" }
+      "options": ["high", "low"], "default": "high" },
+    { "key": "hd", "label": "高清封面", "type": "switch", "default": false },
+    { "key": "mirror", "label": "镜像路径", "type": "text", "default": "" }
   ],
 
   "engine": "declarative",        // declarative | script
@@ -48,7 +51,41 @@
 
 - `id`、`name`、`type`、`version`、`baseUrl`、`engine` 必填。
 - 所有请求的主机名必须属于 `baseUrl` 的主机或 `allowedHosts`（支持 `*.example.com` 通配）。
+- `loginUrl` 可为绝对地址或相对地址（基于 `baseUrl` 解析）；解析后必须是 http(s) 且主机在白名单内，否则清单校验失败。
+  它只决定源菜单「登录 / 打开网页」打开哪一页，打开后的流程与「打开验证页」完全相同（白名单、导航拦截、
+  Cookie 写回本源、「完成」，见 architecture §5.3）。
+- `settings` 的校验见 §1.1。
 - 未知字段忽略（向前兼容），但会在调试面板中给出警告。
+
+### 1.1 源设置（`settings`）
+
+每一项在源菜单「源设置」中显示为一个控件，按源保存。支持的 `type`：
+
+| `type` | 控件 | 值 | `default` | 缺省 `default` |
+|---|---|---|---|---|
+| `select` | 单选列表 | `options` 中的一个字符串 | 必须是 `options` 之一 | `options[0]` |
+| `switch` | 开关 | 布尔 | 必须是布尔 | `false` |
+| `text` | 单行文本 | 字符串，最长 1024 个 UTF-16 码元，不含换行 | 必须是满足同样限制的字符串 | `""` |
+
+**校验**（不通过则清单校验失败，导入被拒绝）：
+
+- `key` 只能包含 `[A-Za-z0-9_]`，长度 1–64，同一清单内不能重复；`label` 不能为空。
+- `select` 的 `options` 至少一项、都是非空字符串且不重复；`default` 不在 `options` 中视为错误。
+- `default` 的类型与上表不符视为错误（例如 `switch` 的 `default` 为 `"true"`）。
+- **未知 `type`**（将来的版本可能增加）：不算错误，导入时给出警告；该项不在界面中显示，
+  脚本 / 模板读到的始终是清单中的 `default`（原样，可为任意 JSON 值）。
+- 非 `select` 的项给出 `options` 时忽略。
+
+**取值与保存**
+
+- 用户修改的值按源保存在客户端数据库中；没有修改过的项取 `default`。
+  读取时再次检查：保存的值与当前清单不符（类型不对、不在 `options` 中、超长）时视为未设置，取 `default`。
+- 升级 / 覆盖安装源时，保留仍然有效的值（同一 `key`、同一 `type`、值通过上述检查），其余丢弃。删除源时一并删除。
+- 脚本中通过 `tsumugi.source.settings[key]` 读取（§4.2），声明式规则中通过 `{{setting.<key>}}` 读取（§3.2，
+  布尔值为 `"true"` / `"false"`）。清单中的每一项都有值。
+
+**生效时机**：在「源设置」中保存后，客户端释放该源当前的运行实例（脚本源的 worker 随之结束，模块级变量重置），
+下一次请求时按新设置重建；保存时已在进行中的调用仍按旧值完成。Cookie 与 `tsumugi.storage` 不受影响。
 
 ---
 
@@ -268,7 +305,7 @@ interface MusicContent {
 | `{{id}}` | detail | SearchItem.id |
 | `{{unitId}}` | content | Unit.id |
 | `{{baseUrl}}` | 全部 | 清单中的 baseUrl |
-| `{{setting.<key>}}` | 全部 | 用户设置值 |
+| `{{setting.<key>}}` | 全部 | 用户设置值（§1.1；布尔值为 `true` / `false`） |
 
 相对 URL 一律基于 `baseUrl` 解析：请求地址，以及结果中的 `cover` / 图片 / 流地址都会解析为绝对 URL；
 `id`、unit `id`、`nextPageId` 保持原样，在下一次请求时再解析。
@@ -417,7 +454,8 @@ interface HtmlNode {
 
 **细则**
 
-- `tsumugi` 及其各命名空间、`tsumugi.source`（含 `settings`）均被冻结。`settings` 为用户设置值，未设置的键取清单默认值。
+- `tsumugi` 及其各命名空间、`tsumugi.source`（含 `settings`）均被冻结。`settings` 为用户设置值，未设置的键取清单默认值；
+  取值规则与生效时机见 §1.1（保存设置后实例重建，新值从下一次请求起生效）。
 - `http.request`：`method` 不区分大小写，只允许上面列出的五种；`body` 为字符串时按 `text/plain` 发送，
   为对象 / 数组时按 JSON 发送；`body` 与 `form` 不能同时给出。非 2xx 响应**不抛出**，由脚本检查 `status`；
   `headers` 的名称为小写。`responseType: "json"` 时 `body` 为解析后的值（空响应体为 `null`，解析失败 → `E_PARSE`），
@@ -529,6 +567,8 @@ export async function search(keyword, page) {
 - 检测到人机验证页面（403 / 429 / 503 且带有验证页特征）时返回 `E_CHALLENGE`，不重试、不尝试绕过；
   UI 引导用户在 WebView 中手动完成后再重试（见 architecture §5.3）。`E_CHALLENGE` 与 `E_LOGIN_REQUIRED`
   的错误界面都提供「打开验证页」；完成后 Cookie 写回本源的 Cookie 域（图片请求共用），并自动重试。
+- 用户也可以随时从源菜单「登录 / 打开网页」主动打开 `loginUrl`（缺省 `baseUrl`，§1），流程与「打开验证页」相同，
+  不受脚本 `openWebView` 的频率限制；完成后不自动重试任何请求。
 - 单个响应体超过 20 MB → `E_LIMIT`。
 - **响应文本解码**（声明式规则、`http.request` 的 `text` / `json`、`http.get` / `getJson`）按以下顺序确定字符集：
   1. 规则 `request.charset` / 脚本 `charset`（显式指定）；

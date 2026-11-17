@@ -3,6 +3,7 @@ import 'package:drift/drift.dart';
 import '../../core/storage/app_database.dart';
 import '../model/common.dart';
 import '../model/manifest.dart';
+import '../model/source_settings.dart';
 import 'installed_source.dart';
 import 'manifest_import.dart';
 import 'version.dart';
@@ -50,6 +51,10 @@ final class ImportPreview {
   List<String> get warnings => [
     if (parsed.unknownFields.isNotEmpty)
       '清单包含未知字段（将被忽略）：${parsed.unknownFields.join('、')}',
+    if (unknownTypeSettings(manifest) case final unknown
+        when unknown.isNotEmpty)
+      '以下设置的类型不受支持，将不显示并始终使用默认值：'
+          '${unknown.map((s) => '${s.key}（${s.type}）').join('、')}',
     if (action == ImportAction.reinstall)
       '版本号未变（${manifest.version}），但清单内容不同，将覆盖已安装的源',
   ];
@@ -154,7 +159,8 @@ class SourceRegistry {
     }
   }
 
-  /// 安装或更新。更新时保留启用状态、排序与安装时间。
+  /// 安装或更新。更新时保留启用状态、排序与安装时间，以及对新清单仍然有效的设置值
+  /// （source-spec §1.1）。
   Future<InstalledSource> install(ImportPreview preview) {
     final parsed = preview.parsed;
     final m = parsed.manifest;
@@ -186,7 +192,10 @@ class SourceRegistry {
               ),
             );
       } else {
-        await (_db.update(_t)..where((t) => t.id.equals(m.id))).write(common);
+        final kept = sanitizeSettingValues(m, existing.storedSettings);
+        await (_db.update(_t)..where((t) => t.id.equals(m.id))).write(
+          common.copyWith(settingsJson: Value(encodeStoredSettings(kept))),
+        );
       }
       return (await get(m.id))!;
     });
@@ -209,6 +218,33 @@ class SourceRegistry {
       InstalledSourcesCompanion(enabled: Value(enabled)),
     );
   }
+
+  /// 保存 [id] 的用户设置（source-spec §1.1）。只写入对当前清单有效、且不等于默认值的项，
+  /// 其余丢弃；源不存在或清单不可用时什么也不做，返回 false。
+  ///
+  /// 写入后注册表推送变化，`SourceRuntime` 据此释放并重建该源的实例。
+  Future<bool> setSettings(String id, Map<String, Object?> values) =>
+      _db.transaction(() async {
+        final installed = await get(id);
+        final m = installed?.manifest;
+        if (installed == null || m == null) return false;
+        final defaults = {
+          for (final s in m.settings) s.key: s.effectiveDefault,
+        };
+        final kept = {
+          for (final MapEntry(:key, :value) in sanitizeSettingValues(
+            m,
+            values,
+          ).entries)
+            if (value != defaults[key]) key: value,
+        };
+        await (_db.update(_t)..where((t) => t.id.equals(id))).write(
+          InstalledSourcesCompanion(
+            settingsJson: Value(encodeStoredSettings(kept)),
+          ),
+        );
+        return true;
+      });
 
   /// 删除，同时清除该源的脚本存储（`tsumugi.storage`）；返回是否确有删除。
   Future<bool> remove(String id) => _db.transaction(() async {

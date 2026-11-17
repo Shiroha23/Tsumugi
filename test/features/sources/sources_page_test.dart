@@ -10,10 +10,13 @@ import 'package:tsumugi/core/network/source_session.dart';
 import 'package:tsumugi/core/storage/app_database.dart';
 import 'package:tsumugi/features/sources/manifest_file_picker.dart';
 import 'package:tsumugi/features/sources/sources_page.dart';
+import 'package:tsumugi/shared/webview/providers.dart';
 import 'package:tsumugi/sources/registry/providers.dart';
 import 'package:tsumugi/sources/session/source_sessions.dart';
+import 'package:tsumugi/sources/source.dart';
 
 import '../../core/storage/test_database.dart';
+import '../../shared/webview/webview_fakes.dart';
 
 String fixture(String name) =>
     File('test/fixtures/sources/$name').readAsStringSync();
@@ -34,11 +37,13 @@ void main() {
   late AppDatabase db;
   late SourceRegistry registry;
   late _FakePicker picker;
+  late FakeSourceVerification verification;
 
   setUp(() {
     db = openTestDatabase();
     registry = SourceRegistry(db);
     picker = _FakePicker();
+    verification = FakeSourceVerification();
   });
   tearDown(() => db.close());
 
@@ -55,6 +60,7 @@ void main() {
           appDatabaseProvider.overrideWithValue(db),
           sessionPersistenceProvider.overrideWithValue(persistence),
           manifestFilePickerProvider.overrideWithValue(picker),
+          sourceVerificationProvider.overrideWithValue(verification),
         ],
         child: const MaterialApp(home: SourcesPage()),
       ),
@@ -376,5 +382,147 @@ void main() {
         .toList();
     expect(titles, ['漫画二', '漫画三', '示例漫画']);
     await unmount(tester);
+  });
+
+  group('源设置（#58）', () {
+    String settingsFixture() => fixture('settings_comic.json');
+
+    testWidgets('没有可显示设置的源不显示「源设置」', (tester) async {
+      await registry.importText(comicWith({'settings': []}));
+      await pumpPage(tester);
+      await tester.tap(find.byTooltip('源菜单'));
+      await tester.pumpAndSettle();
+      expect(find.text('源设置'), findsNothing);
+      expect(find.text('登录 / 打开网页'), findsOneWidget);
+      await tester.tapAt(Offset.zero);
+      await tester.pumpAndSettle();
+      await unmount(tester);
+    });
+
+    testWidgets('只有未知类型的设置时同样不显示', (tester) async {
+      await registry.importText(
+        comicWith({
+          'settings': [
+            {'key': 'f', 'label': '将来', 'type': 'slider'},
+          ],
+        }),
+      );
+      await pumpPage(tester);
+      await tester.tap(find.byTooltip('源菜单'));
+      await tester.pumpAndSettle();
+      expect(find.text('源设置'), findsNothing);
+      await tester.tapAt(Offset.zero);
+      await tester.pumpAndSettle();
+      await unmount(tester);
+    });
+
+    testWidgets('按清单渲染并保存；取消不保存', (tester) async {
+      final s = await registry.importText(settingsFixture());
+      await pumpPage(tester);
+
+      await openMenuItem(tester, '源设置');
+      expect(find.text('源设置 · 设置示例'), findsOneWidget);
+      expect(find.text('画质'), findsOneWidget);
+      expect(find.text('mid'), findsOneWidget); // 清单默认值
+      expect(find.text('高清封面'), findsOneWidget);
+      expect(find.text('镜像路径'), findsOneWidget);
+      expect(find.text('将来的类型'), findsNothing); // 未知类型不显示
+      expect(
+        tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value,
+        isTrue,
+      );
+
+      // 取消：不写库。
+      await tester.tap(find.byType(SwitchListTile));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      expect((await registry.get(s.id))!.storedSettings, isEmpty);
+
+      await openMenuItem(tester, '源设置');
+      await tester.tap(find.text('mid'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('low').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(SwitchListTile));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), '/m\nirror');
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, '保存'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.text('已保存「设置示例」的设置，下一次请求时生效'), findsOneWidget);
+      final saved = (await registry.get(s.id))!;
+      expect(saved.storedSettings, {
+        'quality': 'low',
+        'hd': false,
+        'mirror': '/mirror', // 换行被过滤
+      });
+
+      // 再次打开显示已保存的值；恢复默认后保存清空。
+      await openMenuItem(tester, '源设置');
+      expect(find.text('low'), findsOneWidget);
+      expect(find.text('/mirror'), findsOneWidget);
+      await tester.tap(find.text('恢复默认'));
+      await tester.pumpAndSettle();
+      expect(find.text('mid'), findsOneWidget);
+      expect(find.text('/mirror'), findsNothing);
+      await tester.tap(find.widgetWithText(FilledButton, '保存'));
+      await tester.pumpAndSettle();
+      expect((await registry.get(s.id))!.storedSettings, isEmpty);
+      await unmount(tester);
+    });
+  });
+
+  group('登录 / 打开网页（#59）', () {
+    testWidgets('调用验证流程打开登录页；完成后提示', (tester) async {
+      await registry.importText(fixture('declarative_comic.json'));
+      await pumpPage(tester);
+
+      await openMenuItem(tester, '登录 / 打开网页');
+      expect(verification.loginCalls, ['com.example.comic']);
+      expect(verification.calls, isEmpty, reason: '不走「打开验证页」的地址选择');
+      expect(find.text('已保存「示例漫画」的 Cookie 与登录状态'), findsOneWidget);
+      await unmount(tester);
+    });
+
+    testWidgets('用户取消时不提示', (tester) async {
+      verification.result = false;
+      await registry.importText(fixture('declarative_comic.json'));
+      await pumpPage(tester);
+      await openMenuItem(tester, '登录 / 打开网页');
+      expect(verification.loginCalls, hasLength(1));
+      expect(find.byType(SnackBar), findsNothing);
+      await unmount(tester);
+    });
+
+    testWidgets('失败时提示原因', (tester) async {
+      verification.error = const SourceException(
+        SourceErrorCode.unsupported,
+        '当前平台不支持 WebView',
+      );
+      await registry.importText(fixture('declarative_comic.json'));
+      await pumpPage(tester);
+      await openMenuItem(tester, '登录 / 打开网页');
+      expect(find.textContaining('无法打开登录页'), findsOneWidget);
+      await unmount(tester);
+    });
+
+    testWidgets('清单不可用的源不显示登录与设置', (tester) async {
+      await registry.importText(fixture('declarative_comic.json'));
+      await db.customStatement(
+        "UPDATE installed_sources SET manifest_json = '{oops'",
+      );
+      await pumpPage(tester);
+      await tester.tap(find.byTooltip('源菜单'));
+      await tester.pumpAndSettle();
+      expect(find.text('登录 / 打开网页'), findsNothing);
+      expect(find.text('源设置'), findsNothing);
+      expect(find.text('删除'), findsOneWidget);
+      await tester.tapAt(Offset.zero);
+      await tester.pumpAndSettle();
+      await unmount(tester);
+    });
   });
 }

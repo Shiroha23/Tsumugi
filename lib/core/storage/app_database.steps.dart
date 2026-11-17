@@ -528,9 +528,171 @@ i1.GeneratedColumn<int> _column_29(String aliasedName) =>
       $customConstraints: 'NOT NULL DEFAULT 0 CHECK (read IN (0, 1))',
       defaultValue: const i1.CustomExpression('0'),
     );
+
+final class Schema4 extends i0.VersionedSchema {
+  Schema4({required super.database}) : super(version: 4);
+  @override
+  late final List<i1.DatabaseSchemaEntity> entities = [
+    installedSources,
+    sourceStorageEntries,
+    libraryEntries,
+    itemProgressEntries,
+    unitProgressEntries,
+    itemProgressUpdatedAt,
+  ];
+  late final Shape5 installedSources = Shape5(
+    source: i0.VersionedTable(
+      entityName: 'installed_sources',
+      withoutRowId: false,
+      isStrict: false,
+      tableConstraints: ['PRIMARY KEY(id)'],
+      columns: [
+        _column_0,
+        _column_1,
+        _column_2,
+        _column_3,
+        _column_4,
+        _column_5,
+        _column_6,
+        _column_7,
+        _column_8,
+        _column_9,
+        _column_10,
+        _column_11,
+        _column_12,
+        _column_30,
+      ],
+      attachedDatabase: database,
+    ),
+    alias: null,
+  );
+  late final Shape1 sourceStorageEntries = Shape1(
+    source: i0.VersionedTable(
+      entityName: 'source_storage_entries',
+      withoutRowId: false,
+      isStrict: false,
+      tableConstraints: ['PRIMARY KEY(source_id, "key")'],
+      columns: [_column_13, _column_14, _column_15],
+      attachedDatabase: database,
+    ),
+    alias: null,
+  );
+  late final Shape2 libraryEntries = Shape2(
+    source: i0.VersionedTable(
+      entityName: 'library_entries',
+      withoutRowId: false,
+      isStrict: false,
+      tableConstraints: ['PRIMARY KEY(source_id, item_id)'],
+      columns: [
+        _column_13,
+        _column_16,
+        _column_17,
+        _column_18,
+        _column_19,
+        _column_20,
+        _column_21,
+        _column_22,
+        _column_23,
+        _column_8,
+      ],
+      attachedDatabase: database,
+    ),
+    alias: null,
+  );
+  late final Shape3 itemProgressEntries = Shape3(
+    source: i0.VersionedTable(
+      entityName: 'item_progress_entries',
+      withoutRowId: false,
+      isStrict: false,
+      tableConstraints: ['PRIMARY KEY(source_id, item_id)'],
+      columns: [
+        _column_13,
+        _column_16,
+        _column_17,
+        _column_18,
+        _column_19,
+        _column_20,
+        _column_24,
+        _column_25,
+        _column_26,
+        _column_27,
+        _column_28,
+        _column_8,
+      ],
+      attachedDatabase: database,
+    ),
+    alias: null,
+  );
+  late final Shape4 unitProgressEntries = Shape4(
+    source: i0.VersionedTable(
+      entityName: 'unit_progress_entries',
+      withoutRowId: false,
+      isStrict: false,
+      tableConstraints: ['PRIMARY KEY(source_id, item_id, unit_id)'],
+      columns: [
+        _column_13,
+        _column_16,
+        _column_24,
+        _column_26,
+        _column_27,
+        _column_28,
+        _column_29,
+        _column_8,
+      ],
+      attachedDatabase: database,
+    ),
+    alias: null,
+  );
+  final i1.Index itemProgressUpdatedAt = i1.Index(
+    'item_progress_updated_at',
+    'CREATE INDEX item_progress_updated_at ON item_progress_entries (updated_at)',
+  );
+}
+
+class Shape5 extends i0.VersionedTable {
+  Shape5({required super.source, required super.alias}) : super.aliased();
+  i1.GeneratedColumn<String> get id =>
+      columnsByName['id']! as i1.GeneratedColumn<String>;
+  i1.GeneratedColumn<String> get name =>
+      columnsByName['name']! as i1.GeneratedColumn<String>;
+  i1.GeneratedColumn<String> get type =>
+      columnsByName['type']! as i1.GeneratedColumn<String>;
+  i1.GeneratedColumn<String> get version =>
+      columnsByName['version']! as i1.GeneratedColumn<String>;
+  i1.GeneratedColumn<int> get apiVersion =>
+      columnsByName['api_version']! as i1.GeneratedColumn<int>;
+  i1.GeneratedColumn<int> get enabled =>
+      columnsByName['enabled']! as i1.GeneratedColumn<int>;
+  i1.GeneratedColumn<int> get sortOrder =>
+      columnsByName['sort_order']! as i1.GeneratedColumn<int>;
+  i1.GeneratedColumn<int> get installedAt =>
+      columnsByName['installed_at']! as i1.GeneratedColumn<int>;
+  i1.GeneratedColumn<int> get updatedAt =>
+      columnsByName['updated_at']! as i1.GeneratedColumn<int>;
+  i1.GeneratedColumn<String> get originKind =>
+      columnsByName['origin_kind']! as i1.GeneratedColumn<String>;
+  i1.GeneratedColumn<String> get originUrl =>
+      columnsByName['origin_url']! as i1.GeneratedColumn<String>;
+  i1.GeneratedColumn<String> get manifestSha256 =>
+      columnsByName['manifest_sha256']! as i1.GeneratedColumn<String>;
+  i1.GeneratedColumn<String> get manifestJson =>
+      columnsByName['manifest_json']! as i1.GeneratedColumn<String>;
+  i1.GeneratedColumn<String> get settingsJson =>
+      columnsByName['settings_json']! as i1.GeneratedColumn<String>;
+}
+
+i1.GeneratedColumn<String> _column_30(String aliasedName) =>
+    i1.GeneratedColumn<String>(
+      'settings_json',
+      aliasedName,
+      true,
+      type: i1.DriftSqlType.string,
+      $customConstraints: 'NULL',
+    );
 i0.MigrationStepWithVersion migrationSteps({
   required Future<void> Function(i1.Migrator m, Schema2 schema) from1To2,
   required Future<void> Function(i1.Migrator m, Schema3 schema) from2To3,
+  required Future<void> Function(i1.Migrator m, Schema4 schema) from3To4,
 }) {
   return (currentVersion, database) async {
     switch (currentVersion) {
@@ -544,6 +706,11 @@ i0.MigrationStepWithVersion migrationSteps({
         final migrator = i1.Migrator(database, schema);
         await from2To3(migrator, schema);
         return 3;
+      case 3:
+        final schema = Schema4(database: database);
+        final migrator = i1.Migrator(database, schema);
+        await from3To4(migrator, schema);
+        return 4;
       default:
         throw ArgumentError.value('Unknown migration from $currentVersion');
     }
@@ -553,6 +720,11 @@ i0.MigrationStepWithVersion migrationSteps({
 i1.OnUpgrade stepByStep({
   required Future<void> Function(i1.Migrator m, Schema2 schema) from1To2,
   required Future<void> Function(i1.Migrator m, Schema3 schema) from2To3,
+  required Future<void> Function(i1.Migrator m, Schema4 schema) from3To4,
 }) => i0.VersionedSchema.stepByStepHelper(
-  step: migrationSteps(from1To2: from1To2, from2To3: from2To3),
+  step: migrationSteps(
+    from1To2: from1To2,
+    from2To3: from2To3,
+    from3To4: from3To4,
+  ),
 );

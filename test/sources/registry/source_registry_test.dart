@@ -3,9 +3,12 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tsumugi/core/network/source_http_client.dart';
 import 'package:tsumugi/core/storage/app_database.dart';
+import 'package:tsumugi/sources/declarative/declarative_source_factory.dart';
 import 'package:tsumugi/sources/model/common.dart';
 import 'package:tsumugi/sources/registry/providers.dart';
+import 'package:tsumugi/sources/runtime/source_runtime.dart';
 import 'package:tsumugi/sources/source.dart';
 
 import '../../core/storage/test_database.dart';
@@ -24,6 +27,32 @@ Matcher throwsImport(SourceImportError error, [Object? message]) => throwsA(
       .having((e) => e.error, 'error', error)
       .having((e) => e.message, 'message', message ?? anything),
 );
+
+/// 记录请求地址、返回空列表页的 HTTP 客户端。
+class RecordingHttpClient implements SourceHttpClient {
+  RecordingHttpClient(this.urls);
+
+  final List<Uri> urls;
+
+  @override
+  Future<NetResponse> request(NetRequest request) async {
+    urls.add(Uri.parse(request.url));
+    return NetResponse(
+      status: 200,
+      url: Uri.parse(request.url),
+      headersAll: const {
+        'content-type': ['text/html; charset=utf-8'],
+      },
+      bytes: utf8.encode('<html><body></body></html>'),
+    );
+  }
+
+  @override
+  void close() {}
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
 
 void main() {
   late AppDatabase db;
@@ -352,6 +381,141 @@ void main() {
       expect(s.isUsable, isFalse);
       expect(await registry.enabled(), isEmpty);
       expect(await registry.remove(s.id), isTrue);
+    });
+  });
+
+  group('源设置（#58）', () {
+    String settingsFixture([Map<String, Object?> changes = const {}]) =>
+        jsonEncode({
+          ...jsonDecode(fixture('settings_comic.json')) as Map,
+          ...changes,
+        });
+
+    test('未修改时取默认值；未知类型给出导入警告', () async {
+      final p = await registry.prepareImport(settingsFixture());
+      expect(p.warnings.single, contains('future（slider）'));
+      final s = await registry.install(p);
+      expect(s.storedSettings, isEmpty);
+      expect(s.settings, {
+        'quality': 'mid',
+        'hd': true,
+        'mirror': '',
+        'future': 3,
+      });
+    });
+
+    test('setSettings 只保存有效且非默认的值', () async {
+      final s = await registry.importText(settingsFixture());
+      expect(
+        await registry.setSettings(s.id, {
+          'quality': 'low',
+          'hd': true, // 等于默认值，不保存
+          'mirror': 'a\nb', // 无效，丢弃
+          'future': 9, // 未知类型，丢弃
+          'other': 1, // 不存在，丢弃
+        }),
+        isTrue,
+      );
+      final after = (await registry.get(s.id))!;
+      expect(after.storedSettings, {'quality': 'low'});
+      expect(after.settings['quality'], 'low');
+      expect(after.settings['mirror'], '');
+
+      // 全部恢复默认时存 null。
+      await registry.setSettings(s.id, {'quality': 'mid'});
+      final row = await (db.select(
+        db.installedSources,
+      )..where((t) => t.id.equals(s.id))).getSingle();
+      expect(row.settingsJson, isNull);
+
+      expect(await registry.setSettings('com.example.none', {}), isFalse);
+    });
+
+    test('升级时保留仍有效的值，丢弃无效值', () async {
+      final s = await registry.importText(settingsFixture());
+      await registry.setSettings(s.id, {
+        'quality': 'low',
+        'hd': false,
+        'mirror': '/m',
+      });
+      final upgraded = await registry.importText(
+        settingsFixture({
+          'version': '1.1.0',
+          'settings': [
+            // low 被移除：值失效，回到新默认值。
+            {
+              'key': 'quality',
+              'label': '画质',
+              'type': 'select',
+              'options': ['high', 'mid'],
+              'default': 'high',
+            },
+            // 同 key、同类型：保留。
+            {'key': 'hd', 'label': '高清', 'type': 'switch', 'default': true},
+            // 类型改变：丢弃。
+            {
+              'key': 'mirror',
+              'label': '镜像',
+              'type': 'select',
+              'options': ['/a'],
+            },
+          ],
+        }),
+      );
+      expect(upgraded.storedSettings, {'hd': false});
+      expect(upgraded.settings, {
+        'quality': 'high',
+        'hd': false,
+        'mirror': '/a',
+      });
+    });
+
+    test('删除源时一并删除设置；重新安装从默认值开始', () async {
+      final s = await registry.importText(settingsFixture());
+      await registry.setSettings(s.id, {'quality': 'low'});
+      await registry.remove(s.id);
+      final again = await registry.importText(settingsFixture());
+      expect(again.storedSettings, isEmpty);
+      expect(again.settings['quality'], 'mid');
+    });
+
+    test('数据库中损坏的设置按未设置处理', () async {
+      final s = await registry.importText(settingsFixture());
+      await db.customStatement(
+        "UPDATE installed_sources SET settings_json = '{oops' WHERE id = ?",
+        [s.id],
+      );
+      final after = (await registry.get(s.id))!;
+      expect(after.manifest, isNotNull);
+      expect(after.settings['quality'], 'mid');
+    });
+
+    test('loginUrl 在白名单外时导入失败', () async {
+      await expectLater(
+        () => registry.prepareImport(
+          settingsFixture({'loginUrl': 'https://example.net/login'}),
+        ),
+        throwsImport(SourceImportError.invalidManifest, contains('loginUrl')),
+      );
+    });
+
+    test('设置传入声明式模板（{{setting.<key>}}）', () async {
+      final s = await registry.importText(settingsFixture());
+      await registry.setSettings(s.id, {'quality': 'low', 'hd': false});
+      final installed = (await registry.get(s.id))!;
+      final urls = <Uri>[];
+      final source = await DeclarativeSourceFactory(
+        httpClientFor: (m) => RecordingHttpClient(urls),
+        log: (_) {},
+      ).create(installed.manifest!, settings: installed.settings);
+      addTearDown(() => disposeSource(source));
+      await source.search('k', 1);
+      expect(urls.single.queryParameters, {
+        'q': 'k',
+        'quality': 'low',
+        'hd': 'false',
+        'm': '',
+      });
     });
   });
 

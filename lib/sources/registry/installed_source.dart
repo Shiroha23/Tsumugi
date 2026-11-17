@@ -3,6 +3,7 @@ import 'dart:convert';
 import '../../core/storage/app_database.dart';
 import '../model/common.dart';
 import '../model/manifest.dart';
+import '../model/source_settings.dart';
 
 /// 源的安装来源。
 final class SourceOrigin {
@@ -46,6 +47,7 @@ final class InstalledSource {
     required this.manifestSha256,
     required this.manifestJson,
     required this.manifest,
+    this.storedSettings = const {},
     this.loadError,
   });
 
@@ -80,6 +82,7 @@ final class InstalledSource {
       manifestSha256: row.manifestSha256,
       manifestJson: row.manifestJson,
       manifest: manifest,
+      storedSettings: decodeStoredSettings(row.settingsJson),
       loadError: error,
     );
   }
@@ -97,7 +100,16 @@ final class InstalledSource {
   final String manifestSha256;
   final String manifestJson;
   final SourceManifest? manifest;
+
+  /// 数据库中保存的用户设置原值（未按清单过滤）。读取请用 [settings]。
+  final Map<String, Object?> storedSettings;
   final String? loadError;
+
+  /// 每个设置项的有效值（docs/source-spec.md §1.1）；清单不可用时为空。
+  Map<String, Object?> get settings {
+    final m = manifest;
+    return m == null ? const {} : effectiveSettings(m, storedSettings);
+  }
 
   /// 清单可用且已启用。
   bool get isUsable => enabled && manifest != null;
@@ -114,3 +126,19 @@ List<String> manifestHosts(SourceManifest manifest) {
     for (final h in manifest.allowedHosts) h.toLowerCase(),
   }.toList();
 }
+
+/// 解析 `installed_sources.settings_json`；null 或损坏时为空（全部取默认）。
+Map<String, Object?> decodeStoredSettings(String? json) {
+  if (json == null) return const {};
+  try {
+    final decoded = jsonDecode(json);
+    if (decoded is Map<String, dynamic>) return decoded;
+  } on FormatException {
+    // 损坏的设置不影响源本身，按未设置处理。
+  }
+  return const {};
+}
+
+/// 编码要保存的设置值；为空时存 null。
+String? encodeStoredSettings(Map<String, Object?> values) =>
+    values.isEmpty ? null : jsonEncode(values);

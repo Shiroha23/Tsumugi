@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'package:drift/drift.dart' show Value;
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tsumugi/core/network/dio_source_http_client.dart';
 import 'package:tsumugi/core/network/source_http_client.dart';
@@ -197,6 +199,72 @@ void main() {
     await source.search('星', 2);
     expect(launcher.opened, hasLength(1));
   });
+
+  test('active login from the source menu opens loginUrl (#59)', () async {
+    final (installed, source) = await install('login', {'loginUrl': '/login'});
+    final verification = RegistrySourceVerification(
+      registry: registry,
+      sessions: sessions,
+      verifier: verifier,
+    );
+    launcher.onOpen = (r) async {
+      expect(r.url, Uri.parse('http://comic.example.com/login'));
+      expect(r.title, '${installed.name} · 登录');
+      expect(r.doneWhenUrlMatches, isNull);
+      await userSubmits(r.url, const {'user': 'tester', 'pass': 'secret'});
+      return WebViewOutcome(completed: true, visited: {r.url});
+    };
+    expect(await verification.openLoginPage(installed.id), isTrue);
+    expect(launcher.opened, hasLength(1));
+
+    // 已登录：脚本不再需要调用 openWebView。
+    expect((await source.search('星', 1)).items, isNotEmpty);
+    expect(launcher.opened, hasLength(1));
+    expect(toasts, isEmpty);
+  });
+
+  test('active login defaults to baseUrl; user cancel returns false', () async {
+    final (installed, _) = await install('login');
+    final verification = RegistrySourceVerification(
+      registry: registry,
+      sessions: sessions,
+      verifier: verifier,
+    );
+    launcher.onOpen = (r) async {
+      expect(r.url, Uri.parse('http://comic.example.com'));
+      return WebViewOutcome.cancelled;
+    };
+    expect(await verification.openLoginPage(installed.id), isFalse);
+    // 用户主动打开的不受脚本冷却限制：可以立即再次打开。
+    expect(await verification.openLoginPage(installed.id), isFalse);
+    expect(launcher.opened, hasLength(2));
+  });
+
+  test(
+    'stored manifest with loginUrl outside the allowlist is unusable',
+    () async {
+      final (installed, _) = await install('login');
+      // 绕过导入校验，直接把白名单外的 loginUrl 写进数据库（模拟损坏 / 旧数据）。
+      final evil = mockSourceJson('login', {
+        'baseUrl': 'http://comic.example.com',
+        'loginUrl': 'https://evil.example.net/login',
+      });
+      await (db.update(db.installedSources)
+            ..where((t) => t.id.equals(installed.id)))
+          .write(InstalledSourcesCompanion(manifestJson: Value(evil)));
+      final verification = RegistrySourceVerification(
+        registry: registry,
+        sessions: sessions,
+        verifier: verifier,
+      );
+      // 清单校验不通过 → 清单不可用。
+      await expectLater(
+        verification.openLoginPage(installed.id),
+        throwsA(isA<SourceUnavailableException>()),
+      );
+      expect(launcher.opened, isEmpty);
+    },
+  );
 
   test('script login cancelled by the user → E_LOGIN_REQUIRED', () async {
     final (_, source) = await install('login');

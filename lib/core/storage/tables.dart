@@ -49,6 +49,9 @@ class InstalledSources extends Table {
   /// 清单 JSON 原文。
   TextColumn get manifestJson => text()();
 
+  /// 用户修改过的源设置（v4，docs/source-spec.md §1.1）：JSON 对象，只含改过的键；null 表示全部取默认。
+  TextColumn get settingsJson => text().nullable()();
+
   @override
   Set<Column<Object>> get primaryKey => {id};
 }

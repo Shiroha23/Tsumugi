@@ -87,6 +87,36 @@ void main() {
       expect(upgraded.manifest.version, '1.1.0');
     });
 
+    test('源设置变化后用新设置重建；保存相同的值不重建（#58）', () async {
+      await registry.importText(
+        fakeManifestJson(
+          'com.example.a',
+          settings: [
+            {
+              'key': 'quality',
+              'label': '画质',
+              'type': 'select',
+              'options': ['high', 'low'],
+            },
+          ],
+        ),
+      );
+      final first = await read('com.example.a');
+      expect(factory.settings.single, {'quality': 'high'});
+
+      await registry.setSettings('com.example.a', {'quality': 'low'});
+      await settle();
+      expect((first as FakeSource).disposed, isTrue);
+      final second = await read('com.example.a');
+      expect(factory.settings.last, {'quality': 'low'});
+
+      // 再存一次同样的值：有效值不变，实例保留。
+      await registry.setSettings('com.example.a', {'quality': 'low'});
+      await settle();
+      expect(await read('com.example.a'), same(second));
+      expect(factory.created, hasLength(2));
+    });
+
     test('删除后释放并报告未安装', () async {
       await registry.importText(fakeManifestJson('com.example.a'));
       final s = await read('com.example.a');

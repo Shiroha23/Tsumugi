@@ -1,6 +1,8 @@
 import 'package:freezed_annotation/freezed_annotation.dart';
 
+import '../../core/network/host_policy.dart';
 import 'common.dart';
+import 'source_settings.dart';
 
 part 'manifest.freezed.dart';
 part 'manifest.g.dart';
@@ -22,7 +24,7 @@ abstract class SourceSetting with _$SourceSetting {
   const factory SourceSetting({
     required String key,
     required String label,
-    required String type, // select | text | switch
+    required String type, // select | switch | text（source-spec §1.1）
     @Default([]) List<String> options,
     @JsonKey(name: 'default') Object? defaultValue,
   }) = _SourceSetting;
@@ -49,6 +51,7 @@ abstract class SourceManifest with _$SourceManifest {
     String? lang,
     @Default(false) bool nsfw,
     String? icon,
+    String? loginUrl,
     @Default([]) List<String> allowedHosts,
     @Default({}) Headers headers,
     RateLimit? rateLimit,
@@ -76,7 +79,17 @@ abstract class SourceManifest with _$SourceManifest {
         !(base.isScheme('http') || base.isScheme('https')) ||
         base.host.isEmpty) {
       errors.add('baseUrl 必须是 http(s) 绝对地址: $baseUrl');
+    } else if (loginUrl != null) {
+      final login = _resolveLoginUrl(base);
+      if (login == null ||
+          !HostPolicy(
+            baseUrl: base,
+            allowedHosts: allowedHosts,
+          ).isAllowed(login)) {
+        errors.add('loginUrl 必须是白名单内的 http(s) 地址: $loginUrl');
+      }
     }
+    errors.addAll(validateSettingDefinitions(settings));
     switch (engine) {
       case SourceEngine.declarative when rules == null:
         errors.add('engine=declarative 时必须提供 rules');
@@ -85,5 +98,31 @@ abstract class SourceManifest with _$SourceManifest {
       default:
     }
     return errors;
+  }
+
+  /// 源菜单「登录 / 打开网页」打开的地址：`loginUrl` 基于 `baseUrl` 解析，缺省为 `baseUrl`。
+  ///
+  /// 解析失败或不是 http(s) 时返回 null；是否在白名单内由调用方（与 [validate]）检查。
+  Uri? get loginUri {
+    final base = Uri.tryParse(baseUrl);
+    return base == null ? null : _resolveLoginUrl(base);
+  }
+
+  Uri? _resolveLoginUrl(Uri base) {
+    final raw = loginUrl;
+    if (raw == null) return base;
+    final ref = Uri.tryParse(raw.trim());
+    if (ref == null || raw.trim().isEmpty) return null;
+    final Uri resolved;
+    try {
+      resolved = base.resolveUri(ref);
+    } on FormatException {
+      return null;
+    }
+    if (!(resolved.isScheme('http') || resolved.isScheme('https')) ||
+        resolved.host.isEmpty) {
+      return null;
+    }
+    return resolved;
   }
 }
