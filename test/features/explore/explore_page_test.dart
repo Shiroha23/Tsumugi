@@ -32,9 +32,11 @@ FakeSource Function(SourceManifest) _build({
         if (categoryCalls++ < categoryFailures) {
           throw const SourceException(SourceErrorCode.http, null, 502);
         }
-        return const [
-          ExploreCategory(id: 'latest', name: '最新'),
-          ExploreCategory(id: 'rank', name: '排行'),
+        return [
+          const ExploreCategory(id: 'latest', name: '最新'),
+          const ExploreCategory(id: 'rank', name: '排行'),
+          if (m.version == '2.0.0')
+            const ExploreCategory(id: 'new', name: '新分类'),
         ];
       },
       onExploreList: (id, page) async {
@@ -217,6 +219,31 @@ void main() {
       ('latest', 2),
       ('latest', 2),
     ]);
+    await app.dispose(tester);
+  });
+
+  testWidgets('当前源升级后按新规则重新加载', (tester) async {
+    final app = await _open(tester, _build());
+    await tester.tap(find.text('排行'));
+    await tester.pumpAndSettle();
+    expect(find.text('新分类'), findsNothing);
+
+    await app.install(tester, [
+      fakeManifestJson(
+        'com.example.a',
+        name: '源甲',
+        version: '2.0.0',
+        explore: true,
+      ),
+    ]);
+    await tester.pumpAndSettle();
+    expect(find.text('新分类'), findsOneWidget);
+    final instances = app.factory.created
+        .where((s) => s.manifest.id == 'com.example.a')
+        .toList();
+    expect(instances, hasLength(2));
+    // 新实例沿用当前分类。
+    expect(instances.last.exploreLists, [('rank', 1)]);
     await app.dispose(tester);
   });
 

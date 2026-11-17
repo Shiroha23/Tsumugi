@@ -105,12 +105,13 @@ final class ExploreState {
   final ExploreFeed feed;
 
   ExploreState copyWith({
+    InstalledSource? source,
     AsyncValue<List<ExploreCategory>>? categories,
     String? Function()? categoryId,
     ExploreFeed? feed,
   }) => ExploreState(
     ready: ready,
-    source: source,
+    source: source ?? this.source,
     categories: categories ?? this.categories,
     categoryId: categoryId == null ? this.categoryId : categoryId(),
     feed: feed ?? this.feed,
@@ -137,6 +138,12 @@ class ExploreController extends _$ExploreController {
         scheduleMicrotask(_sync);
       }
     }, fireImmediately: true);
+    // 当前源被升级 / 重新安装时，运行时移除旧实例：按新规则重新加载分类与列表。
+    final evictions = ref
+        .read(sourceRuntimeProvider)
+        .evictions
+        .listen((id) => scheduleMicrotask(() => _onEvicted(id)));
+    ref.onDispose(evictions.cancel);
     ref
         .read(explorePreferencesStoreProvider)
         .load()
@@ -155,7 +162,16 @@ class ExploreController extends _$ExploreController {
     final saved = _saved;
     if (sources == null || saved == null) return;
     final current = state.source;
-    if (current != null && sources.any((s) => s.id == current.id)) return;
+    final updated = current == null
+        ? null
+        : sources.where((s) => s.id == current.id).firstOrNull;
+    if (updated != null) {
+      // 仍可用：只换成最新的清单（名称、类型）；重新加载由 [_onEvicted] 负责。
+      if (updated.manifestSha256 != current!.manifestSha256) {
+        state = state.copyWith(source: updated);
+      }
+      return;
+    }
     final next =
         sources.where((s) => s.id == saved.sourceId).firstOrNull ??
         sources.firstOrNull;
@@ -165,6 +181,14 @@ class ExploreController extends _$ExploreController {
       return;
     }
     unawaited(_open(next, next.id == saved.sourceId ? saved.categoryId : null));
+  }
+
+  void _onEvicted(String sourceId) {
+    if (!ref.mounted || sourceId != state.source?.id) return;
+    final latest = _sources?.where((s) => s.id == sourceId).firstOrNull;
+    // 已不在列表中（禁用 / 删除）：等源列表更新后由 [_sync] 改选。
+    if (latest == null) return;
+    unawaited(_open(latest, state.categoryId));
   }
 
   /// 切换到 [sourceId]（必须在 [exploreSourcesProvider] 中）。
