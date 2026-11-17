@@ -914,7 +914,7 @@ M5 音乐复用同一 libmpv，不再增加体积。预编译库内部的组件�
 1. ~~**第三方许可证与源码分发**~~（M4-B 完成）：`THIRD_PARTY_NOTICES.md`、「关于」页的许可证列表、Release 工作流上传原生组件源码包、
    不再打包 `d3dcompiler_47.dll`，见 §6.4.1。升级 `media_kit_libs_*_video` 时须同步更新 `THIRD_PARTY_NOTICES.md`、
    `assets/licenses/` 与 `tool/release/native_sources.tsv`。
-2. **原生库更新**（[#56](https://github.com/Shiroha23/Tsumugi/issues/56)）：上游所有发布仍是 FFmpeg 6.0。**当前决定（2026-11-18）：等待 media_kit 上游发布新的原生库包**，届时按本节第 1 项同步升级；在此之前已知风险是解码器缺少 2023 年以后的安全修复（媒体代理只能限制来源主机与内容类型）。上游长期不更新时，再考虑自建 libmpv 或改用各平台系统播放器，见该 issue。
+2. **原生库更新**（[#56](https://github.com/Shiroha23/Tsumugi/issues/56)）：上游所有发布仍是 FFmpeg 6.0。**当前决定（2026-11-18）：等待 media_kit 上游发布新的原生库包**，届时按本节第 1 项同步升级；在此之前已知风险是解码器缺少 2023 年以后的安全修复（媒体代理只能限制来源主机与内容类型）。同时观察 better_player：已评估可用（Android ExoPlayer / iOS AVPlayer，经本地代理播放正常），但其 Windows 实现是 libmpv 软件渲染，1080p60 时 raster p95 约 16.5 ms（media_kit 约 0.7 ms），因此等它改用 mpv 0.42 起提供的 D3D11 渲染接口后再评估迁移。两者都没有进展时，再考虑自建 libmpv，见该 issue。
 3. ~~**播放页完善**~~（已完成，见 §5.2「视频播放」）：选集与线路、上一集 / 下一集（含播完自动下一集）、播放进度记忆与书架 / 历史接入、
    清晰度切换。
 4. ~~**字幕**~~（已完成，见 §5.2「视频播放」与 §6.4.7）：外挂字幕（srt / vtt / ass）由 Dart 侧经源的网络层取回、解析并显示，
