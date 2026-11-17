@@ -152,6 +152,10 @@ docs/
 - **条目进度表** `item_progress_entries`：主键 `(sourceId, itemId)`，每个条目只保留**最新**一条进度
   （unit id / 标题、漫画页码（从 0 开始）与总页数、预留给小说 / 视频 / 音乐的 `position`、更新时间），
   并带一份标题 / 封面快照。
+- **快照的封面请求头**（#24）：阅读器 / 播放器的条目快照取自 `Detail`，而 `Detail` 没有 `coverHeaders`。
+  `recordProgress` 把快照中为 null 的 `coverHeaders` 视为“调用方不知道”，依次沿用已有历史、书架条目中的值
+  （都只在封面地址相同时采用），最后回退到调用方给出的 `defaultCoverHeaders`（源清单的默认 headers，与详情页一致）；
+  快照自带的请求头优先。这样各阅读器不必各自查书架 / 历史，也不会把已知的请求头覆盖为空。
 - **历史由条目进度表派生，不单独建表**：历史 = 按 `updatedAt` 倒序的条目进度（有索引）。理由：M2 只需要
   “最近读过什么、读到哪”，与“最新进度”是同一份数据；单独的历史表会带来两处写入与一致性问题。
   未来若需要逐次阅读日志（阅读时长统计等）再另加追加写的日志表。删除历史 = 删除条目进度
@@ -225,8 +229,8 @@ detail(id) → 章节/剧集/曲目列表 → content(itemId)
 - **进度**（`VideoProgressRecorder`）：`HistoryRepository.recordProgress(position:)`，`position` 为毫秒。播放中按条目节流（5 s），
   暂停、换集 / 换线路 / 换清晰度、离开页面时立即写入。播放完成或位置到达时长的 97% 时标记已读并把位置记为 0（再次打开从头播放）。
   打开时的起始位置：`?pos`（详情页“继续播放”）→ 该剧集的 unit 进度 → 0。
-- **条目快照的封面请求头**（不重蹈 [#24](https://github.com/Shiroha23/Tsumugi/issues/24)）：`Detail` 没有 `coverHeaders`，
-  写进度时依次取书架条目、已有历史中的值（封面地址相同时），最后回退到源清单的默认 headers（与详情页一致）。
+- **条目快照的封面请求头**（#24）：`Detail` 没有 `coverHeaders`，`videoItemSnapshot` 打开时依次取书架条目、
+  已有历史中的值（封面地址相同时），最后回退到源清单的默认 headers；漫画 / 小说阅读器交给 `recordProgress` 解析（见 §4.2）。
 - **控件**：按 `Theme.platform` 区分。桌面（Windows）沿用 media_kit 的 `MaterialDesktopVideoControls`：空格播放 / 暂停、
   左右方向键快退 / 快进、双击或按钮进入窗口全屏（media_kit 推入全屏路由），行为不变。
   Android / iOS 用自己的触控控件（`VideoTouchControls`，`Video` 本身不带控件），只经 `VideoPlayback` 接口操作播放器（便于 widget 测试）：
@@ -293,14 +297,20 @@ detail(id) → 章节/剧集/曲目列表 → content(itemId)
 - 单章失败进入 `paused`：用户选择重试 / 跳过 / 跳过所有失败章节 / 取消；`E_CHALLENGE` / `E_LOGIN_REQUIRED` 总是暂停
   （跳过只会让后续章节同样失败），对话框中的 `SourceErrorView` 提供「打开验证页」，完成后自动重试。
   跳过的章节列在结果中，并写进 TXT 头部 / EPUB 书名页。取消立即生效，进行中请求的结果被丢弃。
-- 封面经统一图片加载器取得（按文件头识别 PNG / JPEG / GIF / WebP），失败或不认识则不放封面。
+- 封面（仅 EPUB）经统一图片加载器（`SourceImageLoader`，走该源的网络客户端：白名单、限速、Cookie 与默认 headers）
+  取得（按文件头识别 PNG / JPEG / GIF / WebP），失败或不认识则不放封面。
+- **正文图片**（仅 EPUB，#25）：正文取完后，按首次出现顺序逐张（一次一张）经同一图片加载器下载，同一地址只下载一次，
+  headers 与阅读器相同（`NovelChapter.imageHeaders`）。单张失败、格式不认识、超过单张上限（默认 10 MiB）
+  或会使合计超过总上限（默认 100 MiB）的图片保留「［图片：alt］」占位，不影响整本导出；合计达到上限后不再下载其余图片。
+  单个响应另受网络层 `maxResponseBytes` 限制。下载期间可取消。
 - 文件在后台 isolate 中生成（`Isolate.run`），避免大部头卡住界面。
 - **TXT**：UTF-8（可选 BOM，兼容旧版 Windows 记事本），头部为书名 / 作者 / 来源源名 / 导出时间 / 简介，之后逐章
   “标题 + 正文”；段落一行、段首两个全角空格，`rt` 注音丢弃（ruby 只取正文），图片为「［图片：alt］」占位。
 - **EPUB 3**：`mimetype` 为首个条目且不压缩（无扩展字段）→ `META-INF/container.xml` → `OEBPS/content.opf`
   （`dc:identifier` 为由 sourceId + itemId 派生的稳定 UUID）、`nav.xhtml`、兼容 EPUB 2 的 `toc.ncx`、`style.css`、
   可选封面页、书名页、每章一个 XHTML。正文由 `NovelChapter` 重新生成，`body` 内只使用 source-spec §2.2.1 白名单中的标签、
-  不带属性（封面 `img` 的 `src` / `alt` 除外）。正文图片暂以占位文字输出（TODO：经图片加载器下载后嵌入）。
+  不带属性（`img` 的 `src` / `alt` 除外）。已下载的正文图片写为 `OEBPS/images/img-NNNN.<ext>`、在 OPF manifest 中登记
+  （id `img-NNNN`，`media-type` 按文件头），正文中为 `<div><img src="images/…" alt="…"/></div>`；其余图片为占位文字。
 - **保存**：`ExportSaver`（默认 `file_picker` 的 `saveFile`）：桌面端为保存对话框；Android 为系统“创建文档”
   （SAF）；iOS 为文件 App 导出界面。文件名由书名生成，替换 `\ / : * ? " < > |` 与控制字符、避开 Windows 保留名、限长 80。
 

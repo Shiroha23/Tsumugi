@@ -82,7 +82,7 @@ final class ExportedChapter {
   final NovelChapter content;
 }
 
-/// 封面图片（经统一图片加载取得的字节）。
+/// 封面或正文图片（经统一图片加载取得的字节）。
 final class ExportImage {
   const ExportImage(this.bytes, this.mediaType, this.extension);
 
@@ -124,6 +124,7 @@ final class ExportBook {
     required this.chapters,
     this.skipped = const [],
     this.cover,
+    this.images = const {},
   });
 
   final ExportBookInfo info;
@@ -132,6 +133,10 @@ final class ExportBook {
   /// 导出失败、被跳过的章节标题（写进头部，提示读者内容不完整）。
   final List<String> skipped;
   final ExportImage? cover;
+
+  /// 已下载的正文图片：`NovelImage.url` → 图片。EPUB 嵌入其中的图片，
+  /// 不在其中的（失败 / 超限 / 格式不支持）保留“［图片：alt］”占位；TXT 不使用。
+  final Map<String, ExportImage> images;
 }
 
 /// 生成好的导出文件。

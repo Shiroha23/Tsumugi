@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../../sources/model/common.dart';
 import '../../sources/source.dart';
 import '../novel/novel_chapter_loader.dart';
+import '../novel/novel_document.dart';
 import 'epub_writer.dart';
 import 'export_models.dart';
 import 'txt_writer.dart';
@@ -14,8 +15,9 @@ import 'txt_writer.dart';
 /// 白名单、Cookie 与默认 headers）。每章都重新取一次：源被升级 / 禁用时拿到新状态。
 typedef ExportSourceResolver = Future<Source> Function(String sourceId);
 
-/// 经统一图片加载取得封面字节；失败时抛出（导出会改为不放封面）。
-typedef ExportCoverLoader = Future<Uint8List> Function(
+/// 经统一图片加载（`SourceImageLoader`：遵守该源的白名单、限速与 Cookie）取得封面或正文图片的字节；
+/// 失败时抛出（封面改为不放，正文图片保留“［图片：alt］”占位）。
+typedef ExportImageLoader = Future<Uint8List> Function(
   String sourceId,
   String url,
   Headers? headers,
@@ -63,7 +65,7 @@ enum ExportPhase {
   /// 某章失败，等待用户选择重试 / 跳过 / 取消（[ExportStatus.error]）。
   paused,
 
-  /// 正在下载封面并生成文件。
+  /// 正在下载封面、正文图片（EPUB）并生成文件。
   building,
   done,
   cancelled,
@@ -144,9 +146,11 @@ class NovelExportJob extends ChangeNotifier {
   NovelExportJob({
     required this.request,
     required this.sourceFor,
-    this.loadCover,
+    this.loadImage,
     DateTime Function()? clock,
     this.buildInIsolate = true,
+    this.maxImageBytes = defaultMaxImageBytes,
+    this.maxTotalImageBytes = defaultMaxTotalImageBytes,
   }) : _clock = clock ?? DateTime.now,
        _status = ExportStatus(
          phase: ExportPhase.fetching,
@@ -156,8 +160,19 @@ class NovelExportJob extends ChangeNotifier {
 
   final NovelExportRequest request;
   final ExportSourceResolver sourceFor;
-  final ExportCoverLoader? loadCover;
+
+  /// 封面与正文图片的加载器；为 null 时不放封面、正文图片全部占位。
+  final ExportImageLoader? loadImage;
   final DateTime Function() _clock;
+
+  /// 单张正文图片的上限（字节），超过的保留占位。
+  final int maxImageBytes;
+
+  /// 全部正文图片合计的上限（字节）；达到后其余图片不再下载，保留占位。
+  final int maxTotalImageBytes;
+
+  static const defaultMaxImageBytes = 10 * 1024 * 1024;
+  static const defaultMaxTotalImageBytes = 100 * 1024 * 1024;
 
   /// 在后台 isolate 中压缩 / 编码，避免大部头卡住界面（测试中可关闭）。
   final bool buildInIsolate;
@@ -261,6 +276,8 @@ class NovelExportJob extends ChangeNotifier {
       final detail = request.detail;
       final cover = await _cover();
       if (isCancelled) return _cancelled(total, failures);
+      final images = await _bodyImages(chapters);
+      if (images == null || isCancelled) return _cancelled(total, failures);
       final book = ExportBook(
         info: ExportBookInfo(
           sourceId: request.sourceId,
@@ -275,6 +292,7 @@ class NovelExportJob extends ChangeNotifier {
         chapters: chapters,
         skipped: [for (final f in failures) f.unit.title],
         cover: cover,
+        images: images,
       );
       final format = request.format;
       final bytes = buildInIsolate
@@ -370,7 +388,9 @@ class NovelExportJob extends ChangeNotifier {
 
   Future<ExportImage?> _cover() async {
     final url = request.detail.cover;
-    final load = loadCover;
+    final load = loadImage;
+    // TXT 不放封面，不必下载。
+    if (request.format != ExportFormat.epub) return null;
     if (url == null || url.isEmpty || load == null) return null;
     try {
       final bytes = await _orCancel(
@@ -380,6 +400,49 @@ class NovelExportJob extends ChangeNotifier {
     } on Object {
       return null;
     }
+  }
+
+  /// EPUB 的正文图片：按出现顺序逐张（一次一张，限速由源的网络层执行）经 [loadImage] 下载，
+  /// 同一地址只下载一次。返回 url → 图片；被取消时返回 null。
+  ///
+  /// 单张失败、格式不受支持（见 [ExportImage.sniff]）、超过 [maxImageBytes]，
+  /// 或会使合计超过 [maxTotalImageBytes] 的图片不放入结果（写入器保留占位），不影响整本导出。
+  Future<Map<String, ExportImage>?> _bodyImages(
+    List<ExportedChapter> chapters,
+  ) async {
+    final load = loadImage;
+    if (request.format != ExportFormat.epub || load == null) return const {};
+    // 同一地址以首次出现时的 headers 为准（各章的源实例可能不同，见 [sourceFor]）。
+    final refs = <String, Headers?>{};
+    for (final c in chapters) {
+      for (final b in c.content.blocks) {
+        if (b is NovelImage) {
+          refs.putIfAbsent(b.url, () => c.content.imageHeaders);
+        }
+      }
+    }
+    final out = <String, ExportImage>{};
+    var total = 0;
+    for (final MapEntry(key: url, value: headers) in refs.entries) {
+      if (isCancelled) return null;
+      if (total >= maxTotalImageBytes) break;
+      try {
+        final bytes = await _orCancel(load(request.sourceId, url, headers));
+        if (bytes == null) return null;
+        if (bytes.length > maxImageBytes ||
+            total + bytes.length > maxTotalImageBytes) {
+          continue;
+        }
+        final image = ExportImage.sniff(bytes);
+        if (image == null) continue;
+        out[url] = image;
+        total += bytes.length;
+      } on Object catch (e) {
+        if (isCancelled) return null;
+        debugPrint('[export] body image skipped: $e');
+      }
+    }
+    return out;
   }
 
   ExportFile? _cancelled(int completed, List<ExportFailure> failures) {

@@ -1,11 +1,15 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tsumugi/shared/export/novel_export_job.dart';
+import 'package:tsumugi/core/network/rate_limiter.dart';
+import 'package:tsumugi/core/network/source_session.dart';
 import 'package:tsumugi/shared/export/export_models.dart';
+import 'package:tsumugi/shared/image/source_image_loader.dart';
 import 'package:tsumugi/sources/model/common.dart';
 import 'package:tsumugi/sources/model/content.dart';
 import 'package:tsumugi/sources/model/manifest.dart';
@@ -48,7 +52,9 @@ NovelExportJob _job(
   Source source, {
   ExportFormat format = ExportFormat.txt,
   List<Unit>? units,
-  ExportCoverLoader? loadCover,
+  ExportImageLoader? loadImage,
+  int maxImageBytes = NovelExportJob.defaultMaxImageBytes,
+  int maxTotalImageBytes = NovelExportJob.defaultMaxTotalImageBytes,
 }) => NovelExportJob(
   request: NovelExportRequest(
     sourceId: _sourceId,
@@ -58,10 +64,25 @@ NovelExportJob _job(
     format: format,
   ),
   sourceFor: (_) async => source,
-  loadCover: loadCover,
+  loadImage: loadImage,
   clock: () => DateTime(2026, 11, 13, 9),
   buildInIsolate: false,
+  maxImageBytes: maxImageBytes,
+  maxTotalImageBytes: maxTotalImageBytes,
 );
+
+String _chapterXhtml(ExportFile file, int n) => utf8.decode(
+  ZipDecoder()
+          .decodeBytes(file.bytes)
+          .findFile('OEBPS/chapter-${n.toString().padLeft(4, '0')}.xhtml')!
+          .content
+      as List<int>,
+);
+
+List<String> _imageEntries(ExportFile file) => [
+  for (final f in ZipDecoder().decodeBytes(file.bytes).files)
+    if (f.name.startsWith('OEBPS/images/')) f.name,
+];
 
 /// 等待 [job] 进入 [phase]。
 Future<void> _until(NovelExportJob job, ExportPhase phase) async {
@@ -248,7 +269,7 @@ void main() {
     final withCover = await _job(
       source,
       format: ExportFormat.epub,
-      loadCover: (sourceId, url, _) async {
+      loadImage: (sourceId, url, _) async {
         requested.add((sourceId, url));
         return _png;
       },
@@ -262,11 +283,153 @@ void main() {
     final noCover = await _job(
       source,
       format: ExportFormat.epub,
-      loadCover: (_, _, _) async => throw _network,
+      loadImage: (_, _, _) async => throw _network,
     ).run();
     final b = ZipDecoder().decodeBytes(noCover!.bytes);
     expect(b.findFile('OEBPS/cover.png'), isNull);
     expect(b.findFile('OEBPS/cover.xhtml'), isNull);
+  });
+
+  group('EPUB 正文图片（#25）', () {
+    const img = 'https://img.example.com';
+    // 第一章带四张图；第二章重复引用 a.png。
+    final source = FakeSource(
+      _manifest,
+      onContent: (id) async => NovelContent(
+        html: true,
+        text: switch (id) {
+          'c1' =>
+            '<p>开头</p><img src="$img/a.png" alt="甲">'
+                '<img src="$img/broken.png" alt="坏图">'
+                '<img src="$img/big.png" alt="大图">'
+                '<img src="$img/text.png" alt="非图片">',
+          'c2' => '<p>又见</p><img src="$img/a.png" alt="甲">',
+          _ => '<p>$id</p>',
+        },
+      ),
+    );
+
+    test('逐张下载并嵌入；同一地址只下载一次；失败 / 超限 / 非图片保留占位', () async {
+      final requested = <String>[];
+      final file = await _job(
+        source,
+        format: ExportFormat.epub,
+        maxImageBytes: 1024,
+        loadImage: (sourceId, url, _) async {
+          expect(sourceId, _sourceId);
+          requested.add(url);
+          return switch (url) {
+            '$img/a.png' || 'https://example.com/cover.png' => _png,
+            '$img/big.png' => Uint8List(2048)..setAll(0, _png),
+            '$img/text.png' => utf8.encode('<html>not an image</html>'),
+            _ => throw _network,
+          };
+        },
+      ).run();
+      expect(requested, [
+        'https://example.com/cover.png',
+        '$img/a.png',
+        '$img/broken.png',
+        '$img/big.png',
+        '$img/text.png',
+      ]);
+      expect(_imageEntries(file!), ['OEBPS/images/img-0001.png']);
+      final c1 = _chapterXhtml(file, 1);
+      expect(c1, contains('<img src="images/img-0001.png" alt="甲"/>'));
+      expect(c1, contains('<p>［图片：坏图］</p>'));
+      expect(c1, contains('<p>［图片：大图］</p>'));
+      expect(c1, contains('<p>［图片：非图片］</p>'));
+      expect(
+        _chapterXhtml(file, 2),
+        contains('<img src="images/img-0001.png" alt="甲"/>'),
+      );
+    });
+
+    test('同一地址只下载一次，使用首次出现时的 headers', () async {
+      SourceManifest withHeaders(String v) {
+        final json = jsonDecode(
+          fakeManifestJson(_sourceId, name: '小说源', type: MediaType.novel),
+        ) as Map<String, dynamic>;
+        json['headers'] = {'X-Fictional': v};
+        return SourceManifest.fromJson(json);
+      }
+
+      // 每章重新取源实例：第一章与第二章的默认 headers 不同（例如中途升级了源）。
+      final sources = [
+        for (final v in ['first', 'second'])
+          FakeSource(
+            withHeaders(v),
+            onContent: (id) async => NovelContent(
+              html: true,
+              text: '<img src="$img/a.png" alt="甲">',
+            ),
+          ),
+      ];
+      var calls = 0;
+      final seen = <String, Headers?>{};
+      final file = await NovelExportJob(
+        request: NovelExportRequest(
+          sourceId: _sourceId,
+          itemId: _detail.id,
+          detail: _detail,
+          units: _detail.units.sublist(0, 2),
+          format: ExportFormat.epub,
+        ),
+        sourceFor: (_) async => sources[calls++ == 0 ? 0 : 1],
+        loadImage: (_, url, headers) async {
+          seen[url] = headers;
+          return _png;
+        },
+        clock: () => DateTime(2026, 11, 13, 9),
+        buildInIsolate: false,
+      ).run();
+      expect(seen['$img/a.png'], {'X-Fictional': 'first'});
+      expect(_imageEntries(file!), ['OEBPS/images/img-0001.png']);
+    });
+
+    test('总大小达到上限后不再下载其余图片', () async {
+      final requested = <String>[];
+      final file = await _job(
+        source,
+        format: ExportFormat.epub,
+        maxTotalImageBytes: _png.length,
+        loadImage: (_, url, _) async {
+          requested.add(url);
+          return _png;
+        },
+      ).run();
+      expect(requested, ['https://example.com/cover.png', '$img/a.png']);
+      expect(_imageEntries(file!), ['OEBPS/images/img-0001.png']);
+      expect(_chapterXhtml(file, 1), contains('<p>［图片：坏图］</p>'));
+    });
+
+    test('TXT 不下载封面与正文图片', () async {
+      final requested = <String>[];
+      await _job(
+        source,
+        loadImage: (_, url, _) async {
+          requested.add(url);
+          return _png;
+        },
+      ).run();
+      expect(requested, isEmpty);
+    });
+
+    test('下载图片时取消：不生成文件', () async {
+      final gate = Completer<Uint8List>();
+      final job = _job(
+        source,
+        format: ExportFormat.epub,
+        loadImage: (_, url, _) async =>
+            url.endsWith('cover.png') ? _png : gate.future,
+      );
+      final result = job.run();
+      await _until(job, ExportPhase.building);
+      await Future<void>.delayed(Duration.zero);
+      job.cancel();
+      expect(await result, isNull);
+      expect(job.status.phase, ExportPhase.cancelled);
+    });
   });
 
   test('在后台 isolate 中生成文件', () async {
@@ -353,6 +516,71 @@ void main() {
       );
       expect(text, contains('第二章 雨季\n\n　　雨季来的时候'));
     }, timeout: const Timeout(Duration(seconds: 30)));
+
+    test('EPUB 正文图片经统一图片加载：遵守该源的白名单、限速与 Cookie（#25）', () async {
+      final session = SourceSession();
+      await session.cookieJar.saveFromResponse(
+        Uri.parse('http://img.example.com/'),
+        [Cookie('sid', 'fictional')],
+      );
+      final client = mockClient(
+        server,
+        sourceId: _sourceId,
+        baseUrl: 'http://novel.example.com',
+        session: session,
+        rateLimit: const RateLimitConfig(
+          requests: 1,
+          per: Duration(milliseconds: 600),
+        ),
+      );
+      addTearDown(client.close);
+      final images = SourceImageLoader(httpClientFor: (_) => client);
+      final source = FakeSource(
+        _manifest,
+        onContent: (id) async => const NovelContent(
+          html: true,
+          text:
+              '<img src="http://img.example.com/pages/1.png" alt="一">'
+              '<img src="http://outside.example.net/pages/2.png" alt="域外">'
+              '<img src="http://img.example.com/pages/3.png" alt="三">',
+        ),
+      );
+      const unit = Unit(id: 'c1', title: '第一章');
+      final sw = Stopwatch()..start();
+      final file = await NovelExportJob(
+        request: const NovelExportRequest(
+          sourceId: _sourceId,
+          itemId: '/book/1',
+          detail: Detail(id: '/book/1', title: '雾港', units: [unit]),
+          units: [unit],
+          format: ExportFormat.epub,
+        ),
+        sourceFor: (_) async => source,
+        loadImage: (sourceId, url, headers) =>
+            images.load(sourceId, ImageRef(url: url, headers: headers)),
+        clock: () => DateTime(2026, 11, 13, 9),
+        buildInIsolate: false,
+      ).run();
+      sw.stop();
+
+      // 白名单外的主机不发请求；其余两张依次经该源的客户端（限速 + Cookie）。
+      expect(
+        [for (final r in server.requests) '${r.host}${r.path}'],
+        ['img.example.com/pages/1.png', 'img.example.com/pages/3.png'],
+      );
+      for (final r in server.requests) {
+        expect(r.headers['cookie'], contains('sid=fictional'));
+      }
+      expect(sw.elapsed, greaterThan(const Duration(milliseconds: 500)));
+      expect(_imageEntries(file!), [
+        'OEBPS/images/img-0001.png',
+        'OEBPS/images/img-0002.png',
+      ]);
+      final c1 = _chapterXhtml(file, 1);
+      expect(c1, contains('<img src="images/img-0001.png" alt="一"/>'));
+      expect(c1, contains('<p>［图片：域外］</p>'));
+      expect(c1, contains('<img src="images/img-0002.png" alt="三"/>'));
+    });
 
     test('GBK 编码的站点：导出得到正确的中文', () async {
       final db = openTestDatabase();

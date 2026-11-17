@@ -266,4 +266,50 @@ void main() {
       ),
     );
   });
+
+  test('正文图片：已下载的嵌入并登记到 manifest，未下载的保留占位（#25）', () {
+    const lamp = 'https://novel.example.com/img/lamp.png';
+    final a = ZipDecoder().decodeBytes(
+      buildNovelEpub(
+        sampleBook(
+          images: {
+            lamp: ExportImage.sniff(_png)!,
+            // 不在正文中的图片不写入。
+            'https://novel.example.com/img/unused.png': ExportImage.sniff(
+              _png,
+            )!,
+          },
+        ),
+      ),
+    );
+    final opf = XmlDocument.parse(_entry(a, 'OEBPS/content.opf'));
+    final items = opf
+        .findAllElements('item', namespaceUri: _opfNs)
+        .where((e) => e.getAttribute('href')!.startsWith('images/'));
+    expect(items, hasLength(1));
+    expect(items.single.getAttribute('id'), 'img-0001');
+    expect(items.single.getAttribute('href'), 'images/img-0001.png');
+    expect(items.single.getAttribute('media-type'), 'image/png');
+    expect(a.findFile('OEBPS/images/img-0001.png')!.content, _png);
+    expect(
+      a.files.where((f) => f.name.startsWith('OEBPS/images/')),
+      hasLength(1),
+    );
+
+    final c2 = _entry(a, 'OEBPS/chapter-0002.xhtml');
+    XmlDocument.parse(c2);
+    expect(
+      c2,
+      contains('<div><img src="images/img-0001.png" alt="灯塔"/></div>'),
+    );
+    expect(c2, isNot(contains('［图片')));
+    expect(c2, isNot(contains(lamp)));
+
+    // 没有下载的图片：保留占位，manifest 中没有图片条目。
+    expect(_entry(archive, 'OEBPS/content.opf'), isNot(contains('images/')));
+    expect(
+      _entry(archive, 'OEBPS/chapter-0002.xhtml'),
+      contains('<p>［图片：灯塔］</p>'),
+    );
+  });
 }

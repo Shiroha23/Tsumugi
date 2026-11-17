@@ -1,6 +1,7 @@
 import 'package:drift/drift.dart';
 
 import '../../core/storage/app_database.dart';
+import '../../sources/model/common.dart';
 import '../library/library_item.dart';
 
 /// 某个条目的最新进度，也是历史列表中的一项。
@@ -75,6 +76,11 @@ class HistoryRepository {
   /// 记录阅读进度：更新条目的最新进度（即历史）以及该 unit 的进度。
   ///
   /// - [item] 提供历史中展示的标题 / 封面快照（每次覆盖为最新值）。
+  ///   `item.coverHeaders` 为 null 表示“调用方不知道”（阅读器的快照取自 `Detail`，
+  ///   而 `Detail` 没有封面请求头，#24）：此时按 [resolveCoverHeaders] 的顺序沿用已知的值，
+  ///   不会把已有的请求头覆盖为空。
+  /// - [defaultCoverHeaders]：没有已知请求头时的回退值，通常为源清单的默认 headers
+  ///   （与详情页加载封面时一致）。
   /// - [page] 为漫画页码（从 0 开始），[pageCount] 为该 unit 的总页数；
   ///   小说 / 视频等改用 [position]。
   /// - unit 的已读标记：[markRead] 为 true，或 `page` 到达最后一页
@@ -90,6 +96,7 @@ class HistoryRepository {
     int? pageCount,
     int? position,
     bool markRead = false,
+    Headers? defaultCoverHeaders,
   }) {
     final now = _now();
     final reachedEnd =
@@ -99,6 +106,10 @@ class HistoryRepository {
         page >= pageCount - 1;
     final read = markRead || reachedEnd;
     return _db.transaction(() async {
+      final coverHeaders = await resolveCoverHeaders(
+        item,
+        defaultCoverHeaders: defaultCoverHeaders,
+      );
       await _db
           .into(_items)
           .insertOnConflictUpdate(
@@ -107,7 +118,7 @@ class HistoryRepository {
               itemId: item.itemId,
               title: item.title,
               cover: Value(item.cover),
-              coverHeaders: Value(item.coverHeaders),
+              coverHeaders: Value(coverHeaders),
               mediaType: item.mediaType.name,
               unitId: unitId,
               unitTitle: unitTitle,
@@ -141,6 +152,43 @@ class HistoryRepository {
             ),
           );
     });
+  }
+
+  /// 写入历史的封面请求头：
+  ///
+  /// 1. `item.coverHeaders` 不为 null 时直接使用；
+  /// 2. 否则沿用已有历史中的值，再否则沿用书架条目中的值——两者都只在封面地址与 `item.cover`
+  ///   相同时采用（封面换了地址，旧请求头不一定适用）；
+  /// 3. 都没有时用 [defaultCoverHeaders]（为空 map 时视为没有）。
+  ///
+  /// 没有封面时恒为 null。
+  Future<Headers?> resolveCoverHeaders(
+    LibraryItem item, {
+    Headers? defaultCoverHeaders,
+  }) async {
+    final cover = item.cover;
+    if (cover == null || cover.isEmpty) return null;
+    if (item.coverHeaders case final h?) return h;
+    final known = await _itemQuery(
+      item.sourceId,
+      item.itemId,
+    ).getSingleOrNull();
+    if (known != null && known.cover == cover && known.coverHeaders != null) {
+      return known.coverHeaders;
+    }
+    final shelf =
+        await (_db.select(_db.libraryEntries)..where(
+              (t) =>
+                  t.sourceId.equals(item.sourceId) &
+                  t.itemId.equals(item.itemId),
+            ))
+            .getSingleOrNull();
+    if (shelf != null && shelf.cover == cover && shelf.coverHeaders != null) {
+      return shelf.coverHeaders;
+    }
+    return defaultCoverHeaders == null || defaultCoverHeaders.isEmpty
+        ? null
+        : defaultCoverHeaders;
   }
 
   /// 条目的最新进度；没有读过返回 null。

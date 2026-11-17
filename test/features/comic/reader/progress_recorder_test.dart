@@ -7,6 +7,7 @@ import 'package:tsumugi/sources/model/common.dart';
 
 class _FakeHistory implements HistoryRepository {
   final writes = <(String unitId, int? page)>[];
+  final headers = <Headers?>[];
 
   @override
   Future<void> recordProgress(
@@ -17,7 +18,11 @@ class _FakeHistory implements HistoryRepository {
     int? pageCount,
     int? position,
     bool markRead = false,
-  }) async => writes.add((unitId, page));
+    Headers? defaultCoverHeaders,
+  }) async {
+    writes.add((unitId, page));
+    headers.add(defaultCoverHeaders);
+  }
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -152,6 +157,29 @@ void main() {
       );
       expect(readingOrder(withUnits).map((u) => u.id), ['u1']);
       expect(readingOrder(withUnits, 'b1').map((u) => u.id), ['b1']);
+    });
+  });
+
+  test('默认封面 headers 在 report 时取得，flush 时沿用（#24）', () {
+    fakeAsync((async) {
+      final history = _FakeHistory();
+      Headers? current = const {'Referer': 'https://example.com/'};
+      final recorder = ComicProgressRecorder(
+        history: history,
+        itemFor: (_) => _item,
+        defaultCoverHeadersFor: (_) => current,
+      );
+      recorder.report(_p(0));
+      recorder.report(_p(1));
+      // 源实例暂不可用（例如容器销毁中）时沿用上次取得的值。
+      current = null;
+      recorder.report(_p(2));
+      recorder.flush();
+      expect(history.writes, [('c1', 0), ('c1', 2)]);
+      expect(history.headers, [
+        {'Referer': 'https://example.com/'},
+        {'Referer': 'https://example.com/'},
+      ]);
     });
   });
 }

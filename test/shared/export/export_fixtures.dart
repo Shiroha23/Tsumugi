@@ -8,6 +8,7 @@ ExportBook sampleBook({
   ExportImage? cover,
   List<String> skipped = const [],
   bool withMeta = true,
+  Map<String, ExportImage> images = const {},
 }) {
   final html = File('test/fixtures/novel/chapter_html.html').readAsStringSync();
   return ExportBook(
@@ -43,5 +44,6 @@ ExportBook sampleBook({
     ],
     skipped: skipped,
     cover: cover,
+    images: images,
   );
 }
