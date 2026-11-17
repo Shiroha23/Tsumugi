@@ -24,18 +24,31 @@ class ScriptLimits {
     this.wallTime = const Duration(seconds: 30),
     this.memoryBytes = 64 * 1024 * 1024,
     this.maxStackBytes = 512 * 1024,
+    this.interactiveTime = const Duration(minutes: 10),
   });
 
   /// 单次入口调用中，脚本实际执行（不含等待宿主 Future）的累计时长上限。
   final Duration cpuTime;
 
-  /// 单次入口调用的总时长上限（含网络等待）。
+  /// 单次入口调用的总时长上限（含网络等待，不含等待用户操作的时间，见 [interactiveTime]）。
   final Duration wallTime;
+
+  /// 单次入口调用中，等待“交互式”宿主函数（需要用户操作，如 `ui.openWebView`）的累计时长上限。
+  ///
+  /// 有交互式宿主调用进行中时 [wallTime] 暂停计时，改按本上限计时；
+  /// 因此一次调用最长约为 `wallTime + interactiveTime`，脚本不能借此无限挂起。
+  final Duration interactiveTime;
 
   /// JS 堆内存上限（整个运行时共享）。
   final int memoryBytes;
 
   /// JS 调用栈上限。
+  ///
+  /// **必须小于执行脚本的线程的栈大小**（并为宿主回调中的 Dart / 原生代码留出余量）：
+  /// QuickJS 只按此值检查 JS 递归，超过真实线程栈会让原生栈溢出、整个进程崩溃。
+  /// 脚本运行在 Dart isolate 的线程上，其栈大小不由本项目控制，调大前须先在各平台
+  /// release 构建中确认（`integration_test/script_stack_depth_test.dart`，#41）。
+  /// 对源作者承诺的递归深度见 docs/source-spec.md §4.4。
   final int maxStackBytes;
 }
 

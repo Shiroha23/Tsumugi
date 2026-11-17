@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:qjs/qjs.dart';
 
+import 'host/tsumugi_api.dart' show interactiveHostPaths;
 import 'native_stack.dart';
 import 'script_runtime.dart';
 
@@ -20,6 +21,8 @@ import 'script_runtime.dart';
 ///   需要持久化的数据应使用 `tsumugi.storage`。
 /// - 宿主函数只能在进行中的调用里被调用。
 /// - 等待宿主 Future 的时间不计入 CPU 预算，只计入 [ScriptLimits.wallTime]。
+///   [interactive] 中的宿主函数（等待用户操作）进行中、且没有其他未完成的宿主 Future 时，
+///   总时长暂停，改计入 [ScriptLimits.interactiveTime]（docs/source-spec.md §4.4）。
 /// - 同一实例上的 [call] 串行执行（宿主 Promise 需要知道属于哪一次调用）。
 /// - 不设置 module loader，脚本内 `import` 一律失败；关闭 `eval` / `Function`。
 ///
@@ -33,23 +36,38 @@ class QuickJsScriptRuntime implements ScriptRuntime {
   /// 冻结的 `raw` 对象上，prelude 以它为参数被调用一次，返回值（冻结后）成为全局
   /// `tsumugi`。用于在 JS 侧包装宿主函数（如 `HtmlNode` 句柄对象），
   /// 未在返回值中暴露的宿主函数对脚本不可见。为 null 时全局 `tsumugi` 即 `raw`。
+  ///
+  /// [interactive] 为 [host] 中需要等待用户操作的路径（如 `ui.openWebView`），
+  /// 见 [ScriptLimits.interactiveTime]。
   QuickJsScriptRuntime({
     required Map<String, HostFunction> host,
     this.limits = const ScriptLimits(),
     this.prelude,
-  }) : _host = Map.unmodifiable(host) {
+    Set<String> interactive = const {},
+  }) : _host = Map.unmodifiable(host),
+       _interactive = Set.unmodifiable(interactive) {
+    final unknown = interactive.difference(host.keys.toSet());
+    if (unknown.isNotEmpty) {
+      throw ArgumentError.value(unknown, 'interactive', 'not in host');
+    }
     _initEngine();
   }
 
-  /// 符合 [ScriptRuntimeFactory] 签名的工厂。
+  /// 符合 [ScriptRuntimeFactory] 签名的工厂。[host] 中属于 `interactiveHostPaths` 的路径
+  /// 自动按交互式处理。
   static ScriptRuntime create({
     required Map<String, HostFunction> host,
     ScriptLimits limits = const ScriptLimits(),
-  }) => QuickJsScriptRuntime(host: host, limits: limits);
+  }) => QuickJsScriptRuntime(
+    host: host,
+    limits: limits,
+    interactive: host.keys.toSet().intersection(interactiveHostPaths),
+  );
 
   final ScriptLimits limits;
   final String? prelude;
   final Map<String, HostFunction> _host;
+  final Set<String> _interactive;
 
   late JSRuntime _rt;
   late JSFunction _stringify;
@@ -126,10 +144,7 @@ class QuickJsScriptRuntime implements ScriptRuntime {
     final call = _Call(limits);
     _current = call;
     // 只覆盖“等待宿主 Future”的情况；JS 同步执行时由 [_enterJs] 的 deadline 兜底。
-    final timer = Timer(
-      limits.wallTime,
-      () => call.fail(call.wallLimitError()),
-    );
+    call.armTimer();
 
     // 这两个回调在 JS 微任务中运行（已处于 deadline 内）。读取结果 / 异常对象可能
     // 执行脚本代码（toJSON、getter）；若因此被中断，记录失败并把异常交回引擎继续展开。
@@ -172,7 +187,7 @@ class QuickJsScriptRuntime implements ScriptRuntime {
     try {
       return await call.future;
     } finally {
-      timer.cancel();
+      call.cancelTimer();
       if (identical(_current, call)) _current = null;
       // 触发资源上限的调用（含总时长计时器）之后一律重建，模块状态从头开始。
       if (_poisoned || call.hitLimit) _recover();
@@ -326,9 +341,10 @@ class QuickJsScriptRuntime implements ScriptRuntime {
     host.forEach((path, fn) {
       final segments = path.split('.');
       final owner = namespaceFor(segments.sublist(0, segments.length - 1));
+      final interactive = _interactive.contains(path);
       owner[segments.last] = JSFunction.createFromHostFunction(
         _rt,
-        (rt, _, args) => _invokeHost(fn, args),
+        (rt, _, args) => _invokeHost(fn, args, interactive: interactive),
         name: segments.last,
       ).asObject.asValue;
     });
@@ -352,7 +368,11 @@ class QuickJsScriptRuntime implements ScriptRuntime {
     _rt.global['tsumugi'] = api;
   }
 
-  JSValue _invokeHost(HostFunction fn, List<JSValue> args) {
+  JSValue _invokeHost(
+    HostFunction fn,
+    List<JSValue> args, {
+    required bool interactive,
+  }) {
     final owner = _current;
     if (owner == null || owner.isDone) {
       throw JSException(
@@ -365,7 +385,11 @@ class QuickJsScriptRuntime implements ScriptRuntime {
     } on Object catch (e) {
       throw JSException(_toJsError(e));
     }
-    if (result is Future<Object?>) return _bridgeFuture(owner, result);
+    if (result is Future<Object?>) {
+      // 交互式调用：只有它们在等待时暂停总时长，改按 interactiveTime 计时（Future 结束时恢复）。
+      owner.beginWait(interactive: interactive);
+      return _bridgeFuture(owner, result, interactive: interactive);
+    }
     try {
       return _toJs(result);
     } on Object catch (e) {
@@ -374,11 +398,16 @@ class QuickJsScriptRuntime implements ScriptRuntime {
   }
 
   /// 把宿主 Future 桥接成 JS Promise。resolve 时重新进入 JS，计入 CPU 预算。
-  JSValue _bridgeFuture(_Call owner, Future<Object?> future) {
+  JSValue _bridgeFuture(
+    _Call owner,
+    Future<Object?> future, {
+    required bool interactive,
+  }) {
     final rt = _rt;
     final (promise, resolve, reject) = JSPromise.withResolvers(rt);
 
     void settle(JSFunction settler, JSValue Function() value) {
+      owner.endWait(interactive: interactive);
       if (_disposed || owner.isDone) return;
       // 调用已结束或引擎已重建：迟到的结果直接丢弃。
       if (!identical(_current, owner) || !identical(_rt, rt)) return;
@@ -539,7 +568,17 @@ class _Call {
 
   final ScriptLimits limits;
   final cpu = Stopwatch();
+
+  /// 总时长；只有交互式宿主调用在等待时暂停。
   final wall = Stopwatch()..start();
+
+  /// 只有交互式宿主调用在等待的累计时长。
+  final interactive = Stopwatch();
+  int _interactiveDepth = 0;
+
+  /// 未完成的非交互宿主 Future 数：大于 0 时照常计总时长。
+  int _plainDepth = 0;
+  Timer? _timer;
   final _completer = Completer<Object?>();
 
   bool _hasStaged = false;
@@ -550,19 +589,90 @@ class _Call {
 
   Duration get _cpuLeft => limits.cpuTime - cpu.elapsed;
   Duration get _wallLeft => limits.wallTime - wall.elapsed;
+  Duration get _interactiveLeft => limits.interactiveTime - interactive.elapsed;
+
+  bool get _paused => _interactiveDepth > 0 && _plainDepth == 0;
+
+  /// 当前正在计时的时长预算（总时长，或暂停期间的交互等待时长）还剩多少。
+  Duration get _clockLeft => _paused ? _interactiveLeft : _wallLeft;
 
   /// 下一段 JS 执行最多可用的时长。
-  Duration get remaining => _cpuLeft < _wallLeft ? _cpuLeft : _wallLeft;
+  Duration get remaining => _cpuLeft < _clockLeft ? _cpuLeft : _clockLeft;
 
   bool get exhausted => remaining <= Duration.zero;
 
-  ScriptException timeLimitError({String? stack}) => _wallLeft <= _cpuLeft
-      ? wallLimitError(stack: stack)
+  ScriptException timeLimitError({String? stack}) => _clockLeft <= _cpuLeft
+      ? _clockLimitError(stack: stack)
       : ScriptException(
           'CPU time limit exceeded (${limits.cpuTime.inMilliseconds} ms).',
           code: ScriptException.limit,
           stack: stack,
         );
+
+  ScriptException _clockLimitError({String? stack}) => _paused
+      ? interactiveLimitError(stack: stack)
+      : wallLimitError(stack: stack);
+
+  ScriptException interactiveLimitError({String? stack}) => ScriptException(
+    'Interactive wait limit exceeded '
+    '(${limits.interactiveTime.inMilliseconds} ms).',
+    code: ScriptException.limit,
+    stack: stack,
+  );
+
+  /// 按当前计时的预算（总时长或交互等待）设置计时器，到期即让调用失败。
+  void armTimer() {
+    _timer?.cancel();
+    if (isDone) return;
+    final left = _clockLeft;
+    _timer = Timer(left < Duration.zero ? Duration.zero : left, () {
+      // 计时器排队期间可能已切换计时状态：重新核对。
+      if (_clockLeft > Duration.zero) {
+        armTimer();
+      } else {
+        fail(_clockLimitError());
+      }
+    });
+  }
+
+  void cancelTimer() {
+    _timer?.cancel();
+    _timer = null;
+  }
+
+  /// 开始等待一个宿主 Future。
+  void beginWait({required bool interactive}) {
+    final was = _paused;
+    if (interactive) {
+      _interactiveDepth++;
+    } else {
+      _plainDepth++;
+    }
+    _switchClock(was);
+  }
+
+  /// 宿主 Future 结束（成功或失败）。
+  void endWait({required bool interactive}) {
+    final was = _paused;
+    if (interactive) {
+      if (_interactiveDepth > 0) _interactiveDepth--;
+    } else {
+      if (_plainDepth > 0) _plainDepth--;
+    }
+    _switchClock(was);
+  }
+
+  void _switchClock(bool was) {
+    if (_paused == was) return;
+    if (_paused) {
+      wall.stop();
+      interactive.start();
+    } else {
+      interactive.stop();
+      wall.start();
+    }
+    if (_timer != null) armTimer();
+  }
 
   ScriptException wallLimitError({String? stack}) => ScriptException(
     'Wall time limit exceeded (${limits.wallTime.inMilliseconds} ms).',
@@ -589,8 +699,11 @@ class _Call {
     if (isDone) return;
     // 同步 JS 执行期间 Dart 计时器无法触发，完成时再核对一次总时长。
     if (wall.elapsed > limits.wallTime) {
-      _completer.completeError(wallLimitError());
+      fail(wallLimitError());
+    } else if (interactive.elapsed > limits.interactiveTime) {
+      fail(interactiveLimitError());
     } else {
+      cancelTimer();
       _completer.complete(value);
     }
   }
@@ -600,6 +713,7 @@ class _Call {
 
   void fail(ScriptException error) {
     if (isDone) return;
+    cancelTimer();
     hitLimit = error.code == ScriptException.limit;
     _hasStaged = false;
     _staged = null;

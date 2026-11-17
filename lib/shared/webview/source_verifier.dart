@@ -13,8 +13,9 @@ import 'webview_throttle.dart';
 ///    [SourceSession]，必要时记下 WebView 的 UA，并清空 WebView 的 Cookie；
 /// 4. 页面销毁后再次清空 WebView 的 Cookie（兜底）。
 ///
-/// 同一时刻只显示一个验证页：同一源的并发请求共用进行中的那一次，其他源的请求被拒绝。
-/// 脚本发起的打开（`userInitiated: false`）还受前台检查与 [WebViewThrottle] 限制。
+/// 同一时刻只显示一个验证页：用户发起的同源请求共用进行中的那一次，其他源的请求被拒绝。
+/// 脚本发起的打开（`userInitiated: false`）在已有任何验证页打开时一律被拒绝（不共用，
+/// source-spec §4.2），并受前台检查与 [WebViewThrottle] 限制。
 class SourceVerifier {
   SourceVerifier({
     required this.launcher,
@@ -55,6 +56,12 @@ class SourceVerifier {
       );
     }
     if (_inFlight case final current?) {
+      if (!userInitiated) {
+        // 不让脚本搭上已打开的验证页：那样会绕过前台检查与冷却，并让该次调用长时间等待。
+        return Future.error(
+          const SourceException(SourceErrorCode.challenge, '已有验证页打开'),
+        );
+      }
       if (current.sourceId == request.sourceId) return current.future;
       return Future.error(
         const SourceException(SourceErrorCode.challenge, '已有其他源的验证页打开'),

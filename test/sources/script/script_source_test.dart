@@ -54,6 +54,19 @@ class _FakeUi implements ScriptUi {
       toasts.add('$sourceId:$message');
 }
 
+/// 用户在 WebView 中操作了 [delay] 才完成。
+class _SlowUi extends _FakeUi {
+  _SlowUi(this.delay);
+
+  final Duration delay;
+
+  @override
+  Future<void> openWebView(WebViewRequest request) async {
+    requests.add(request);
+    await Future<void>.delayed(delay);
+  }
+}
+
 class _SlowStorage extends MemorySourceStorage {
   @override
   Future<int> usage(String sourceId) async {
@@ -743,6 +756,36 @@ void main() {
     // 计数按入口调用重置。
     expect(await source.debugCall('openWebViewTwice'), ['done', 'E_LIMIT']);
     expect(ui.requests, hasLength(2));
+  });
+
+  test('openWebView: user wait does not count toward wallTime (#23)', () async {
+    final ui = _SlowUi(const Duration(milliseconds: 700));
+    final source = await open(
+      _hostManifest(),
+      ui: ui,
+      limits: const ScriptLimits(
+        wallTime: Duration(milliseconds: 300),
+        interactiveTime: Duration(seconds: 5),
+      ),
+    );
+    expect(await source.debugCall('openWebView', ['/login']), 'done');
+    expect(ui.requests, hasLength(1));
+  });
+
+  test('openWebView: user wait is capped by interactiveTime (#23)', () async {
+    final ui = _SlowUi(const Duration(seconds: 5));
+    final source = await open(
+      _hostManifest(),
+      ui: ui,
+      limits: const ScriptLimits(
+        wallTime: Duration(milliseconds: 300),
+        interactiveTime: Duration(milliseconds: 500),
+      ),
+    );
+    await expectLater(
+      source.debugCall('openWebView', ['/login']),
+      throwsA(_sourceError(SourceErrorCode.limit)),
+    );
   });
 
   test('openWebView: invalid or overlong doneWhenUrlMatches', () async {

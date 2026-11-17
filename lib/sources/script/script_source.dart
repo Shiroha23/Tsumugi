@@ -74,6 +74,7 @@ class ScriptSource implements Source {
     final runtime = IsolateScriptRuntime(
       host: host.functions,
       notifications: notificationPaths,
+      interactive: interactiveHostPaths,
       workerHost: tsumugiWorkerHost,
       workerHostConfig: {'baseUrl': manifest.baseUrl},
       prelude: buildTsumugiPrelude({

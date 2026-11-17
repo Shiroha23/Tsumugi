@@ -29,6 +29,10 @@ const asyncHostPaths = {
   'ui.openWebView',
 };
 
+/// [asyncHostPaths] 中需要等待用户操作的 API：等待期间暂停单次调用的总时长，
+/// 改按 `ScriptLimits.interactiveTime` 计时（docs/source-spec.md §4.4）。
+const interactiveHostPaths = {'ui.openWebView'};
+
 /// 发出即忘的宿主 API。
 const notificationPaths = {'log.debug', 'log.info', 'log.error', 'ui.toast'};
 
