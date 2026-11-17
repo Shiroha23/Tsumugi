@@ -38,7 +38,14 @@
       }
     },
     "content": {
-      "streams": "css:video source@src[]"
+      "streams": "css:video source@src[]",
+      "subtitles": {
+        "list": "css:video track",
+        "fields": {
+          "url": "xpath:@src",
+          "lang": "xpath:@label"
+        }
+      }
     }
   }
 }

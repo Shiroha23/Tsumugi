@@ -3,6 +3,13 @@
 <head><meta charset="utf-8"><title>{{title}} - 示例视频</title></head>
 <body>
 <h1>{{title}}</h1>
-<video controls><source src="{{src}}"></video>
+<video controls>
+<source src="{{src}}">
+<!-- 外挂字幕（mock_video_declarative.json 的 content.subtitles）：根相对 / 路径相对地址、按扩展名推断格式 -->
+<track kind="subtitles" src="/video/protected/subs/zh.srt" label="简体中文">
+<track kind="subtitles" src="video/media/subs/zh_gbk.srt" label="简体中文（GBK）">
+<track kind="subtitles" src="/video/media/subs/en.vtt" label="English">
+<track kind="subtitles" src="/video/media/subs/bad.srt" label="损坏示例">
+</video>
 </body>
 </html>

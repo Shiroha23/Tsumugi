@@ -116,9 +116,69 @@ class DetailRule {
   final UnitsRule? units;
 }
 
-/// `content`：除 `request` 外，其余键都是按媒体类型解释的表达式。
+/// `content.subtitles`（source-spec §3.1「视频外挂字幕」）。
+///
+/// 简写（字符串）等价于 `list` 为该表达式、只取 `url` 的完整写法，见 [urls]。
+class SubtitlesRule {
+  const SubtitlesRule.urls(String this.urls)
+    : list = null,
+      fields = const {},
+      charset = null;
+
+  const SubtitlesRule.list({
+    required String this.list,
+    required this.fields,
+    this.charset,
+  }) : urls = null;
+
+  factory SubtitlesRule.fromJson(Object? json, String path) {
+    if (json is String) {
+      if (json.trim().isEmpty) throw FormatException('$path 必须是非空字符串');
+      return SubtitlesRule.urls(json);
+    }
+    if (json is! Map) throw FormatException('$path 必须是字符串或对象');
+    final map = _map(json, path);
+    final fields = _stringMap(map['fields'], '$path.fields');
+    if (fields['url']?.trim().isNotEmpty != true) {
+      throw FormatException('$path.fields.url 必须是非空字符串');
+    }
+    final charset = _optString(map, 'charset', path);
+    if (charset != null && normalizeCharset(charset) == null) {
+      throw FormatException('$path.charset 不是支持的字符集: $charset');
+    }
+    return SubtitlesRule.list(
+      list: _string(map, 'list', path),
+      fields: fields,
+      charset: charset,
+    );
+  }
+
+  /// 简写：多值表达式，每个值是一条字幕的 URL。
+  final String? urls;
+
+  /// 完整写法的列表节点表达式。
+  final String? list;
+
+  /// 完整写法：对每个列表节点求值的 `url` / `lang` / `format`。
+  final Map<String, String> fields;
+
+  /// 常量字符集标签（已校验），作用于本规则产出的全部字幕。
+  final String? charset;
+
+  Iterable<String> get expressions sync* {
+    if (urls != null) yield urls!;
+    if (list != null) yield list!;
+    yield* fields.values;
+  }
+}
+
+/// `content`：除 `request` 与 `subtitles` 外，其余键都是按媒体类型解释的表达式。
 class ContentRule {
-  const ContentRule({required this.request, required this.fields});
+  const ContentRule({
+    required this.request,
+    required this.fields,
+    this.subtitles,
+  });
 
   factory ContentRule.fromJson(Object? json, String path) {
     final map = _map(json, path);
@@ -126,12 +186,23 @@ class ContentRule {
       request: map['request'] == null
           ? const RequestRule(url: '{{unitId}}')
           : RequestRule.fromJson(map['request'], '$path.request'),
-      fields: _stringMap({...map}..remove('request'), path),
+      subtitles: map['subtitles'] == null
+          ? null
+          : SubtitlesRule.fromJson(map['subtitles'], '$path.subtitles'),
+      fields: _stringMap(
+        {...map}
+          ..remove('request')
+          ..remove('subtitles'),
+        path,
+      ),
     );
   }
 
   final RequestRule request;
   final Map<String, String> fields;
+
+  /// 视频外挂字幕；只有 `video` 类型使用。
+  final SubtitlesRule? subtitles;
 }
 
 class DeclarativeRules {
@@ -184,7 +255,10 @@ class DeclarativeRules {
         yield* u.fields.values;
       }
     }
-    if (content case final c?) yield* c.fields.values;
+    if (content case final c?) {
+      yield* c.fields.values;
+      if (c.subtitles case final s?) yield* s.expressions;
+    }
   }
 }
 

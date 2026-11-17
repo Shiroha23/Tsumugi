@@ -254,6 +254,7 @@ void main() {
   group('播放页', () {
     const sourceId = 'com.example.mock.video.script';
     const itemId = '/video/api/show/2';
+    const declarativeId = 'com.example.mock.video.declarative';
     late AppDatabase db;
     late ProviderContainer container;
     late MemorySubtitlePreferencesStore subtitlePrefs;
@@ -261,8 +262,13 @@ void main() {
     setUp(() async {
       db = openTestDatabase();
       subtitlePrefs = MemorySubtitlePreferencesStore();
-      await SourceRegistry(db)
-          .importText(await server.fixture('sources/mock_video_script.json'));
+      final registry = SourceRegistry(db);
+      await registry.importText(
+        await server.fixture('sources/mock_video_script.json'),
+      );
+      await registry.importText(
+        await server.fixture('sources/mock_video_declarative.json'),
+      );
       container = ProviderContainer(
         overrides: [
           appDatabaseProvider.overrideWithValue(db),
@@ -291,19 +297,19 @@ void main() {
       await db.close();
     });
 
-    Future<void> pumpPage(WidgetTester tester, String unitId) =>
-        tester.pumpWidget(
-          UncontrolledProviderScope(
-            container: container,
-            child: MaterialApp(
-              home: VideoPlayerPage(
-                sourceId: sourceId,
-                itemId: itemId,
-                unitId: unitId,
-              ),
-            ),
-          ),
-        );
+    Future<void> pumpPage(
+      WidgetTester tester,
+      String unitId, {
+      String source = sourceId,
+      String item = itemId,
+    }) => tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          home: VideoPlayerPage(sourceId: source, itemId: item, unitId: unitId),
+        ),
+      ),
+    );
 
     Future<void> pumpUntil(
       WidgetTester tester,
@@ -530,6 +536,38 @@ void main() {
         await tester.pump(const Duration(milliseconds: 100));
         expect(subtitleText(tester), '', reason: '记录为关闭');
       }
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('字幕：声明式源的 content.subtitles（#53）', (tester) async {
+      await pumpPage(
+        tester,
+        '/video/show/1/ep/1',
+        source: declarativeId,
+        item: '/video/show/1',
+      );
+      await pumpUntil(tester, playing, reason: '开始播放');
+
+      // 没有记录：显示第一条外挂字幕（/video/protected/，需要清单的默认 Referer）。
+      await pumpUntil(
+        tester,
+        () => subtitleText(tester).startsWith('第'),
+        reason: '外挂字幕（简体中文）',
+      );
+      await chooseSubtitle(tester, 'English');
+      await pumpUntil(
+        tester,
+        () => const {
+          'Color bars & a tone',
+          'Second part still',
+          'Last part <end>',
+        }.contains(subtitleText(tester)),
+        reason: 'English',
+      );
+      expect(
+        subtitlePrefs.values[declarativeId],
+        const SubtitleLabel('English'),
+      );
       await tester.pumpWidget(const SizedBox());
     });
   });

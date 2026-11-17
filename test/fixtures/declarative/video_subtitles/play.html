@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html><body>
+<video controls>
+  <source src="/files/e1.m3u8">
+  <!-- 根相对地址，按扩展名推断为 srt -->
+  <track kind="subtitles" src="/subs/e1.zh.srt" label="繁體中文">
+  <!-- 路径相对地址；扩展名大写；带查询串 -->
+  <track kind="subtitles" src="subs/e1.en.VTT?v=2" label="English">
+  <!-- 白名单内的 CDN；.ssa 推断为 ass -->
+  <track kind="subtitles" src="https://media.example-cdn.com/e1/ja.ssa" label="日本語">
+  <!-- 没有扩展名、没有 label：format 与 lang 都省略 -->
+  <track kind="subtitles" src="/subs/e1/ko">
+  <!-- 显式 format 优先于扩展名（WEBVTT 不区分大小写，规范化为 vtt） -->
+  <track kind="subtitles" src="/subs/e1.fr.txt" label="Français" data-format="WEBVTT">
+  <!-- 非法 format：丢弃 -->
+  <track kind="subtitles" src="/subs/e1.de.srt" label="Deutsch" data-format="sub">
+  <!-- 缺少 src：丢弃 -->
+  <track kind="subtitles" label="空">
+  <!-- 非 http(s)：丢弃 -->
+  <track kind="subtitles" src="javascript:alert(1)" label="脚本">
+  <track kind="subtitles" src="data:text/vtt,WEBVTT" label="内联">
+</video>
+</body></html>

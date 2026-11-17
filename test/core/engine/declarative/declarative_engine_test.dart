@@ -140,6 +140,74 @@ void main() {
           'content': {'images': 1},
         },
       ),
+      (
+        'subtitles not a string or object',
+        {
+          'content': {'subtitles': 1},
+        },
+      ),
+      (
+        'subtitles empty shorthand',
+        {
+          'content': {'subtitles': ' '},
+        },
+      ),
+      (
+        'subtitles without list',
+        {
+          'content': {
+            'subtitles': {
+              'fields': {'url': 'css:a@href'},
+            },
+          },
+        },
+      ),
+      (
+        'subtitles without fields.url',
+        {
+          'content': {
+            'subtitles': {
+              'list': 'css:track',
+              'fields': {'lang': 'xpath:@label'},
+            },
+          },
+        },
+      ),
+      (
+        'subtitles field not a string',
+        {
+          'content': {
+            'subtitles': {
+              'list': 'css:track',
+              'fields': {'url': 'xpath:@src', 'lang': 1},
+            },
+          },
+        },
+      ),
+      (
+        'subtitles bad charset',
+        {
+          'content': {
+            'subtitles': {
+              'list': 'css:track',
+              'fields': {'url': 'xpath:@src'},
+              'charset': 'klingon',
+            },
+          },
+        },
+      ),
+      (
+        'subtitles charset not a string',
+        {
+          'content': {
+            'subtitles': {
+              'list': 'css:track',
+              'fields': {'url': 'xpath:@src'},
+              'charset': ['gbk'],
+            },
+          },
+        },
+      ),
     ]) {
       test('rejects $name', () {
         expect(() => DeclarativeRules.fromJson(json), throwsFormatException);
@@ -238,6 +306,155 @@ void main() {
           ),
         ),
       );
+    });
+
+    group('content.subtitles', () {
+      Future<Map<String, Object?>> video(
+        Map<String, dynamic> content,
+        String body,
+      ) => engine(
+        {'content': content},
+        _StubFetcher(body),
+        type: 'video',
+      ).content('1');
+
+      test('没有 subtitles 键：结果中没有 subtitles（旧规则不受影响）', () async {
+        final r = await video({
+          'streams': 'css:a@href[]',
+        }, '<a href="/v.mp4"></a>');
+        expect(r, {
+          'streams': [
+            {'url': 'https://example.com/v.mp4', 'type': 'mp4'},
+          ],
+        });
+        expect(logs, isEmpty);
+      });
+
+      test('subtitles 为 null：与省略相同', () async {
+        final r = await video({
+          'streams': 'css:a@href[]',
+          'subtitles': null,
+        }, '<a href="/v.mp4"></a>');
+        expect(r.containsKey('subtitles'), isFalse);
+        expect(logs, isEmpty);
+      });
+
+      test('简写：单个字幕', () async {
+        final r = await video({
+          'streams': 'css:a@href[]',
+          'subtitles': 'css:video track@src[]',
+        }, '<a href="/v.mp4"></a><video><track src="/s/1.vtt"></video>');
+        expect(r['subtitles'], [
+          {'url': 'https://example.com/s/1.vtt', 'format': 'vtt'},
+        ]);
+      });
+
+      test('简写：多个字幕，按顺序；推断不出格式时省略', () async {
+        final r = await video(
+          {'subtitles': 'css:track@src[]'},
+          '<track src="a.srt"><track src="/b.ASS"><track src="/c.sub">'
+          '<track src="/d"><track src="/dir.srt/e">',
+        );
+        expect(r['subtitles'], [
+          {'url': 'https://example.com/a.srt', 'format': 'srt'},
+          {'url': 'https://example.com/b.ASS', 'format': 'ass'},
+          {'url': 'https://example.com/c.sub'},
+          {'url': 'https://example.com/d'},
+          {'url': 'https://example.com/dir.srt/e'},
+        ]);
+      });
+
+      test('简写：没有匹配时为空列表', () async {
+        final r = await video({'subtitles': 'css:track@src[]'}, '<p></p>');
+        expect(r['subtitles'], isEmpty);
+      });
+
+      test('JSON 列表：lang 为空时省略，format 不区分大小写', () async {
+        final r = await video(
+          {
+            'subtitles': {
+              'list': r'json:$.subs[*]',
+              'fields': {
+                'url': r'json:$.file',
+                'lang': r'json:$.label',
+                'format': r'json:$.type',
+              },
+            },
+          },
+          '{"subs":[{"file":"/z.ass","label":"简体中文"},'
+          '{"file":"https://cdn.example.com/e.txt","label":"","type":"SRT"},'
+          '{"label":"缺少 url"}]}',
+        );
+        expect(r['subtitles'], [
+          {'url': 'https://example.com/z.ass', 'lang': '简体中文', 'format': 'ass'},
+          {'url': 'https://cdn.example.com/e.txt', 'format': 'srt'},
+        ]);
+        expect(logs.single, contains('无效的地址'));
+      });
+
+      test('非法 format 丢弃该条目，不当作未给出', () async {
+        final r = await video(
+          {
+            'subtitles': {
+              'list': 'css:track',
+              'fields': {'url': 'xpath:@src', 'format': 'xpath:@data-f'},
+            },
+          },
+          '<track src="/a.srt" data-f="sub"><track src="/b.srt" data-f="ssa">',
+        );
+        expect(r['subtitles'], [
+          {'url': 'https://example.com/b.srt', 'format': 'ass'},
+        ]);
+        expect(logs.single, contains('`sub`'));
+      });
+
+      test('fields 中的未知键警告并忽略', () async {
+        final r = await video({
+          'subtitles': {
+            'list': 'css:track',
+            'fields': {'url': 'xpath:@src', 'kind': 'xpath:@kind'},
+          },
+        }, '<track src="/a.vtt" kind="captions">');
+        expect(r['subtitles'], [
+          {'url': 'https://example.com/a.vtt', 'format': 'vtt'},
+        ]);
+        expect(logs.single, contains('`kind`'));
+      });
+
+      test('非 video 类型：警告并忽略', () async {
+        final r = await engine(
+          {
+            'content': {
+              'streams': 'css:a@href[]',
+              'subtitles': 'css:track@src[]',
+            },
+          },
+          _StubFetcher('<a href="/s.mp3"></a><track src="/a.vtt">'),
+          type: 'music',
+        ).content('1');
+        expect(r.containsKey('subtitles'), isFalse);
+        expect(logs.single, contains('`subtitles`'));
+      });
+
+      test('expressions 包含字幕规则中的表达式', () {
+        final r = DeclarativeRules.fromJson({
+          'content': {
+            'streams': 'css:a',
+            'subtitles': {
+              'list': 'css:track',
+              'fields': {'url': 'js:result', 'lang': 'xpath:@label'},
+              'charset': 'GBK',
+            },
+          },
+        });
+        expect(r.expressions.toList(), [
+          'css:a',
+          'css:track',
+          'js:result',
+          'xpath:@label',
+        ]);
+        expect(r.content!.subtitles!.charset, 'GBK');
+      });
     });
 
     test('lyrics without timestamps are plain text', () async {

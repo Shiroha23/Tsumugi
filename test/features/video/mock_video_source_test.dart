@@ -7,6 +7,9 @@ import 'package:tsumugi/core/network/dio_source_http_client.dart';
 import 'package:tsumugi/core/network/media/media_proxy.dart';
 import 'package:tsumugi/core/network/source_http_client.dart';
 import 'package:tsumugi/core/storage/app_database.dart';
+import 'package:tsumugi/features/video/player/video_subtitles.dart';
+import 'package:tsumugi/shared/video/media_proxy_providers.dart';
+import 'package:tsumugi/shared/video/subtitle_providers.dart';
 import 'package:tsumugi/sources/model/content.dart';
 import 'package:tsumugi/sources/network_error_mapping.dart';
 import 'package:tsumugi/sources/registry/providers.dart';
@@ -37,6 +40,13 @@ void main() {
       overrides: [
         appDatabaseProvider.overrideWithValue(db),
         sourceFactoriesProvider.overrideWithValue(mockFactories(server)),
+        // 与播放页相同：字幕经该源的网络配置（白名单、默认 Referer）取得。
+        mediaProxyClientProvider.overrideWithValue(
+          (manifest) => DioSourceHttpClient(
+            networkConfigFromManifest(manifest),
+            adapter: mockAdapter(server),
+          ),
+        ),
       ],
     );
   });
@@ -116,6 +126,47 @@ void main() {
           .map((r) => r.headers['referer'])
           .toSet(),
       {'http://127.0.0.1:8080/video/'},
+    );
+  });
+
+  test('声明式规则的外挂字幕：播放页的字幕菜单与加载直接可用（#53）', () async {
+    final source = await container.read(sourceInstanceProvider(_id).future);
+    final ep1 = await source.content('/video/show/1/ep/1') as VideoContent;
+    final subs = ep1.subtitles;
+    expect(subs.map((s) => (s.url, s.lang, s.format)), [
+      ('http://127.0.0.1:8080/video/protected/subs/zh.srt', '简体中文', 'srt'),
+      ('http://127.0.0.1:8080/video/media/subs/zh_gbk.srt', '简体中文（GBK）', 'srt'),
+      ('http://127.0.0.1:8080/video/media/subs/en.vtt', 'English', 'vtt'),
+      ('http://127.0.0.1:8080/video/media/subs/bad.srt', '损坏示例', 'srt'),
+    ]);
+    // 播放页的菜单标签与默认选择（没有记录时选第一条外挂字幕）。
+    expect(
+      [for (var i = 0; i < subs.length; i++) externalSubtitleLabel(subs, i)],
+      ['简体中文', '简体中文（GBK）', 'English', '损坏示例'],
+    );
+    expect(
+      pickSubtitle(preference: null, external: subs, embedded: const []),
+      const SubtitleChoiceExternal(0),
+    );
+
+    final load = container.read(loadSubtitleProvider);
+    // 第一条走 /video/protected/：要求清单的默认 Referer，证明经过源的网络层。
+    final zh = await load(_id, subs[0]);
+    expect(zh.format, SubtitleFormat.srt);
+    expect(zh.cues.first.text, '第一段：彩条开始');
+    final gbk = await load(_id, subs[1]);
+    expect(gbk.cues.first.text, 'GBK 字幕：第一段');
+    final en = await load(_id, subs[2]);
+    expect(en.format, SubtitleFormat.vtt);
+    await expectLater(
+      load(_id, subs[3]),
+      throwsA(isA<SubtitleFormatException>()),
+    );
+    expect(
+      server.requests
+          .where((r) => r.path == '/video/protected/subs/zh.srt')
+          .map((r) => r.headers['referer']),
+      ['http://127.0.0.1:8080/video/'],
     );
   });
 }

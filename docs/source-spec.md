@@ -181,6 +181,7 @@ interface MusicContent {
 - 格式按内容识别：vtt 以 `WEBVTT` 开头，ass（含 SSA）以 `[Script Info]` 开头，srt 以序号 + 时间轴（或直接以时间轴）开头；
   识别不了的、与 `format` 不符的拒绝。只显示文字：ass 的样式、位置与特效，内嵌字体与绘图指令都被忽略。
 - 文件不超过 4 MB、须在 30 s 内取完；字符集依次取 `charset`、BOM、`Content-Type` 的 charset；都没有时，内容是合法 UTF-8 则按 UTF-8，否则按 GB18030（GBK）。
+- 声明式规则用 `content.subtitles` 声明外挂字幕（§3.1「视频外挂字幕」），脚本源由 `content()` 直接返回。
 - HLS 流在主播放列表中声明的字幕轨（`EXT-X-MEDIA:TYPE=SUBTITLES`，WebVTT）也可以选择，不需要写进 `subtitles`。
 
 #### 2.2.1 小说正文（`NovelContent`）
@@ -265,7 +266,7 @@ interface MusicContent {
     // comic:
     "images": "css:.page img@data-src[]"
     // novel:  "text": "css:#content@text", "nextPageId": "css:a.next@href"
-    // video:  "streams": "regex:\"url\":\"(.+?\\.m3u8)\"@1[]"
+    // video:  "streams": "regex:\"url\":\"(.+?\\.m3u8)\"@1[]", "subtitles": "css:video track@src[]"
   }
 }
 ```
@@ -290,10 +291,43 @@ interface MusicContent {
 |---|---|---|
 | comic | `images` | 多值，图片 URL |
 | novel | `text`、`nextPageId` | `text` 为多值时以 `\n` 连接；`nextPageId` 作为下一次 `content` 的 `unitId` |
-| video | `streams` | 多值，流 URL；`type` 按扩展名推断（`.m3u8`→hls，`.mpd`→dash，`.mp4`→mp4，其余 auto） |
+| video | `streams`、`subtitles` | `streams` 多值，流 URL；`type` 按扩展名推断（`.m3u8`→hls，`.mpd`→dash，`.mp4`→mp4，其余 auto）。`subtitles` 可选，见下 |
 | music | `streams`、`lyrics` | `lyrics` 含 `[mm:ss` 时间标签时 `format` 为 `lrc`，否则为 `text` |
 
 其他键忽略并在调试日志中警告。
+
+**视频外挂字幕（`content.subtitles`）**：产出 §2.2 的 `VideoContent.subtitles`（与脚本源相同的结构）。可选，
+省略（或为 `null`，与规则中其他可选键一致）时没有外挂字幕。有两种写法：
+
+```jsonc
+// 简写：一个多值表达式，每个值是一条字幕的 URL（没有 lang，菜单中显示为“字幕 n”）
+"subtitles": "css:video track@src[]"
+
+// 完整写法：与 detail.units 相同的 list + fields，每个列表节点产出一条字幕
+"subtitles": {
+  "list": "json:$.subs[*]",          // 列表节点，总是取全部匹配（同 §3.1 的 list）
+  "fields": {
+    "url": "json:$.file",            // 必需
+    "lang": "json:$.label",          // 可选：菜单标签
+    "format": "json:$.type"          // 可选：srt | vtt | ass（不区分大小写，另接受 webvtt / ssa）
+  },
+  "charset": "gbk"                   // 可选：常量字符集标签，作用于本规则产出的全部字幕
+}
+// HTML 的 <track> 本身就是列表节点，用 xpath 的属性轴取它自己的属性：
+// "subtitles": { "list": "css:video track", "fields": { "url": "xpath:@src", "lang": "xpath:@label" } }
+```
+
+- `url` 基于 `baseUrl` 解析为绝对地址；解析失败或协议不是 `http` / `https` 的条目丢弃。缺少 `url` 的条目丢弃（调试日志）。
+- `lang` 为空时省略（客户端显示“字幕 n”）。
+- `format`：表达式结果为空时按 URL 路径的扩展名推断（`.srt`→srt，`.vtt`→vtt，`.ass` / `.ssa`→ass，不区分大小写；
+  其余不填，由客户端按内容识别）；结果非空时必须是 `srt` / `vtt` / `webvtt` / `ass` / `ssa`（不区分大小写，
+  产出时规范化为 `srt` / `vtt` / `ass`），否则**丢弃该条目**（调试日志），不会当作未给出。
+- `charset` 不是表达式，而是与 `request.charset` 相同的常量字符集标签（字符集是站点的属性，而不是页面数据）；
+  必须是 §5 支持的标签，否则创建源时报 `E_PARSE`。
+- 结构错误（`subtitles` 不是 `null`、字符串或对象、缺少 `list` 或 `fields.url`、`fields` 中出现非字符串值）
+  在创建源时报 `E_PARSE`（不论 `type`）；`fields` 中的未知键在调试日志中警告并忽略。只有 `type` 为 `video` 时
+  才使用 `subtitles`，其他类型同其他未知键一样警告并忽略。
+- 字幕不附带清单 `headers`：客户端经本源的网络层取字幕，默认 headers 在那里合并（§2.2「视频字幕」）。
 
 每个规则（`search` / `explore` / `detail` / `content`）**只发一次请求**。同一页面内的间接取值用 `|>` 管道
 （如 `css:script@text |> regex:...`）；需要多次请求才能拿到内容的站点（例如先取 iframe 地址再取 m3u8），

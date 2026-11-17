@@ -225,6 +225,52 @@ void main() {
     expect(() => source.explore(), throwsSource(SourceErrorCode.unsupported));
   });
 
+  group('video subtitles (§3.1「视频外挂字幕」)', () {
+    const base = 'https://video.example.com';
+
+    test('<track> 列表：相对地址、格式推断、lang、charset；非法条目丢弃', () async {
+      final source = DeclarativeSource(
+        manifest: loadManifest('video_subtitles'),
+        fetcher: FixtureFetcher({
+          'GET $base/play/e1': 'video_subtitles/play.html',
+        }),
+        log: logs.add,
+      );
+      final content = await source.content('e1') as VideoContent;
+      expect(content.streams.single.url, '$base/files/e1.m3u8');
+      expect(content.subtitles, const [
+        SubtitleRef(
+          url: '$base/subs/e1.zh.srt',
+          lang: '繁體中文',
+          format: 'srt',
+          charset: 'big5',
+        ),
+        SubtitleRef(
+          url: '$base/subs/e1.en.VTT?v=2',
+          lang: 'English',
+          format: 'vtt',
+          charset: 'big5',
+        ),
+        SubtitleRef(
+          url: 'https://media.example-cdn.com/e1/ja.ssa',
+          lang: '日本語',
+          format: 'ass',
+          charset: 'big5',
+        ),
+        SubtitleRef(url: '$base/subs/e1/ko', charset: 'big5'),
+        SubtitleRef(
+          url: '$base/subs/e1.fr.txt',
+          lang: 'Français',
+          format: 'vtt',
+          charset: 'big5',
+        ),
+      ]);
+      // 非法 format、缺少 src、javascript: / data: 各记录一条日志。
+      expect(logs.where((l) => l.contains('format 无效')), hasLength(1));
+      expect(logs.where((l) => l.contains('无效的地址')), hasLength(3));
+    });
+  });
+
   test('music content', () async {
     final source = DeclarativeSource(
       manifest: loadManifest('music'),
