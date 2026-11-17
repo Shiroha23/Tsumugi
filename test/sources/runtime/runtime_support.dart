@@ -57,6 +57,7 @@ String fakeManifestJson(
   String? name,
   String version = '1.0.0',
   MediaType type = MediaType.comic,
+  bool explore = false,
 }) => jsonEncode({
   'apiVersion': 1,
   'id': id,
@@ -71,11 +72,27 @@ String fakeManifestJson(
       'list': 'css:li',
       'fields': {'id': 'css:a@href', 'title': 'css:a@text'},
     },
+    if (explore)
+      'explore': [
+        {
+          'name': '全部',
+          'request': {'url': '/all?page={{page}}'},
+          'list': 'css:li',
+          'fields': {'id': 'css:a@href', 'title': 'css:a@text'},
+        },
+      ],
   },
 });
 
 class FakeSource implements DisposableSource {
-  FakeSource(this.manifest, {this.onSearch, this.onDetail, this.onContent});
+  FakeSource(
+    this.manifest, {
+    this.onSearch,
+    this.onDetail,
+    this.onContent,
+    this.onExplore,
+    this.onExploreList,
+  });
 
   @override
   final SourceManifest manifest;
@@ -83,9 +100,14 @@ class FakeSource implements DisposableSource {
   onSearch;
   final Future<Detail> Function(String id)? onDetail;
   final Future<MediaContent> Function(String unitId)? onContent;
+  final Future<List<ExploreCategory>> Function()? onExplore;
+  final Future<PageResult<SearchItem>> Function(String categoryId, int page)?
+  onExploreList;
 
   final searches = <(String, int)>[];
   final details = <String>[];
+  int explores = 0;
+  final exploreLists = <(String, int)>[];
   bool disposed = false;
 
   @override
@@ -103,12 +125,18 @@ class FakeSource implements DisposableSource {
   }
 
   @override
-  Future<List<ExploreCategory>> explore() =>
-      Future.error(const SourceException(SourceErrorCode.unsupported));
+  Future<List<ExploreCategory>> explore() {
+    explores++;
+    return onExplore?.call() ??
+        Future.error(const SourceException(SourceErrorCode.unsupported));
+  }
 
   @override
-  Future<PageResult<SearchItem>> exploreList(String categoryId, int page) =>
-      Future.error(const SourceException(SourceErrorCode.unsupported));
+  Future<PageResult<SearchItem>> exploreList(String categoryId, int page) {
+    exploreLists.add((categoryId, page));
+    return onExploreList?.call(categoryId, page) ??
+        Future.error(const SourceException(SourceErrorCode.unsupported));
+  }
 
   @override
   Future<MediaContent> content(String unitId) =>

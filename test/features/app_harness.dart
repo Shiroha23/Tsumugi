@@ -7,6 +7,7 @@ import 'package:tsumugi/app/router.dart';
 import 'package:tsumugi/core/network/source_http_client.dart';
 import 'package:tsumugi/core/storage/app_database.dart';
 import 'package:tsumugi/features/comic/reader/reader_preferences.dart';
+import 'package:tsumugi/features/explore/explore_preferences.dart';
 import 'package:tsumugi/features/novel/reader/novel_reader_preferences.dart';
 import 'package:tsumugi/shared/image/image_cache.dart';
 import 'package:tsumugi/shared/image/image_providers.dart';
@@ -23,9 +24,12 @@ class AppHarness {
   AppHarness(
     this.factory, {
     MemoryNovelReaderPreferencesStore? novelPreferences,
+    MemoryExplorePreferencesStore? explorePreferences,
     this.overrides = const [],
   }) : novelPreferences =
-           novelPreferences ?? MemoryNovelReaderPreferencesStore();
+           novelPreferences ?? MemoryNovelReaderPreferencesStore(),
+       explorePreferences =
+           explorePreferences ?? MemoryExplorePreferencesStore();
 
   final FakeFactory factory;
 
@@ -37,6 +41,9 @@ class AppHarness {
 
   /// 小说阅读器偏好（内存）。
   final MemoryNovelReaderPreferencesStore novelPreferences;
+
+  /// 发现页上次的选择（内存）。
+  final MemoryExplorePreferencesStore explorePreferences;
   final AppDatabase db = openTestDatabase();
   late final SourceRegistry registry = SourceRegistry(db);
   late final ProviderContainer container = ProviderContainer(
@@ -53,6 +60,7 @@ class AppHarness {
       ),
       sourceVerificationProvider.overrideWithValue(verification),
       novelReaderPreferencesStoreProvider.overrideWithValue(novelPreferences),
+      explorePreferencesStoreProvider.overrideWithValue(explorePreferences),
       ...overrides,
     ],
   );
