@@ -885,7 +885,8 @@ M5 音乐复用同一 libmpv，不再增加体积。预编译库内部的组件�
 3. ~~**播放页完善**~~（已完成，见 §5.2「视频播放」）：选集与线路、上一集 / 下一集（含播完自动下一集）、播放进度记忆与书架 / 历史接入、
    清晰度切换。
 4. ~~**字幕**~~（已完成，见 §5.2「视频播放」与 §6.4.7）：外挂字幕（srt / vtt / ass）由 Dart 侧经源的网络层取回、解析并显示，
-   HLS 字幕轨可选。未做：ASS 样式（位置、颜色、特效）、声明式引擎的 `subtitles` 键。
+   HLS 字幕轨可选。未做：ASS 样式（位置、颜色、特效，[#54](https://github.com/Shiroha23/Tsumugi/issues/54)）、声明式引擎的 `subtitles` 键（[#53](https://github.com/Shiroha23/Tsumugi/issues/53)）。
+   另：`openStream` 取消后上游连接似乎没有断开（[#52](https://github.com/Shiroha23/Tsumugi/issues/52)，待核实）。
 5. **DASH**：**已决定（2026-11）：apiVersion 1 不支持**，已写入 source-spec §5。MPD 改写（`BaseURL`、`SegmentTemplate`、`SegmentList` 等）
    涉及代理的地址边界，推迟到有实际需求时单独评估（[#42](https://github.com/Shiroha23/Tsumugi/issues/42)）。
 6. ~~**移动端交互**~~（已完成，见 §5.2「视频播放」）：横竖屏全屏、触控手势、屏幕常亮、切到后台时暂停。
