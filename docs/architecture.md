@@ -94,8 +94,9 @@ lib/
     sync/                 # WebDAV 同步
   features/
     comic/  novel/  video/  music/
-    common/               # 各媒体共用的页面组件（作品详情、阅读顺序）
+    common/               # 各媒体共用的页面组件（作品详情、阅读顺序、列表条目行）
     library/  sources/  settings/  search/
+    explore/              # 发现页：选源 → 分类 → 可翻页列表（§5.1）
 test/
   fixtures/               # mock 页面与示例源（仅虚构站点）
   core/  sources/  shared/
@@ -176,6 +177,25 @@ UI(search) → SourceRegistry.enabled(type?) → 并发调用 source.search()
 新搜索递增代号，过时的结果被丢弃。分组保存已加载页、`hasMore` 与最近一次错误，「加载更多」/「重试」都请求下一页。
 错误按 §6 错误码显示中文提示（`sources/runtime/source_error_text.dart`）；`E_CHALLENGE` 显示「需要验证」与
 「去验证」入口（WebView 尚未接入，见 §5.3）。
+
+**发现页**（#57）：应用外壳的独立标签页「发现」（`/explore`，位于「搜索」与「源」之间），而不是搜索页内的切换。
+理由：搜索是“输入关键词、对所有源并发”，发现是“一次浏览一个源的分类”，两者的状态（关键词 / 媒体类型 vs. 源 / 分类 / 列表）
+和空状态都不同，放在一页里会让两套状态互相干扰；独立标签页也让发现页在切换标签时保持滚动位置与已加载的页。
+
+```
+UI(explore) → exploreSources（已启用、清单可用、提供发现页）→ 选源 → source.explore() → 分类
+           → 选分类 → source.exploreList(categoryId, page)，逐页追加 → 点条目进入详情（按源类型，与搜索一致）
+```
+
+- 实现：`features/explore/explore_controller.dart` 的 `ExploreController`；源列表来自注册表的 stream，所有媒体类型都列出
+  （下拉框显示「源名（类型）」）。“提供发现页”只看清单、不创建源实例：声明式为 `rules.explore` 非空；脚本为源码中出现
+  `explore` 这个名字（ES 模块导出名是静态的，不会漏掉源；误判的源调用时报 `E_UNSUPPORTED`，按出错显示）。
+- 换源 / 换分类递增代号，过时结果丢弃；每次调用受 `exploreTimeoutProvider` 限时（默认 30 s）。分类与列表的加载、出错、空状态与
+  搜索页一致：出错用 `SourceErrorView`（`E_CHALLENGE` / `E_LOGIN_REQUIRED` 可「打开验证页」，完成后自动重试），
+  翻页失败保留已加载条目并在列表末尾显示重试。AppBar 的「刷新」重新加载分类与当前分类的第一页。
+- 上次选择的源与分类保存在应用支持目录的 `explore.json`（`explorePreferencesStoreProvider`，测试中用内存），再次打开时恢复；
+  该源已被禁用 / 删除时改选第一个可用源，分类不存在时选第一个分类。
+- 列表条目行与“按类型打开详情”是 `features/common/search_item_tile.dart`，搜索页与发现页共用。
 
 漫画详情路由 `/comic/:sourceId/:itemId`，阅读器 `/comic/:sourceId/:itemId/read/:unitId`；`itemId` / `unitId`
 通常本身是路径，作为单个路径段时经 `Uri.encodeComponent`（`ComicRoutes`）。`Detail` 没有 `coverHeaders`：

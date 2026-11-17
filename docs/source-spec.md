@@ -72,7 +72,7 @@
 
 - `key` 只能包含 `[A-Za-z0-9_]`，长度 1–64，同一清单内不能重复；`label` 不能为空。
 - `select` 的 `options` 至少一项、都是非空字符串且不重复；`default` 不在 `options` 中视为错误。
-- `default` 的类型与上表不符视为错误（例如 `switch` 的 `default` 为 `"true"`）。
+- `default` 的类型与上表不符视为错误（例如 `switch` 的 `default` 为 `"true"`）。`"default": null` 等同于省略 `default`（取上表的缺省值）。
 - **未知 `type`**（将来的版本可能增加）：不算错误，导入时给出警告；该项不在界面中显示，
   脚本读到的始终是清单中的 `default`（原样，可为任意 JSON 值），模板中为其 JSON 编码（字符串除外，见下）。
 - 非 `select` 的项给出 `options` 时忽略。

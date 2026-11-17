@@ -146,6 +146,17 @@ void main() {
   group('取值', () {
     final m = SourceManifest.fromJson(fixtureJson());
 
+    test('"default": null 等同于省略', () {
+      final m = manifestWith({
+        'settings': [
+          {'key': 'b', 'label': 'x', 'type': 'switch', 'default': null},
+          {'key': 't', 'label': 'x', 'type': 'text', 'default': null},
+        ],
+      });
+      expect(m.validate(), isEmpty);
+      expect(effectiveSettings(m, const {}), {'b': false, 't': ''});
+    });
+
     test('缺省 default：select 取 options[0]，switch 取 false，text 取 ""', () {
       final m = manifestWith({
         'settings': [

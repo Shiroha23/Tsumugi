@@ -9,6 +9,7 @@
 /// | 路径 | 说明 |
 /// |---|---|
 /// | `GET /comic/search?q=&page=` | 漫画搜索（第 1、2 页有结果，之后为空页） |
+/// | `GET /comic/explore/<latest\|rank>?page=` | 漫画发现页分类：`latest` 第 1、2 页有结果，`rank` 只有第 1 页；之后为空页，未知分类 404 |
 /// | `GET /comic/book/1` | 漫画详情（章节倒序） |
 /// | `GET /comic/book/1/chapter/1` | 漫画章节（图片列表） |
 /// | `GET /novel/search?q=` | 小说搜索 |
@@ -302,6 +303,27 @@ class MockServer {
         _episodes[segments[4]] != null) {
       final (title, src) = _episodes[segments[4]]!;
       return _html(res, 'video/episode.html', {'title': title, 'src': src});
+    }
+
+    if (segments.length == 3 && path.startsWith('/comic/explore/')) {
+      final category = segments[2];
+      final page = int.tryParse(q['page'] ?? '1') ?? 1;
+      final pages = switch (category) {
+        'latest' => 2,
+        'rank' => 1,
+        _ => null,
+      };
+      if (pages == null) {
+        res.statusCode = HttpStatus.notFound;
+        return res.close();
+      }
+      return _html(
+        res,
+        page >= 1 && page <= pages
+            ? 'comic/explore_${category}_$page.html'
+            : 'comic/search_empty.html',
+        {'page': '$page'},
+      );
     }
 
     switch (path) {

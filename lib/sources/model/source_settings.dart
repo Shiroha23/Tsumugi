@@ -45,7 +45,7 @@ extension SourceSettingX on SourceSetting {
     null => false,
   };
 
-  /// 用户未修改时的值：清单 `default`，缺省时按类型取 `options[0]` / `false` / `""`。
+  /// 用户未修改时的值：清单 `default`，缺省（含 `"default": null`）时按类型取 `options[0]` / `false` / `""`。
   Object? get effectiveDefault => switch (kind) {
     SourceSettingType.select => defaultValue ?? options.firstOrNull,
     SourceSettingType.switchType => defaultValue ?? false,

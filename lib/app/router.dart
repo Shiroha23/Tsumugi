@@ -4,6 +4,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../features/comic/detail/comic_detail_page.dart';
 import '../features/comic/detail/comic_routes.dart';
 import '../features/comic/reader/reader_route.dart';
+import '../features/explore/explore_page.dart';
 import '../features/library/library_page.dart';
 import '../features/novel/detail/novel_detail_page.dart';
 import '../features/novel/novel_routes.dart';
@@ -23,6 +24,7 @@ part 'router.g.dart';
 abstract final class Routes {
   static const library = '/library';
   static const search = '/search';
+  static const explore = '/explore';
   static const sources = '/sources';
   static const settings = '/settings';
 
@@ -55,6 +57,14 @@ GoRouter router(Ref ref) {
               GoRoute(
                 path: Routes.search,
                 builder: (_, _) => const SearchPage(),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: Routes.explore,
+                builder: (_, _) => const ExplorePage(),
               ),
             ],
           ),

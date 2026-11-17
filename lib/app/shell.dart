@@ -14,6 +14,7 @@ class AppShell extends StatelessWidget {
       label: '书架',
     ),
     (icon: Icons.search_outlined, selected: Icons.search, label: '搜索'),
+    (icon: Icons.explore_outlined, selected: Icons.explore, label: '发现'),
     (icon: Icons.extension_outlined, selected: Icons.extension, label: '源'),
     (icon: Icons.settings_outlined, selected: Icons.settings, label: '设置'),
   ];

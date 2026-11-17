@@ -29,6 +29,36 @@
       },
       "hasMore": "css:.pagination .next"
     },
+    "explore": [
+      {
+        "name": "最新",
+        "request": {
+          "url": "/comic/explore/latest?page={{page}}"
+        },
+        "list": "css:.result-item",
+        "fields": {
+          "id": "css:a@href",
+          "title": "css:.title@text",
+          "cover": "css:img@data-src",
+          "subtitle": "css:.author@text"
+        },
+        "hasMore": "css:.pagination .next"
+      },
+      {
+        "name": "排行",
+        "request": {
+          "url": "/comic/explore/rank?page={{page}}"
+        },
+        "list": "css:.result-item",
+        "fields": {
+          "id": "css:a@href",
+          "title": "css:.title@text",
+          "cover": "css:img@data-src",
+          "subtitle": "css:.author@text"
+        },
+        "hasMore": "css:.pagination .next"
+      }
+    ],
     "detail": {
       "request": {
         "url": "{{id}}"
