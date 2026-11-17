@@ -38,11 +38,11 @@ const epubBodyTags = {
 ///
 /// 结构：`mimetype`（首个条目、不压缩）→ `META-INF/container.xml` → `OEBPS/content.opf`、
 /// `nav.xhtml`、`toc.ncx`、`style.css`、可选的封面（`cover.xhtml` + 图片）、书名页 `title.xhtml`、
-/// 每章一个 `chapter-NNNN.xhtml`。
+/// 每章一个 `chapter-NNNN.xhtml`、正文图片 `images/img-NNNN.<ext>`。
 ///
 /// 正文由 [NovelChapter] 的块重新生成，只使用 [epubBodyTags] 中的元素、不带任何属性
-/// （`img` 除外，且正文图片目前不嵌入）。
-// TODO(export): 正文图片目前以“［图片：alt］”占位，后续可经统一图片加载下载后嵌入。
+/// （`img` 除外，只有 `src` / `alt`）。正文图片取自 [ExportBook.images]（导出任务经统一图片加载
+/// 下载），按首次出现的顺序编号并登记到 OPF manifest；不在其中的图片以“［图片：alt］”占位。
 Uint8List buildNovelEpub(ExportBook book) {
   final info = book.info;
   final lang = _language(info.language);
@@ -60,11 +60,13 @@ Uint8List buildNovelEpub(ExportBook book) {
   ];
   final cover = book.cover;
   final coverHref = cover == null ? null : 'cover.${cover.extension}';
+  final images = _bodyImages(book);
+  final imageHrefs = {for (final i in images) i.url: i.href};
 
   void add(String name, String content) =>
       archive.add(ArchiveFile.string('OEBPS/$name', content));
 
-  add('content.opf', _opf(book, lang, chapters, coverHref));
+  add('content.opf', _opf(book, lang, chapters, coverHref, images));
   add('nav.xhtml', _nav(info, lang, chapters));
   add('toc.ncx', _ncx(book, chapters));
   add('style.css', _css);
@@ -81,7 +83,10 @@ Uint8List buildNovelEpub(ExportBook book) {
   }
   add('title.xhtml', _titlePage(book, lang));
   for (final c in chapters) {
-    add(c.href, _chapter(c.chapter, lang));
+    add(c.href, _chapter(c.chapter, lang, imageHrefs));
+  }
+  for (final i in images) {
+    archive.add(ArchiveFile.bytes('OEBPS/${i.href}', i.image.bytes));
   }
   return ZipEncoder().encodeBytes(archive, modified: info.exportedAt);
 }
@@ -108,11 +113,35 @@ rt { font-size: 0.6em; }
 
 typedef _ChapterEntry = ({String id, String href, ExportedChapter chapter});
 
+typedef _ImageEntry = ({String id, String href, String url, ExportImage image});
+
+/// 正文中实际出现、且已下载的图片，按首次出现的顺序编号（同一地址只出现一次）。
+List<_ImageEntry> _bodyImages(ExportBook book) {
+  final out = <_ImageEntry>[];
+  final seen = <String>{};
+  for (final c in book.chapters) {
+    for (final b in c.content.blocks) {
+      if (b is! NovelImage || !seen.add(b.url)) continue;
+      final image = book.images[b.url];
+      if (image == null) continue;
+      final n = _pad(out.length + 1);
+      out.add((
+        id: 'img-$n',
+        href: 'images/img-$n.${image.extension}',
+        url: b.url,
+        image: image,
+      ));
+    }
+  }
+  return out;
+}
+
 String _opf(
   ExportBook book,
   String lang,
   List<_ChapterEntry> chapters,
   String? coverHref,
+  List<_ImageEntry> images,
 ) {
   final info = book.info;
   final cover = book.cover;
@@ -173,6 +202,12 @@ String _opf(
     out.writeln(
       '    <item id="${c.id}" href="${c.href}" '
       'media-type="application/xhtml+xml"/>',
+    );
+  }
+  for (final i in images) {
+    out.writeln(
+      '    <item id="${i.id}" href="${i.href}" '
+      'media-type="${i.image.mediaType}"/>',
     );
   }
   out
@@ -263,30 +298,38 @@ String _titlePage(ExportBook book, String lang) {
   return _xhtml(lang: lang, title: info.title, body: body.toString());
 }
 
-String _chapter(ExportedChapter chapter, String lang) {
+String _chapter(
+  ExportedChapter chapter,
+  String lang,
+  Map<String, String> imageHrefs,
+) {
   final title = _title(chapter.title);
   final body = StringBuffer()..writeln('<h2>${_text(title)}</h2>');
   for (final block in chapter.content.blocks) {
-    body.writeln(_block(block));
+    body.writeln(_block(block, imageHrefs));
   }
   return _xhtml(lang: lang, title: title, body: body.toString());
 }
 
-String _block(NovelBlock block) => switch (block) {
-  NovelParagraph(:final kind) => switch (kind) {
-    NovelParagraphKind.body => '<p>${_spans(block.spans)}</p>',
-    NovelParagraphKind.quote =>
-      '<blockquote>${_spans(block.spans)}</blockquote>',
-    NovelParagraphKind.heading1 => '<h1>${_spans(block.spans)}</h1>',
-    NovelParagraphKind.heading2 => '<h2>${_spans(block.spans)}</h2>',
-    NovelParagraphKind.heading3 => '<h3>${_spans(block.spans)}</h3>',
-    NovelParagraphKind.heading4 => '<h4>${_spans(block.spans)}</h4>',
-  },
-  // 正文图片暂不嵌入（见 buildNovelEpub 的 TODO）。
-  NovelImage(:final alt) =>
-    '<p>${_text(alt == null ? '［图片］' : '［图片：$alt］')}</p>',
-  NovelDivider() => '<hr/>',
-};
+String _block(NovelBlock block, Map<String, String> imageHrefs) =>
+    switch (block) {
+      NovelParagraph(:final kind) => switch (kind) {
+        NovelParagraphKind.body => '<p>${_spans(block.spans)}</p>',
+        NovelParagraphKind.quote =>
+          '<blockquote>${_spans(block.spans)}</blockquote>',
+        NovelParagraphKind.heading1 => '<h1>${_spans(block.spans)}</h1>',
+        NovelParagraphKind.heading2 => '<h2>${_spans(block.spans)}</h2>',
+        NovelParagraphKind.heading3 => '<h3>${_spans(block.spans)}</h3>',
+        NovelParagraphKind.heading4 => '<h4>${_spans(block.spans)}</h4>',
+      },
+      NovelImage(:final url, :final alt) => switch (imageHrefs[url]) {
+        final href? =>
+          '<div><img src="$href" alt="${_attr(alt ?? '')}"/></div>',
+        // 未下载（失败 / 超限 / 格式不支持）：保留占位。
+        null => '<p>${_text(alt == null ? '［图片］' : '［图片：$alt］')}</p>',
+      },
+      NovelDivider() => '<hr/>',
+    };
 
 /// 行内片段：粗 / 斜 / 下划线 / 删除线分别为 `b` / `i` / `u` / `s`。
 /// 同一 `ruby` 分组（[NovelSpan.ruby]）的全部片段整体还原为一个 `<ruby>`：其中每段连续的基字后接

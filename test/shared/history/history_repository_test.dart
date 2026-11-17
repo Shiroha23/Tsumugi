@@ -168,4 +168,106 @@ void main() {
     await repo.removeHistory(_src, 'a');
     expect(await library.contains(_src, 'a'), isTrue);
   });
+
+  group('封面请求头（#24：快照取自 Detail 时不覆盖已有值）', () {
+    const cover = 'https://img.example.com/a.jpg';
+    const known = {'Referer': 'https://example.com/a'};
+    const fallback = {'User-Agent': 'tsumugi-test'};
+
+    LibraryItem snap({String? coverUrl = cover, Headers? headers}) =>
+        LibraryItem(
+          sourceId: _src,
+          itemId: 'a',
+          title: 'A',
+          mediaType: MediaType.comic,
+          cover: coverUrl,
+          coverHeaders: headers,
+        );
+
+    Future<Headers?> stored() async =>
+        (await repo.latestProgress(_src, 'a'))!.item.coverHeaders;
+
+    test('沿用已有历史中的请求头', () async {
+      await repo.recordProgress(
+        snap(headers: known),
+        unitId: 'c1',
+        unitTitle: '1',
+      );
+      await repo.recordProgress(
+        snap(),
+        unitId: 'c2',
+        unitTitle: '2',
+        defaultCoverHeaders: fallback,
+      );
+      expect(await stored(), known);
+    });
+
+    test('没有历史时沿用书架条目的请求头', () async {
+      await LibraryRepository(db).add(snap(headers: known));
+      await repo.recordProgress(
+        snap(),
+        unitId: 'c1',
+        unitTitle: '1',
+        defaultCoverHeaders: fallback,
+      );
+      expect(await stored(), known);
+    });
+
+    test('都没有时回退到默认 headers；默认为空时不带', () async {
+      await repo.recordProgress(
+        snap(),
+        unitId: 'c1',
+        unitTitle: '1',
+        defaultCoverHeaders: fallback,
+      );
+      expect(await stored(), fallback);
+
+      await repo.removeHistory(_src, 'a');
+      await repo.recordProgress(
+        snap(),
+        unitId: 'c1',
+        unitTitle: '1',
+        defaultCoverHeaders: const {},
+      );
+      expect(await stored(), isNull);
+    });
+
+    test('封面地址变化时不沿用旧请求头', () async {
+      await LibraryRepository(db).add(snap(headers: known));
+      await repo.recordProgress(
+        snap(headers: known),
+        unitId: 'c1',
+        unitTitle: '1',
+      );
+      await repo.recordProgress(
+        snap(coverUrl: 'https://img.example.com/b.jpg'),
+        unitId: 'c2',
+        unitTitle: '2',
+        defaultCoverHeaders: fallback,
+      );
+      expect(await stored(), fallback);
+    });
+
+    test('快照自带请求头时优先使用；没有封面时不带请求头', () async {
+      await repo.recordProgress(
+        snap(headers: known),
+        unitId: 'c1',
+        unitTitle: '1',
+      );
+      await repo.recordProgress(
+        snap(headers: fallback),
+        unitId: 'c1',
+        unitTitle: '1',
+      );
+      expect(await stored(), fallback);
+
+      await repo.recordProgress(
+        snap(coverUrl: null),
+        unitId: 'c1',
+        unitTitle: '1',
+        defaultCoverHeaders: fallback,
+      );
+      expect(await stored(), isNull);
+    });
+  });
 }

@@ -78,6 +78,9 @@ NovelProgressCallback novelReaderProgressSink(Ref ref) {
         cover: d.cover,
       );
     },
+    // `Detail` 没有封面请求头（#24）：由历史仓库沿用已知值，都没有时回退到源清单的默认 headers。
+    defaultCoverHeadersFor: (sourceId) =>
+        ref.read(novelReaderSourceProvider(sourceId)).value?.manifest.headers,
   );
   ref.onDispose(recorder.flush);
   return recorder.report;
@@ -92,22 +95,33 @@ class NovelProgressRecorder {
   NovelProgressRecorder({
     required this.history,
     required this.itemFor,
+    this.defaultCoverHeadersFor,
     this.interval = const Duration(seconds: 1),
   });
 
   final HistoryRepository history;
   final LibraryItem? Function(NovelReadingProgress progress) itemFor;
+
+  /// 条目快照没有封面请求头时的回退值（源清单的默认 headers），见
+  /// `HistoryRepository.recordProgress` 的 `defaultCoverHeaders`。
+  final Headers? Function(String sourceId)? defaultCoverHeadersFor;
   final Duration interval;
 
   final _lastWrite = <(String, String), DateTime>{};
   final _pending = <(String, String), (NovelReadingProgress, LibraryItem)>{};
   final _timers = <(String, String), Timer>{};
 
+  /// 最近一次 [report] 时取得的默认封面 headers（写入可能发生在容器销毁时，那时不能再读 provider）。
+  final _defaultCoverHeaders = <(String, String), Headers?>{};
+
   void report(NovelReadingProgress p) {
     if (p.unitTitle == null) return;
     final item = itemFor(p);
     if (item == null) return;
     final key = (p.sourceId, p.itemId);
+    if (defaultCoverHeadersFor case final f?) {
+      _defaultCoverHeaders[key] = f(p.sourceId) ?? _defaultCoverHeaders[key];
+    }
     if (_pending[key] case (final prev, final prevItem)
         when prev.unitId != p.unitId) {
       _timers.remove(key)?.cancel();
@@ -153,6 +167,7 @@ class NovelProgressRecorder {
           item,
           unitId: p.unitId,
           unitTitle: p.unitTitle!,
+          defaultCoverHeaders: _defaultCoverHeaders[key],
           position: p.position,
           markRead: p.atEnd,
         )

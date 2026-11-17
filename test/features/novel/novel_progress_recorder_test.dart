@@ -17,6 +17,7 @@ class _FakeHistory implements HistoryRepository {
     int? pageCount,
     int? position,
     bool markRead = false,
+    Headers? defaultCoverHeaders,
   }) async => writes.add((unitId, position, markRead));
 
   @override
