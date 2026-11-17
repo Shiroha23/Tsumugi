@@ -1,7 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dio/io.dart';
 import 'package:tsumugi/core/network/dio_source_http_client.dart';
+import 'package:tsumugi/core/network/source_session.dart';
 import 'package:tsumugi/core/storage/source_storage.dart';
 import 'package:tsumugi/sources/declarative/declarative_source_factory.dart';
 import 'package:tsumugi/sources/model/common.dart';
@@ -25,10 +27,19 @@ String mockSourceJson(String name, [Map<String, Object?> changes = const {}]) =>
     });
 
 /// 声明式与脚本引擎的真实工厂，HTTP 连接都接到本地 [server]。
-SourceFactories mockFactories(MockServer server) {
+SourceFactories mockFactories(MockServer server) =>
+    adapterFactories(() => mockAdapter(server));
+
+/// 同上，HTTP 连接经 [adapter] 建立（集成测试在设备上连接电脑上的 mock 服务器）；
+/// 给出 [session] 时各源使用它返回的会话（与应用一样，源实例与媒体代理共用 Cookie）。
+SourceFactories adapterFactories(
+  IOHttpClientAdapter Function() adapter, {
+  SourceSession Function(String sourceId)? session,
+}) {
   DioSourceHttpClient http(SourceManifest m) => DioSourceHttpClient(
     networkConfigFromManifest(m),
-    adapter: mockAdapter(server),
+    adapter: adapter(),
+    session: session?.call(m.id),
   );
   return SourceFactories([
     DeclarativeSourceFactory(httpClientFor: http, log: (_) {}),

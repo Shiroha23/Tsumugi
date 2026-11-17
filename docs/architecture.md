@@ -228,6 +228,8 @@ detail(id) → 章节/剧集/曲目列表 → content(itemId)
     全局记录难以跨源匹配；是否需要字幕也因源而异（有的源是硬字幕）。
   - **与清晰度 / 换集联动**：换清晰度时外挂字幕保持（同一份时间轴，不重新请求）；内嵌轨属于具体的流，换清晰度后按记住的标签重新自动选择：
     新流有该轨道时选上，没有（如 MP4）时按默认规则，换回原来的流时再选回内嵌轨。换集时按上一条重新选择。未选内嵌轨时让 libmpv 也不选字幕轨（`sid=no`），不多取字幕分片。
+    新流开始播放时总是再设置一次字幕轨：打开期间轨道列表经历“有 → 空 → 有”，media_kit 记录的当前轨道与 libmpv 实际的 `sid`
+    可能不一致（Android 真机上，换集后自动选择的内嵌轨曾经没有字幕）。
 
 **图片加载（M2，`shared/image/`）**：所有源图片（封面、漫画页）经 `SourceImageLoader` 加载：
 内存 LRU（编码后字节，默认 64 MB）→ 磁盘 LRU（应用缓存目录 `images/`，默认 512 MB，
@@ -679,8 +681,13 @@ Apache-2.0 与 GPL-3.0 兼容。**再分发（CI 产物、Release）需要满足
   画面 320×180、时长 6 s，并断言上游的每个请求都来自源客户端（虚构主机名、源的 UA，没有 libmpv 自己的 UA）。
   日志中的 `Failed to create EGL surface`（dxva2-egl 硬解互操作失败后回落）与 `Failed to create file cache` 不影响播放。
   完整界面（搜索 → 详情 → 播放页）的手动步骤见 PR 描述。
-- **Android**：本机与 CI 都能构建 release APK；真机验证步骤见 PR 描述（`flutter run -d <设备>` + 局域网 mock 服务器 + 导入
-  `mock_video_declarative.json`），尚待在真机上执行。
+- **Android**：本机与 CI 都能构建 release APK。**真机自动化测试**（M4 字幕 PR 起）：`integration_test/video_playback_test.dart`
+  可在设备上以 profile 模式运行——设备读不到电脑上的 `test/fixtures/`，先在电脑上
+  `dart run tool/mock_server/main.dart --host 0.0.0.0 --port 8081 --test-control`，再
+  `flutter drive --profile --driver=test_driver/integration_test.dart --target=integration_test/video_playback_test.dart -d <设备> --dart-define=TSUMUGI_MOCK_SERVER=<电脑局域网 IP>:8081`。
+  测试中的 HTTP 连接都经自定义连接接到该服务器（虚构主机名照常可用），请求记录经 `/__test/*` 控制接口读取（`integration_test/test_mock.dart`）；
+  `flutter test -d <设备>` 只支持 debug 模式。2026-11 在 Android 16 真机上全部通过（播放器 + 代理 9 项、播放页 2 项，含字幕）。
+  只剩手机上的“USB 安装”确认需要人工点击。
 - **Android 真机发现**（Android 16，HLS 测试素材；MP4 与单个 MPEG-TS 文件正常）：HLS 常常一开始就跳到结尾（首个进度 6.037 s → 播放完成，
   界面停在黑屏）。软解（`--dart-define=TSUMUGI_HWDEC=no`）同样出现，两个平台的 FFmpeg 都是 n6.0（Lavf 60.3.100），故与解码器、
   时间戳和 FFmpeg 版本无关。差别在 media_kit 的 Android 视频输出：拿到视频参数后才创建 Surface，随后重新初始化输出并 seek 到“当前位置”；

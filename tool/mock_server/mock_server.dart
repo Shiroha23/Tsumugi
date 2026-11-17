@@ -59,7 +59,18 @@ import 'dart:convert';
 import 'dart:io';
 
 class MockServer {
-  MockServer._(this._server, this.fixturesDir, this.rewriteFictionalHosts);
+  MockServer._(
+    this._server,
+    this.fixturesDir,
+    this.rewriteFictionalHosts,
+    this.testControl,
+  );
+
+  /// 在设备上运行集成测试用（`main.dart --test-control`）：开启 `/__test/*` 控制接口——
+  /// `GET /__test/requests`（已记录的请求，JSON）、`POST /__test/reset`（清空请求记录与计数器）、
+  /// `GET /__test/fixture?path=<test/fixtures 下的相对路径>`（原样返回测试数据，如虚构源清单）。
+  /// 控制接口的请求本身不记录。设备读不到电脑上的 `test/fixtures/`，测试经这些接口取数据与断言请求。
+  final bool testControl;
 
   /// 手动调试模式：把页面 / JSON 中虚构的图片主机（[fictionalImageOrigin]）换成本次请求所用的地址，
   /// 这样在桌面或真机上直接访问本服务器时，封面与漫画页也能加载。
@@ -94,6 +105,7 @@ class MockServer {
     InternetAddress? address,
     String? fixturesDir,
     bool rewriteFictionalHosts = false,
+    bool testControl = false,
   }) async {
     final dir = Directory(fixturesDir ?? 'test/fixtures/mock_site');
     if (!dir.existsSync()) {
@@ -103,7 +115,7 @@ class MockServer {
       address ?? InternetAddress.loopbackIPv4,
       port,
     );
-    final mock = MockServer._(server, dir, rewriteFictionalHosts);
+    final mock = MockServer._(server, dir, rewriteFictionalHosts, testControl);
     server.listen(mock._handle);
     return mock;
   }
@@ -115,6 +127,9 @@ class MockServer {
 
   Future<void> _handle(HttpRequest req) async {
     final body = await utf8.decoder.bind(req).join();
+    if (testControl && req.uri.path.startsWith('/__test/')) {
+      return _testControl(req);
+    }
     requests.add(
       RecordedRequest(
         method: req.method,
@@ -137,6 +152,45 @@ class MockServer {
         await req.response.close();
       } catch (_) {}
     }
+  }
+
+  Future<void> _testControl(HttpRequest req) async {
+    final res = req.response;
+    switch ((req.method, req.uri.path)) {
+      case ('GET', '/__test/requests'):
+        return _json(res, [
+          for (final r in requests)
+            {
+              'method': r.method,
+              'host': r.host,
+              'path': r.path,
+              'query': r.query,
+              'headers': r.headers,
+              'body': r.body,
+            },
+        ]);
+      case ('POST', '/__test/reset'):
+        requests.clear();
+        _flakyCounters.clear();
+        return res.close();
+      case ('GET', '/__test/fixture'):
+        final rel = req.uri.queryParameters['path'] ?? '';
+        // 只允许 test/fixtures 下的普通相对路径。
+        if (!RegExp(r'^[\w.-]+(/[\w.-]+)*$').hasMatch(rel) ||
+            rel.split('/').any((s) => s == '..' || s == '.')) {
+          res.statusCode = HttpStatus.badRequest;
+          return res.close();
+        }
+        final file = File('${fixturesDir.parent.path}/$rel');
+        if (!file.existsSync()) {
+          res.statusCode = HttpStatus.notFound;
+          return res.close();
+        }
+        res.add(await file.readAsBytes());
+        return res.close();
+    }
+    res.statusCode = HttpStatus.notFound;
+    return res.close();
   }
 
   /// 虚构源固定写的地址；[_source] 会把它换成请求实际使用的地址。

@@ -188,7 +188,15 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
       _subscriptions
         ..add(_player.stream.duration.listen((d) => log('duration $d')))
         ..add(_player.stream.buffering.listen((b) => log('buffering $b')))
-        ..add(_player.stream.completed.listen((c) => log('completed $c')));
+        ..add(_player.stream.completed.listen((c) => log('completed $c')))
+        ..add(
+          _player.stream.track.listen(
+            (t) => log('subtitle track ${t.subtitle.id}'),
+          ),
+        )
+        ..add(
+          _player.stream.subtitle.listen((t) => log('sub-text ${t.first}')),
+        );
     }
     ref.listenManual(
       mediaDetailProvider(widget.sourceId, widget.itemId),
@@ -460,11 +468,8 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
     setState(() => _loading = false);
     _report(immediate: true);
     _embeddedKnown = true;
-    if (_subAuto) {
-      _autoPickSubtitle();
-    } else {
-      _applyPlayerSubtitleTrack();
-    }
+    if (_subAuto) _autoPickSubtitle();
+    _applyPlayerSubtitleTrack(force: true);
     // 诊断：实际使用的解码路径（真机比较 hwdec 时看 logcat）。
     if (videoVerboseLogs) {
       Future<void>.delayed(const Duration(seconds: 1), () async {
@@ -575,7 +580,11 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
   }
 
   /// 让播放器选中与 [_subChoice] 相符的内嵌轨；未选内嵌轨时不选任何字幕轨（`sid=no`，不多取字幕分片）。
-  void _applyPlayerSubtitleTrack() {
+  ///
+  /// [force]：即使 media_kit 记录的当前轨道已相同也再设置一次。打开新流期间轨道列表会经历
+  /// “有 → 空 → 有”，media_kit 的 `state.track` 可能与 libmpv 实际的 `sid` 不一致（Android 真机上
+  /// 自动选择内嵌轨后没有字幕），新流开始播放时强制设置一次。
+  void _applyPlayerSubtitleTrack({bool force = false}) {
     final current = _player.state.track.subtitle;
     SubtitleTrack target = SubtitleTrack.no();
     if (_subChoice case SubtitleChoiceEmbedded(:final label)) {
@@ -587,7 +596,10 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
         orElse: SubtitleTrack.no,
       );
     }
-    if (current.id != target.id) {
+    if (force || current.id != target.id) {
+      if (videoVerboseLogs) {
+        debugPrint('[subtitle] set track ${current.id} → ${target.id}');
+      }
       _player.setSubtitleTrack(target).catchError((Object e) {
         debugPrint('[subtitle] set track: $e');
       });
