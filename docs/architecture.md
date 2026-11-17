@@ -111,7 +111,7 @@ docs/
 - **数据库**：`core/storage/app_database.dart` 中的 `AppDatabase`（drift），文件为应用支持目录下的
   `tsumugi.sqlite`（`getApplicationSupportDirectory`，不放在用户“文档”目录），SQL 在后台 isolate 执行。
   通过 `appDatabaseProvider` 获取，测试中用内存 SQLite 覆盖。
-- **迁移策略**：当前 `schemaVersion = 3`（v2 新增 `source_storage_entries`；v3 新增书架与进度三张表，见 §4.2）。每次改表结构：`schemaVersion` 加一 →
+- **迁移策略**：当前 `schemaVersion = 4`（v2 新增 `source_storage_entries`；v3 新增书架与进度三张表，见 §4.2；v4 为 `installed_sources` 新增 `settings_json`）。每次改表结构：`schemaVersion` 加一 →
   `dart run drift_dev make-migrations`（把新 schema 导出到 `drift_schemas/`，生成 steps 文件与
   `test/core/storage/migrations/` 下的迁移测试）→ 在 `onUpgrade` 中用 `stepByStep` 写每一步。
   已发布的 `drift_schemas/*.json` 不可修改。数据库版本高于客户端时拒绝打开（不支持降级）。
@@ -123,11 +123,20 @@ docs/
   保留启用状态与排序）、拒绝降级、启用 / 禁用、删除、组内重排、按 `MediaType` 过滤。
   导入分两步：`prepareImport` 生成预览（含将访问的主机 = baseUrl 主机 + allowedHosts、未知字段警告），
   用户确认后 `install`。
+- **源设置**（source-spec §1.1）：用户修改过的值存为 `installed_sources.settings_json`（JSON 对象，只含改过的键；
+  null 表示全部取默认），与清单在同一行，删除源时随行删除。`sources/model/source_settings.dart` 负责校验
+  （`validateSettingDefinitions`，由 `SourceManifest.validate()` 调用）、按清单过滤保存的值（`sanitizeSettingValues`）
+  与求有效值（`effectiveSettings`：保存的有效值，否则 `default`）。`install` 升级 / 覆盖时在同一事务中按新清单过滤旧值
+  （丢弃已删除的键、与旧清单相比类型变化、或对新清单不再有效的值）；`SourceRegistry.setSettings` 写入前同样过滤。
+  源页面菜单「源设置」（`features/sources/source_settings_dialog.dart`）按清单渲染 `select` / `switch` / `text`，
+  没有可显示项的源不出现该菜单项。
 - 注册表只管理清单。可运行的 `Source` 由按引擎注册的 `SourceFactory`（`sourceFactoriesProvider`）构造，
   声明式 / 脚本引擎各自实现并注册（`DeclarativeSourceFactory` 用 `SourceHttpFetcher` 把按源的
   `SourceHttpClient` 适配为引擎的 `Fetcher`；`ScriptSourceFactory`）。
 - **源运行时** `sources/runtime/`：`SourceRuntime`（`sourceRuntimeProvider`）按 sourceId 缓存实例，自行订阅注册表；
-  源被禁用 / 删除 / 升级（清单 sha256 变化）时移出缓存并释放（脚本源的 worker、HTTP 客户端），下次 `get` 时重建；
+  源被禁用 / 删除 / 升级（清单 sha256 变化）或源设置变化（有效值不同）时移出缓存并释放（脚本源的 worker、HTTP 客户端），
+  下次 `get` 时以新的清单与设置重建（`SourceFactory.create(manifest, settings: …)`）；释放会中断进行中的调用（取消请求、结束脚本 worker），
+  与升级时一致；
   创建失败不缓存。`sourceInstanceProvider(id)` 在实例被移除时自动失效，依赖它的 provider（如详情）随之重建。
   不直接用 stream provider 的 `.future`：Riverpod 3 会暂停没有监听者的 provider，`ref.read` 读取可能永远等不到值。
 - **脚本存储表** `source_storage_entries`：`tsumugi.storage` 的按源 KV（主键 `(sourceId, key)`，值为 JSON 文本），
@@ -362,6 +371,10 @@ tsumugi.ui.openWebView ────────┘   （单飞 / 节流） └�
     源页面每个源的菜单提供「清除 Cookie 与登录状态」：清空该源的 Cookie、UA 与最近挑战地址并删除文件。
 - **打开**：地址必须在该源的 `HostPolicy` 白名单内。`SourceErrorView` 打开的是最近一次触发挑战的地址
   （网络层检测到挑战时记录在会话中），没有时为 `baseUrl`；脚本打开的是它给出的地址。
+  源页面菜单「登录 / 打开网页」（[#59](https://github.com/Shiroha23/Tsumugi/issues/59)）经
+  `SourceVerification.openLoginPage` 打开清单的 `loginUrl`（缺省 `baseUrl`；清单校验已保证在白名单内，打开前再按
+  `HostPolicy` 检查一次，不通过则报 `E_HOST_NOT_ALLOWED`），与「打开验证页」走同一个 `SourceVerifier`（用户主动发起，
+  不受脚本节流限制，与进行中的验证页单飞），完成后只提示已保存 Cookie，不重试任何请求。
 - **导航限制**：主框架导航到白名单外（或非 http(s)）的地址时取消导航，页面顶部提示被阻止的主机；
   若某个平台未经 `shouldOverrideUrlLoading` 就开始加载（如部分重定向），`onLoadStart` 立即停止加载并显示同样的提示。
   子资源与 iframe 不受限制（验证组件常来自第三方主机），但它们的 Cookie 不会被同步。

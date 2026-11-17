@@ -39,8 +39,12 @@ class ScriptSourceFactory implements SourceFactory {
   SourceEngine get engine => SourceEngine.script;
 
   @override
-  Future<Source> create(SourceManifest manifest) => ScriptSource.create(
+  Future<Source> create(
+    SourceManifest manifest, {
+    Map<String, Object?> settings = const {},
+  }) => ScriptSource.create(
     manifest: manifest,
+    settings: settings,
     http: httpClientFor(manifest),
     storage: storage,
     ui: ui,

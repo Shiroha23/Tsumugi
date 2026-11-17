@@ -31,7 +31,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -51,6 +51,13 @@ class AppDatabase extends _$AppDatabase {
           await m.createTable(schema.itemProgressEntries);
           await m.createTable(schema.unitProgressEntries);
           await m.createIndex(schema.itemProgressUpdatedAt);
+        },
+        // v4：已安装源的用户设置（source-spec §1.1）。
+        from3To4: (m, schema) async {
+          await m.addColumn(
+            schema.installedSources,
+            schema.installedSources.settingsJson,
+          );
         },
       )(m, from, to);
     },

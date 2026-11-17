@@ -122,4 +122,15 @@ class FakeSourceVerification implements SourceVerification {
     if (pending case final p?) return p.future;
     return result;
   }
+
+  /// [openLoginPage] 收到的 sourceId。
+  final loginCalls = <String>[];
+
+  @override
+  Future<bool> openLoginPage(String sourceId) async {
+    loginCalls.add(sourceId);
+    if (error case final e?) throw e;
+    if (pending case final p?) return p.future;
+    return result;
+  }
 }

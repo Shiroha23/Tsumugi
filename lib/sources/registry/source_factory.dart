@@ -20,7 +20,12 @@ abstract interface class SourceFactory {
   SourceEngine get engine;
 
   /// [manifest] 已通过校验，且 `manifest.engine == engine`。
-  Future<Source> create(SourceManifest manifest);
+  ///
+  /// [settings] 为用户设置值（source-spec §1.1）；缺少的键取清单默认值。
+  Future<Source> create(
+    SourceManifest manifest, {
+    Map<String, Object?> settings = const {},
+  });
 }
 
 /// 已注册的工厂，按引擎索引。
@@ -33,7 +38,10 @@ final class SourceFactories {
   bool supports(SourceEngine engine) => _byEngine.containsKey(engine);
 
   /// 没有对应引擎的工厂时抛出 [SourceErrorCode.unsupported]。
-  Future<Source> create(SourceManifest manifest) {
+  Future<Source> create(
+    SourceManifest manifest, {
+    Map<String, Object?> settings = const {},
+  }) {
     final factory = _byEngine[manifest.engine];
     if (factory == null) {
       throw SourceException(
@@ -41,7 +49,7 @@ final class SourceFactories {
         '尚未支持 ${manifest.engine.name} 引擎',
       );
     }
-    return factory.create(manifest);
+    return factory.create(manifest, settings: settings);
   }
 }
 

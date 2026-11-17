@@ -1,0 +1,26 @@
+{
+  "apiVersion": 1,
+  "id": "com.example.settings",
+  "name": "设置示例",
+  "type": "comic",
+  "version": "1.0.0",
+  "author": "tsumugi",
+  "description": "虚构声明式源：覆盖 source-spec §1.1 的全部设置类型与 loginUrl。",
+  "baseUrl": "https://example.com",
+  "loginUrl": "/account/login",
+  "allowedHosts": ["*.example.com"],
+  "settings": [
+    { "key": "quality", "label": "画质", "type": "select", "options": ["high", "mid", "low"], "default": "mid" },
+    { "key": "hd", "label": "高清封面", "type": "switch", "default": true },
+    { "key": "mirror", "label": "镜像路径", "type": "text" },
+    { "key": "future", "label": "将来的类型", "type": "slider", "default": 3 }
+  ],
+  "engine": "declarative",
+  "rules": {
+    "search": {
+      "request": { "url": "/search?q={{keyword}}&quality={{setting.quality}}&hd={{setting.hd}}&m={{setting.mirror}}" },
+      "list": "css:.result-item",
+      "fields": { "id": "css:a@href", "title": "css:.title@text" }
+    }
+  }
+}

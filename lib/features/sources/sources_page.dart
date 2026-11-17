@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../shared/webview/providers.dart';
 import '../../shared/widgets/empty_state.dart';
 import '../../sources/model/common.dart';
+import '../../sources/model/source_settings.dart';
+import '../../sources/runtime/source_error_text.dart';
 import '../../sources/registry/providers.dart';
 import '../../sources/session/source_sessions.dart';
 import 'import_source_dialog.dart';
 import 'labels.dart';
+import 'source_settings_dialog.dart';
 
 class SourcesPage extends ConsumerStatefulWidget {
   const SourcesPage({super.key});
@@ -82,6 +86,32 @@ class _SourcesPageState extends ConsumerState<SourcesPage> {
       ..showSnackBar(
         SnackBar(content: Text('已清除「${source.name}」的 Cookie 与登录状态')),
       );
+  }
+
+  Future<void> _openSettings(InstalledSource source) async {
+    final saved = await showSourceSettingsDialog(context, source);
+    if (saved != true || !mounted) return;
+    _showSnack('已保存「${source.name}」的设置，下一次请求时生效');
+  }
+
+  /// 「登录 / 打开网页」：在 WebView 中打开清单的 `loginUrl`（architecture §5.3）。
+  Future<void> _openLogin(InstalledSource source) async {
+    try {
+      final done = await ref
+          .read(sourceVerificationProvider)
+          .openLoginPage(source.id);
+      if (done && mounted) _showSnack('已保存「${source.name}」的 Cookie 与登录状态');
+    } on Object catch (e) {
+      if (!mounted) return;
+      final info = describeSourceError(e);
+      _showSnack('无法打开登录页：${info.detail ?? info.title}');
+    }
+  }
+
+  void _showSnack(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   void _reorder(MediaType type, List<InstalledSource> group, int from, int to) {
@@ -183,6 +213,8 @@ class _SourcesPageState extends ConsumerState<SourcesPage> {
               ref.read(sourceRegistryProvider).setEnabled(s.id, v),
           onRemove: () => _confirmRemove(s),
           onClearSession: () => _confirmClearSession(s),
+          onSettings: () => _openSettings(s),
+          onLogin: () => _openLogin(s),
         );
       },
     );
@@ -218,6 +250,8 @@ class _SourceTile extends StatelessWidget {
     required this.onEnabledChanged,
     required this.onRemove,
     required this.onClearSession,
+    required this.onSettings,
+    required this.onLogin,
   });
 
   final int index;
@@ -225,6 +259,8 @@ class _SourceTile extends StatelessWidget {
   final ValueChanged<bool> onEnabledChanged;
   final VoidCallback onRemove;
   final VoidCallback onClearSession;
+  final VoidCallback onSettings;
+  final VoidCallback onLogin;
 
   @override
   Widget build(BuildContext context) {
@@ -265,18 +301,36 @@ class _SourceTile extends StatelessWidget {
             PopupMenuButton<_SourceAction>(
               tooltip: '源菜单',
               onSelected: (action) => switch (action) {
+                _SourceAction.settings => onSettings(),
+                _SourceAction.login => onLogin(),
                 _SourceAction.clearSession => onClearSession(),
                 _SourceAction.remove => onRemove(),
               },
-              itemBuilder: (context) => const [
-                PopupMenuItem(
+              itemBuilder: (context) => [
+                if (m != null && editableSettings(m).isNotEmpty)
+                  const PopupMenuItem(
+                    value: _SourceAction.settings,
+                    child: ListTile(
+                      leading: Icon(Icons.tune),
+                      title: Text('源设置'),
+                    ),
+                  ),
+                if (m != null)
+                  const PopupMenuItem(
+                    value: _SourceAction.login,
+                    child: ListTile(
+                      leading: Icon(Icons.login),
+                      title: Text('登录 / 打开网页'),
+                    ),
+                  ),
+                const PopupMenuItem(
                   value: _SourceAction.clearSession,
                   child: ListTile(
                     leading: Icon(Icons.cookie_outlined),
                     title: Text('清除 Cookie 与登录状态'),
                   ),
                 ),
-                PopupMenuItem(
+                const PopupMenuItem(
                   value: _SourceAction.remove,
                   child: ListTile(
                     leading: Icon(Icons.delete_outline),
@@ -299,4 +353,4 @@ class _SourceTile extends StatelessWidget {
   }
 }
 
-enum _SourceAction { clearSession, remove }
+enum _SourceAction { settings, login, clearSession, remove }
