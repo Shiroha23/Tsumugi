@@ -881,7 +881,7 @@ M5 音乐复用同一 libmpv，不再增加体积。预编译库内部的组件�
 1. ~~**第三方许可证与源码分发**~~（M4-B 完成）：`THIRD_PARTY_NOTICES.md`、「关于」页的许可证列表、Release 工作流上传原生组件源码包、
    不再打包 `d3dcompiler_47.dll`，见 §6.4.1。升级 `media_kit_libs_*_video` 时须同步更新 `THIRD_PARTY_NOTICES.md`、
    `assets/licenses/` 与 `tool/release/native_sources.tsv`。
-2. **原生库更新**：评估自建 / fork 的 libmpv 构建（三平台 LGPL、只留所需组件），替换过期的预编译库。
+2. **原生库更新**（[#56](https://github.com/Shiroha23/Tsumugi/issues/56)）：评估自建 / fork 的 libmpv 构建（三平台 LGPL、只留所需组件），替换过期的预编译库；上游所有发布仍是 FFmpeg 6.0，另一备选是改用各平台系统播放器，见该 issue。
 3. ~~**播放页完善**~~（已完成，见 §5.2「视频播放」）：选集与线路、上一集 / 下一集（含播完自动下一集）、播放进度记忆与书架 / 历史接入、
    清晰度切换。
 4. ~~**字幕**~~（已完成，见 §5.2「视频播放」与 §6.4.7）：外挂字幕（srt / vtt / ass）由 Dart 侧经源的网络层取回、解析并显示，
