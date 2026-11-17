@@ -10,7 +10,7 @@ import 'dart:typed_data';
 /// 可能要等很久（限速排队、上游响应慢），因此用 [HttpServer.listenOn] 接上本类：每个连接都由本类
 /// 一直读取（数据转交 dart:io，按它的节奏交付），读到 EOF 或出错即视为对方已关闭。
 ///
-/// 对方只关闭写方向（半关闭）也会被视为断开；播放器（FFmpeg）不会这样做。
+/// 对方只关闭写方向（半关闭）也会被视为断开（一般 HTTP 客户端发完请求后不会这样做）。
 class WatchedServerSocket extends Stream<Socket> implements ServerSocket {
   WatchedServerSocket._(this._inner);
 
@@ -18,14 +18,18 @@ class WatchedServerSocket extends Stream<Socket> implements ServerSocket {
       WatchedServerSocket._(await ServerSocket.bind(address, port));
 
   final ServerSocket _inner;
-  final _byRemotePort = <int, _WatchedSocket>{};
+  final _byRemote = <(String, int), _WatchedSocket>{};
 
-  /// 对方端口为 [remotePort] 的连接被对方关闭时调用 [onClosed]（最多一次）；没有该连接（或已关闭）时
-  /// 立即调用。返回的函数注销监听（同一连接上可先后处理很多请求，处理完一个就应注销）。
+  /// 对方地址为 [remoteAddress]、端口为 [remotePort] 的连接被对方关闭时调用 [onClosed]（最多一次）；
+  /// 没有该连接（或已关闭）时立即调用。返回的函数注销监听（同一连接上可先后处理很多请求，处理完一个就应注销）。
   ///
-  /// 在回环地址上，同一时刻每个连接的对方端口各不相同。
-  void Function() watch(int remotePort, void Function() onClosed) {
-    final socket = _byRemotePort[remotePort];
+  /// 同一时刻每个连接的（对方地址, 对方端口）各不相同（本机一侧的地址与端口固定）。
+  void Function() watch(
+    InternetAddress remoteAddress,
+    int remotePort,
+    void Function() onClosed,
+  ) {
+    final socket = _byRemote[(remoteAddress.address, remotePort)];
     if (socket == null || socket._peerClosed.isCompleted) {
       onClosed();
       return () {};
@@ -41,14 +45,21 @@ class WatchedServerSocket extends Stream<Socket> implements ServerSocket {
     void Function()? onDone,
     bool? cancelOnError,
   }) => _inner
-      .map<Socket>((s) {
+      .expand<Socket>((s) {
+        final (String, int) key;
+        try {
+          key = (s.remoteAddress.address, s.remotePort);
+        } on Object {
+          // 接受之后立即被对方重置：已经无法使用。
+          s.destroy();
+          return const [];
+        }
         final w = _WatchedSocket(s);
-        final port = s.remotePort;
-        _byRemotePort[port] = w;
+        _byRemote[key] = w;
         w._peerClosed.future.whenComplete(() {
-          if (identical(_byRemotePort[port], w)) _byRemotePort.remove(port);
+          if (identical(_byRemote[key], w)) _byRemote.remove(key);
         });
-        return w;
+        return [w];
       })
       .listen(
         onData,
@@ -75,13 +86,11 @@ class _WatchedSocket extends Stream<Uint8List> implements Socket {
   _WatchedSocket(this._inner) {
     _sub = _inner.listen(
       (data) {
+        // 已读取、尚未交付给订阅方的数据过多（只接受 GET / HEAD，正常情况下只有很少的流水线请求）时
+        // 暂停底层读取（TCP 背压），此时暂时察觉不到断开；交付之后恢复。
+        _buffered += data.length;
         _out.add(data);
-        // 订阅方暂停期间缓存的数据过多（只接受 GET / HEAD，正常情况下只有很少的流水线请求）时
-        // 也暂停底层读取，此时暂时察觉不到断开。
-        if (_out.isPaused) {
-          _buffered += data.length;
-          if (_buffered > _maxBuffered && !_sub.isPaused) _sub.pause();
-        }
+        if (_buffered > _maxBuffered && !_sub.isPaused) _sub.pause();
       },
       onError: (Object e, StackTrace st) {
         _markClosed();
@@ -99,12 +108,10 @@ class _WatchedSocket extends Stream<Uint8List> implements Socket {
   final Socket _inner;
   late final StreamSubscription<Uint8List> _sub;
   late final _out = StreamController<Uint8List>(
-    onPause: () {},
-    onResume: () {
-      _buffered = 0;
-      if (_sub.isPaused) _sub.resume();
+    onCancel: () {
+      _markClosed();
+      return _sub.cancel();
     },
-    onCancel: () => _sub.cancel(),
   );
   int _buffered = 0;
   final _peerClosed = Completer<void>();
@@ -126,12 +133,19 @@ class _WatchedSocket extends Stream<Uint8List> implements Socket {
     Function? onError,
     void Function()? onDone,
     bool? cancelOnError,
-  }) => _out.stream.listen(
-    onData,
-    onError: onError,
-    onDone: onDone,
-    cancelOnError: cancelOnError,
-  );
+  }) => _out.stream
+      .map((data) {
+        // 在交付给订阅方时扣减（订阅方暂停时 map 也暂停，数据留在 [_out] 中）。
+        _buffered -= data.length;
+        if (_buffered <= _maxBuffered && _sub.isPaused) _sub.resume();
+        return data;
+      })
+      .listen(
+        onData,
+        onError: onError,
+        onDone: onDone,
+        cancelOnError: cancelOnError,
+      );
 
   @override
   void destroy() {

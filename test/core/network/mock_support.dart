@@ -51,7 +51,8 @@ DioSourceHttpClient mockClient(
 
 /// 记录取得令牌次数的令牌桶（不改变限速行为）。
 class CountingBucket extends TokenBucket {
-  CountingBucket(this.limit) : super(requests: limit.requests, per: limit.per);
+  CountingBucket(this.limit, {super.clock, super.delay})
+    : super(requests: limit.requests, per: limit.per);
 
   final RateLimitConfig limit;
   int acquired = 0;
@@ -104,7 +105,7 @@ class VirtualClockSession {
   VirtualClockSession() {
     session = SourceSession(
       newRateLimiter: (c) {
-        final b = _VirtualBucket(c, clock);
+        final b = CountingBucket(c, clock: () => clock.now, delay: clock.delay);
         buckets.add(b);
         return b;
       },
@@ -113,28 +114,8 @@ class VirtualClockSession {
 
   final clock = VirtualClock();
   late final SourceSession session;
-  final buckets = <_VirtualBucket>[];
+  final buckets = <CountingBucket>[];
 
   int acquiredWith(RateLimitConfig c) =>
       buckets.where((b) => b.limit == c).fold(0, (sum, b) => sum + b.acquired);
-}
-
-class _VirtualBucket extends TokenBucket {
-  _VirtualBucket(this.limit, VirtualClock clock)
-    : super(
-        requests: limit.requests,
-        per: limit.per,
-        clock: () => clock.now,
-        delay: clock.delay,
-      );
-
-  final RateLimitConfig limit;
-  int acquired = 0;
-
-  @override
-  Future<bool> acquire({Future<void>? abort}) async {
-    final ok = await super.acquire(abort: abort);
-    if (ok) acquired++;
-    return ok;
-  }
 }

@@ -555,6 +555,66 @@ void main() {
         expect(upstream('/video/media/hls/master.m3u8').length, before);
       });
 
+      test('AES-128 分片排队中播放器断开：共用的取数随之取消，之后的请求重新取', () async {
+        final session = proxy.open(
+          client: limited,
+          url: Uri.parse(
+            'http://video.example.com/video/media/hls/master.m3u8',
+          ),
+        );
+        // 主 / 子播放列表计入 rateLimit（已用完）：推进虚拟时钟放行。
+        final master = player.text(session.url);
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        virtual.clock.advance(const Duration(seconds: 30));
+        final variant = proxiedUris(await master).single;
+        final media = player.text(variant);
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        virtual.clock.advance(const Duration(seconds: 30));
+        final segment = proxiedUris(await media)[1];
+        // 探测已取得并缓存密钥；用完媒体配额，之后的分片取数都要排队。
+        final mediaBucket = virtual.session.rateLimiter(
+          null,
+          lane: RateLimitLane.media,
+        )!;
+        while (await mediaBucket.acquire(
+          abort: Future<void>.delayed(const Duration(milliseconds: 50)),
+        )) {}
+        final acquired = virtual.acquiredWith(SourceSession.mediaRateLimit);
+        final hits = upstream('/video/media/hls/seg1.ts').length;
+
+        final url = segment;
+        final raw = await Socket.connect(url.host, url.port);
+        raw.write(
+          'GET ${url.path} HTTP/1.1\r\nhost: ${url.host}:${url.port}\r\n\r\n',
+        );
+        raw.listen((_) {}, onError: (Object _) {});
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        expect(session.inFlight, 2); // 播放器请求 + 共用的取数
+        raw.destroy();
+        final deadline = DateTime.now().add(const Duration(milliseconds: 500));
+        while (session.inFlight > 0 && DateTime.now().isBefore(deadline)) {
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+        expect(session.inFlight, 0);
+
+        // 被放弃的取数不消耗令牌、不发请求；再次请求时重新取得。共用的取数排队期间，等它的分片请求
+        // 的时限同样暂停：排队超过 prepareTimeout（800 ms）之后照常返回。
+        final again = player.get(segment);
+        await Future<void>.delayed(const Duration(milliseconds: 1500));
+        expect(session.inFlight, 2);
+        virtual.clock.advance(const Duration(seconds: 1));
+        final (status, _, plain) = await again.timeout(
+          const Duration(seconds: 5),
+        );
+        expect(status, 200);
+        expect(plain[0], 0x47);
+        expect(
+          virtual.acquiredWith(SourceSession.mediaRateLimit),
+          acquired + 1,
+        );
+        expect(upstream('/video/media/hls/seg1.ts').length, hits + 1);
+      });
+
       test('拿到令牌之后才开始计时：之后仍受 prepareTimeout 约束', () async {
         final session = proxy.open(
           client: limited,

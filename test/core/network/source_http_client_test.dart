@@ -738,6 +738,24 @@ void main() {
       expect(virtual.acquiredWith(limit), 2);
     });
 
+    test('onRateLimitWait：重试与重定向的每次尝试各调用一对', () async {
+      const limit = RateLimitConfig(requests: 100, per: Duration(seconds: 1));
+      final limited = mockClient(server, rateLimit: limit);
+      addTearDown(limited.close);
+      final events = <bool>[];
+      (await limited.openStream(
+        const NetRequest('/flaky?key=wait-pairs&fail=2'),
+        onRateLimitWait: events.add,
+      )).cancel();
+      expect(events, [true, false, true, false, true, false]);
+      events.clear();
+      (await limited.openStream(
+        const NetRequest('/redirect/chain?n=2'),
+        onRateLimitWait: events.add,
+      )).cancel();
+      expect(events, [true, false, true, false, true, false]);
+    });
+
     test('cancel() 放弃响应体', () async {
       final res = await client.openStream(
         const NetRequest('/slow-body?ms=2000'),
