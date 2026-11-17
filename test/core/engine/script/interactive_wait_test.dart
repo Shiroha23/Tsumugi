@@ -8,9 +8,8 @@ import 'package:tsumugi/core/engine/script/script_runtime.dart';
 
 /// #23：交互式宿主调用（`ui.openWebView`）的等待不计入 [ScriptLimits.wallTime]，
 /// 改按 [ScriptLimits.interactiveTime] 单独计时（docs/source-spec.md §4.4）。
-final _script = File(
-  'test/fixtures/scripts/interactive_wait.js',
-).readAsStringSync();
+final _script = File('test/fixtures/scripts/interactive_wait.js')
+    .readAsStringSync();
 
 const _limits = ScriptLimits(
   wallTime: Duration(milliseconds: 300),
@@ -66,9 +65,12 @@ void main() {
 
     tearDown(() => rt.dispose());
 
-    test('interactive wait longer than wallTime does not hit E_LIMIT', () async {
-      expect(await rt.call('login', [600]), 'ok');
-    });
+    test(
+      'interactive wait longer than wallTime does not hit E_LIMIT',
+      () async {
+        expect(await rt.call('login', [600]), 'ok');
+      },
+    );
 
     test('interactive wait is capped by interactiveTime', () async {
       final sw = Stopwatch()..start();
@@ -91,28 +93,28 @@ void main() {
 
     test('wall clock resumes after a failed interactive call', () async {
       expect(await rt.call('loginFails', [400, 100]), 'E_CHALLENGE');
-      await expectLater(
-        rt.call('loginFails', [100, 400]),
-        _limit('Wall time'),
-      );
+      await expectLater(rt.call('loginFails', [100, 400]), _limit('Wall time'));
     });
 
-    test('plain requests during the interactive wait count toward wallTime', () async {
-      // 普通请求 400 ms 与交互等待重叠，仍计入 300 ms 总时长。
-      final sw = Stopwatch()..start();
-      await expectLater(
-        rt.call('loginAlongside', [600, 400]),
-        _limit('Wall time'),
-      );
-      expect(sw.elapsed, lessThan(const Duration(milliseconds: 600)));
-      // 普通请求 100 ms 结束后只剩交互等待：暂停总时长。
-      expect(await rt.call('loginAlongside', [600, 100]), 'ok');
-      // 永不结束的普通请求：总时长从不暂停。
-      await expectLater(
-        rt.call('loginAlongside', [600, -1]),
-        _limit('Wall time'),
-      );
-    });
+    test(
+      'plain requests during the interactive wait count toward wallTime',
+      () async {
+        // 普通请求 400 ms 与交互等待重叠，仍计入 300 ms 总时长。
+        final sw = Stopwatch()..start();
+        await expectLater(
+          rt.call('loginAlongside', [600, 400]),
+          _limit('Wall time'),
+        );
+        expect(sw.elapsed, lessThan(const Duration(milliseconds: 600)));
+        // 普通请求 100 ms 结束后只剩交互等待：暂停总时长。
+        expect(await rt.call('loginAlongside', [600, 100]), 'ok');
+        // 永不结束的普通请求：总时长从不暂停。
+        await expectLater(
+          rt.call('loginAlongside', [600, -1]),
+          _limit('Wall time'),
+        );
+      },
+    );
 
     test('concurrent interactive calls share one budget', () async {
       expect(await rt.call('loginConcurrently', [400, 600]), 'ok');
@@ -133,12 +135,15 @@ void main() {
       expect(await created.call('login', [600]), 'ok');
     });
 
-    test('non-interactive host functions keep counting toward wallTime', () async {
-      final plain = QuickJsScriptRuntime(host: _host, limits: _limits);
-      addTearDown(plain.dispose);
-      await plain.load(_script);
-      await expectLater(plain.call('login', [600]), _limit('Wall time'));
-    });
+    test(
+      'non-interactive host functions keep counting toward wallTime',
+      () async {
+        final plain = QuickJsScriptRuntime(host: _host, limits: _limits);
+        addTearDown(plain.dispose);
+        await plain.load(_script);
+        await expectLater(plain.call('login', [600]), _limit('Wall time'));
+      },
+    );
 
     test('interactive paths must be host functions', () {
       expect(
@@ -159,17 +164,23 @@ void main() {
 
     Matcher unresponsive = _limit('unresponsive');
 
-    test('watchdog still fires when the worker hangs during the wait', () async {
-      final rt = create();
-      addTearDown(rt.dispose);
-      await rt.load(_script);
-      // 看门狗上限：interactiveTime + hangGrace + cpuTime = 1.3 s。
-      final sw = Stopwatch()..start();
-      await expectLater(rt.call('hangDuringLogin', [5000, 4000]), unresponsive);
-      expect(sw.elapsed, lessThan(const Duration(seconds: 3)));
-      expect(await rt.call('login', [10]), 'ok');
-      expect(rt.restarts, 1);
-    });
+    test(
+      'watchdog still fires when the worker hangs during the wait',
+      () async {
+        final rt = create();
+        addTearDown(rt.dispose);
+        await rt.load(_script);
+        // 看门狗上限：interactiveTime + hangGrace + cpuTime = 1.3 s。
+        final sw = Stopwatch()..start();
+        await expectLater(
+          rt.call('hangDuringLogin', [5000, 4000]),
+          unresponsive,
+        );
+        expect(sw.elapsed, lessThan(const Duration(seconds: 3)));
+        expect(await rt.call('login', [10]), 'ok');
+        expect(rt.restarts, 1);
+      },
+    );
 
     test('watchdog falls back to wallTime after the wait ends', () async {
       final rt = create();

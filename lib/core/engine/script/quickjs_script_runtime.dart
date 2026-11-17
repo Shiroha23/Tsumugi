@@ -589,8 +589,7 @@ class _Call {
 
   Duration get _cpuLeft => limits.cpuTime - cpu.elapsed;
   Duration get _wallLeft => limits.wallTime - wall.elapsed;
-  Duration get _interactiveLeft =>
-      limits.interactiveTime - interactive.elapsed;
+  Duration get _interactiveLeft => limits.interactiveTime - interactive.elapsed;
 
   bool get _paused => _interactiveDepth > 0 && _plainDepth == 0;
 
