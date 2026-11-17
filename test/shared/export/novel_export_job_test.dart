@@ -345,6 +345,48 @@ void main() {
       );
     });
 
+    test('同一地址只下载一次，使用首次出现时的 headers', () async {
+      SourceManifest withHeaders(String v) {
+        final json = jsonDecode(
+          fakeManifestJson(_sourceId, name: '小说源', type: MediaType.novel),
+        ) as Map<String, dynamic>;
+        json['headers'] = {'X-Fictional': v};
+        return SourceManifest.fromJson(json);
+      }
+
+      // 每章重新取源实例：第一章与第二章的默认 headers 不同（例如中途升级了源）。
+      final sources = [
+        for (final v in ['first', 'second'])
+          FakeSource(
+            withHeaders(v),
+            onContent: (id) async => NovelContent(
+              html: true,
+              text: '<img src="$img/a.png" alt="甲">',
+            ),
+          ),
+      ];
+      var calls = 0;
+      final seen = <String, Headers?>{};
+      final file = await NovelExportJob(
+        request: NovelExportRequest(
+          sourceId: _sourceId,
+          itemId: _detail.id,
+          detail: _detail,
+          units: _detail.units.sublist(0, 2),
+          format: ExportFormat.epub,
+        ),
+        sourceFor: (_) async => sources[calls++ == 0 ? 0 : 1],
+        loadImage: (_, url, headers) async {
+          seen[url] = headers;
+          return _png;
+        },
+        clock: () => DateTime(2026, 11, 13, 9),
+        buildInIsolate: false,
+      ).run();
+      expect(seen['$img/a.png'], {'X-Fictional': 'first'});
+      expect(_imageEntries(file!), ['OEBPS/images/img-0001.png']);
+    });
+
     test('总大小达到上限后不再下载其余图片', () async {
       final requested = <String>[];
       final file = await _job(

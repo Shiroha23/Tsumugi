@@ -412,11 +412,15 @@ class NovelExportJob extends ChangeNotifier {
   ) async {
     final load = loadImage;
     if (request.format != ExportFormat.epub || load == null) return const {};
-    final refs = <String, Headers?>{
-      for (final c in chapters)
-        for (final b in c.content.blocks)
-          if (b is NovelImage) b.url: c.content.imageHeaders,
-    };
+    // 同一地址以首次出现时的 headers 为准（各章的源实例可能不同，见 [sourceFor]）。
+    final refs = <String, Headers?>{};
+    for (final c in chapters) {
+      for (final b in c.content.blocks) {
+        if (b is NovelImage) {
+          refs.putIfAbsent(b.url, () => c.content.imageHeaders);
+        }
+      }
+    }
     final out = <String, ExportImage>{};
     var total = 0;
     for (final MapEntry(key: url, value: headers) in refs.entries) {
