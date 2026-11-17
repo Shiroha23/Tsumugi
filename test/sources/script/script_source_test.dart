@@ -194,9 +194,12 @@ void main() {
     test('explore and user settings', () async {
       final source = await open(_comicManifest(), settings: {'quality': 'low'});
       expect(await source.explore(), [
-        const ExploreCategory(id: 'all', name: '全部'),
+        const ExploreCategory(id: 'latest', name: '最新'),
+        const ExploreCategory(id: 'rank', name: '排行'),
       ]);
-      expect((await source.exploreList('all', 1)).items, hasLength(2));
+      final latest = await source.exploreList('latest', 1);
+      expect(latest.items, hasLength(2));
+      expect(latest.hasMore, isTrue);
       final content =
           await source.content('/comic/book/1/chapter/1') as ComicContent;
       expect(content.images.first.headers?['X-Quality'], 'low');

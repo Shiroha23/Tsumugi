@@ -19,11 +19,27 @@ export async function search(keyword, page) {
 }
 
 export async function explore() {
-  return [{ name: '全部', id: 'all' }];
+  return [
+    { name: '最新', id: 'latest' },
+    { name: '排行', id: 'rank' },
+  ];
 }
 
 export async function exploreList(categoryId, page) {
-  return search('', page);
+  const doc = tsumugi.html.parse(
+    await tsumugi.http.get(
+      `/comic/explore/${encodeURIComponent(categoryId)}?page=${page}`,
+    ),
+  );
+  return {
+    items: doc.select('.result-item').map((n) => ({
+      id: n.selectFirst('a').attr('href'),
+      title: n.selectFirst('.title').text(),
+      cover: n.selectFirst('img')?.absUrl('data-src'),
+      subtitle: n.selectFirst('.author')?.text(),
+    })),
+    hasMore: doc.selectFirst('.pagination .next') != null,
+  };
 }
 
 export async function detail(id) {

@@ -1,15 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
-import '../../shared/image/source_image.dart';
 import '../../shared/widgets/empty_state.dart';
 import '../../shared/widgets/source_error_view.dart';
 import '../../sources/model/common.dart';
-import '../comic/detail/comic_routes.dart';
-import '../novel/novel_routes.dart';
+import '../common/search_item_tile.dart';
 import '../sources/labels.dart';
-import '../video/video_routes.dart';
 import 'search_controller.dart';
 
 class SearchPage extends ConsumerStatefulWidget {
@@ -164,7 +160,7 @@ class _GroupSection extends ConsumerWidget {
           ),
         ),
         for (final item in group.items)
-          _ResultTile(sourceId: group.sourceId, item: item, type: type),
+          SearchItemTile(sourceId: group.sourceId, item: item, type: type),
         if (error != null)
           SourceErrorView(
             error: error,
@@ -185,54 +181,6 @@ class _GroupSection extends ConsumerWidget {
           ),
         const Divider(height: 1),
       ],
-    );
-  }
-}
-
-class _ResultTile extends StatelessWidget {
-  const _ResultTile({
-    required this.sourceId,
-    required this.item,
-    required this.type,
-  });
-
-  final String sourceId;
-  final SearchItem item;
-  final MediaType type;
-
-  void _open(BuildContext context) {
-    switch (type) {
-      case MediaType.comic:
-        context.push(ComicRoutes.detail(sourceId, item.id), extra: item);
-      case MediaType.novel:
-        context.push(NovelRoutes.detail(sourceId, item.id), extra: item);
-      case MediaType.video:
-        context.push(VideoRoutes.detail(sourceId, item.id), extra: item);
-      case MediaType.music:
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('${type.label}详情页尚未实现')));
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final subtitle = [
-      ?item.subtitle,
-      if (item.tags.isNotEmpty) item.tags.join(' · '),
-    ].join('\n');
-    return ListTile(
-      leading: CoverImage(
-        sourceId: sourceId,
-        url: item.cover,
-        headers: item.coverHeaders,
-        width: 44,
-        aspectRatio: 44 / 60,
-      ),
-      title: Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: subtitle.isEmpty
-          ? null
-          : Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
-      onTap: () => _open(context),
     );
   }
 }
