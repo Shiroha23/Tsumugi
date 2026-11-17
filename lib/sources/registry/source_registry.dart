@@ -192,7 +192,12 @@ class SourceRegistry {
               ),
             );
       } else {
-        final kept = sanitizeSettingValues(m, existing.storedSettings);
+        final kept = sanitizeSettingValues(
+          m,
+          existing.storedSettings,
+          // 旧清单不可用时无法比较类型：不保留任何旧值。
+          previous: existing.manifest ?? m.copyWith(settings: const []),
+        );
         await (_db.update(_t)..where((t) => t.id.equals(m.id))).write(
           common.copyWith(settingsJson: Value(encodeStoredSettings(kept))),
         );

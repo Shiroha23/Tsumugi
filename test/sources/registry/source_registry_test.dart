@@ -517,6 +517,54 @@ void main() {
         'm': '',
       });
     });
+
+    test('未知类型的非字符串 default 在模板中为 JSON 编码', () async {
+      final json = jsonDecode(settingsFixture()) as Map<String, dynamic>;
+      json['settings'] = [
+        {
+          'key': 'obj',
+          'label': '将来',
+          'type': 'slider',
+          'default': {'a': 1},
+        },
+      ];
+      (json['rules']['search']['request'] as Map)['url'] =
+          '/search?q={{keyword}}&o={{setting.obj}}';
+      final s = await registry.importText(jsonEncode(json));
+      final urls = <Uri>[];
+      final source = await DeclarativeSourceFactory(
+        httpClientFor: (m) => RecordingHttpClient(urls),
+        log: (_) {},
+      ).create(s.manifest!, settings: s.settings);
+      addTearDown(() => disposeSource(source));
+      await source.search('k', 1);
+      expect(urls.single.queryParameters['o'], '{"a":1}');
+    });
+
+    test('升级时同 key 类型变化的旧值被丢弃（即使对新类型合法）', () async {
+      final v1 = settingsFixture({
+        'settings': [
+          {
+            'key': 'mode',
+            'label': '模式',
+            'type': 'select',
+            'options': ['a', 'b'],
+          },
+        ],
+      });
+      final s = await registry.importText(v1);
+      await registry.setSettings(s.id, {'mode': 'b'});
+      final upgraded = await registry.importText(
+        settingsFixture({
+          'version': '1.1.0',
+          'settings': [
+            {'key': 'mode', 'label': '模式', 'type': 'text'},
+          ],
+        }),
+      );
+      expect(upgraded.storedSettings, isEmpty);
+      expect(upgraded.settings, {'mode': ''});
+    });
   });
 
   group('SourceFactories', () {

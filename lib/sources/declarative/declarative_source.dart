@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import '../../core/engine/declarative/declarative_engine.dart';
 import '../../core/engine/declarative/fetcher.dart';
 import '../../core/engine/declarative/rules.dart';
@@ -70,7 +72,9 @@ class DeclarativeSource implements Source {
       headers: manifest.headers,
       settings: {
         for (final s in manifest.settings)
-          if ((settings[s.key] ?? s.defaultValue) case final v?) s.key: '$v',
+          // 字符串原样代入，其他值（布尔、数字、未知类型的 default）代入 JSON 编码（source-spec §1.1）。
+          if ((settings[s.key] ?? s.defaultValue) case final v?)
+            s.key: v is String ? v : jsonEncode(v),
       },
       hostPolicy: HostPolicy(
         baseUrl: baseUrl,

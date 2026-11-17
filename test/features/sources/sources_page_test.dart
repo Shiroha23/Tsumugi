@@ -416,6 +416,36 @@ void main() {
       await unmount(tester);
     });
 
+    testWidgets('文本超长（按 UTF-16 码元）时提示错误、不关闭、不保存', (tester) async {
+      final s = await registry.importText(settingsFixture());
+      await pumpPage(tester);
+      await openMenuItem(tester, '源设置');
+      await tester.enterText(find.byType(TextField), '😀' * 513);
+      await tester.tap(find.widgetWithText(FilledButton, '保存'));
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.textContaining('最长 1024 个字符'), findsOneWidget);
+      expect((await registry.get(s.id))!.storedSettings, isEmpty);
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      await unmount(tester);
+    });
+
+    testWidgets('源在对话框打开期间被删除：提示未保存', (tester) async {
+      final s = await registry.importText(settingsFixture());
+      await pumpPage(tester);
+      await openMenuItem(tester, '源设置');
+      await registry.remove(s.id);
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, '保存'));
+      await tester.pumpAndSettle();
+      expect(find.text('源不可用，设置未保存'), findsOneWidget);
+      expect(find.textContaining('已保存「'), findsNothing);
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      await unmount(tester);
+    });
+
     testWidgets('按清单渲染并保存；取消不保存', (tester) async {
       final s = await registry.importText(settingsFixture());
       await pumpPage(tester);

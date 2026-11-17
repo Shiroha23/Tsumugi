@@ -27,6 +27,9 @@ const maxSettingTextLength = 1024;
 
 final _keyPattern = RegExp(r'^[A-Za-z0-9_]{1,64}$');
 
+/// `text` 值中不允许的字符：C0 / C1 控制字符、DEL 与 U+2028 / U+2029。
+final settingTextForbidden = RegExp('[\u0000-\u001F\u007F-\u009F  ]');
+
 extension SourceSettingX on SourceSetting {
   /// 已知类型；未知类型（较新的规范）为 null：不显示，值始终取 `default`。
   SourceSettingType? get kind => SourceSettingType.parse(type);
@@ -38,8 +41,7 @@ extension SourceSettingX on SourceSetting {
     SourceSettingType.text =>
       value is String &&
           value.length <= maxSettingTextLength &&
-          !value.contains('\n') &&
-          !value.contains('\r'),
+          !value.contains(settingTextForbidden),
     null => false,
   };
 
@@ -81,7 +83,7 @@ List<String> validateSettingDefinitions(List<SourceSetting> settings) {
         SourceSettingType.select => '$where 的 default 不在 options 中: $def',
         SourceSettingType.switchType => '$where 的 default 必须是布尔值',
         SourceSettingType.text =>
-          '$where 的 default 必须是不含换行、最长 $maxSettingTextLength 字符的字符串',
+          '$where 的 default 必须是不含控制字符、最长 $maxSettingTextLength 字符的字符串',
       });
     }
   }
@@ -102,15 +104,24 @@ List<SourceSetting> editableSettings(SourceManifest manifest) => [
 
 /// 只保留 [stored] 中对 [manifest] 仍然有效的值：键存在、类型已知且值合法。
 ///
-/// 用于升级源时过滤旧值、写入前过滤，以及读取时兜底。
+/// 用于升级源时过滤旧值、写入前过滤，以及读取时兜底。给出 [previous]（升级前的清单）时，
+/// 还丢弃与旧清单相比 `type` 变化的项（source-spec §1.1：同一 `key`、同一 `type`）。
 Map<String, Object?> sanitizeSettingValues(
   SourceManifest manifest,
-  Map<String, Object?> stored,
-) => {
-  for (final s in manifest.settings)
-    if (stored.containsKey(s.key) && s.accepts(stored[s.key]))
-      s.key: stored[s.key],
-};
+  Map<String, Object?> stored, {
+  SourceManifest? previous,
+}) {
+  final oldTypes = previous == null
+      ? null
+      : {for (final s in previous.settings) s.key: s.type};
+  return {
+    for (final s in manifest.settings)
+      if (stored.containsKey(s.key) &&
+          s.accepts(stored[s.key]) &&
+          (oldTypes == null || oldTypes[s.key] == s.type))
+        s.key: stored[s.key],
+  };
+}
 
 /// 每个设置项的有效值：保存的有效值，否则 [SourceSettingX.effectiveDefault]。
 Map<String, Object?> effectiveSettings(

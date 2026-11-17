@@ -184,6 +184,53 @@ void main() {
         {'hd': false, 'mirror': '/m'},
       );
     });
+
+    test('text 拒绝所有控制字符与 U+2028 / U+2029', () {
+      final text = m.settings.firstWhere((s) => s.key == 'mirror');
+      for (final c in [
+        '\u0000',
+        '\t',
+        '\v',
+        '\f',
+        '\x7F',
+        '\u0085',
+        ' ',
+        ' ',
+      ]) {
+        expect(
+          text.accepts('a${c}b'),
+          isFalse,
+          reason: c.codeUnitAt(0).toRadixString(16),
+        );
+      }
+      expect(text.accepts('普通文本 /m?x=1'), isTrue);
+      // 上限按 UTF-16 码元计：512 个 emoji = 1024 码元可以，再多一个不行。
+      expect(text.accepts('😀' * 512), isTrue);
+      expect(text.accepts('😀' * 513), isFalse);
+    });
+
+    test('升级时与旧清单相比类型变化的值被丢弃，即使对新类型合法', () {
+      final v1 = manifestWith({
+        'settings': [
+          {
+            'key': 'mode',
+            'label': 'x',
+            'type': 'select',
+            'options': ['a', 'b'],
+          },
+          {'key': 'keep', 'label': 'x', 'type': 'text'},
+        ],
+      });
+      final v2 = manifestWith({
+        'settings': [
+          {'key': 'mode', 'label': 'x', 'type': 'text'},
+          {'key': 'keep', 'label': 'x', 'type': 'text'},
+        ],
+      });
+      final stored = {'mode': 'b', 'keep': 'k'};
+      expect(sanitizeSettingValues(v2, stored), stored, reason: '不比较时都合法');
+      expect(sanitizeSettingValues(v2, stored, previous: v1), {'keep': 'k'});
+    });
   });
 
   group('loginUrl（source-spec §1）', () {
@@ -224,6 +271,12 @@ void main() {
         '',
         '   ',
         'https://',
+        // 审查补充：userinfo、编码、反斜杠、前导制表符、片段等形式都解析为白名单外主机。
+        'https://example.com@evil.example.net/',
+        'https://example.com%2F@evil.example.net/',
+        '/\\evil.example.net',
+        '\t//evil.example.net',
+        'https://evil.example.net#@example.com',
       ]) {
         final errors = manifestWith({'loginUrl': url}).validate();
         expect(errors.single, contains('loginUrl'), reason: url);

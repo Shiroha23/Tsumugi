@@ -266,6 +266,31 @@ void main() {
     },
   );
 
+  test('openLoginPage re-checks the allowlist itself', () async {
+    final (installed, _) = await install('login');
+    // 绕过 validate()：注册表直接给出 loginUrl 在白名单外的清单。
+    final bad = installed.manifest!.copyWith(
+      loginUrl: 'https://evil.example.net/login',
+    );
+    expect(bad.validate(), isNotEmpty);
+    final verification = RegistrySourceVerification(
+      registry: _StubRegistry(db, installed, bad),
+      sessions: sessions,
+      verifier: verifier,
+    );
+    await expectLater(
+      verification.openLoginPage(installed.id),
+      throwsA(
+        isA<SourceException>().having(
+          (e) => e.code,
+          'code',
+          SourceErrorCode.hostNotAllowed,
+        ),
+      ),
+    );
+    expect(launcher.opened, isEmpty);
+  });
+
   test('script login cancelled by the user → E_LOGIN_REQUIRED', () async {
     final (_, source) = await install('login');
     launcher.onOpen = (_) => WebViewOutcome.cancelled;
@@ -298,4 +323,29 @@ void main() {
     expect(identical(watching.of(installed.id), session), isFalse);
     expect(watching.of(installed.id).userAgent, isNull);
   });
+}
+
+/// 返回固定清单（不经 `validate()`）的注册表。
+class _StubRegistry extends SourceRegistry {
+  _StubRegistry(super.db, this._installed, this._manifest);
+
+  final InstalledSource _installed;
+  final SourceManifest _manifest;
+
+  @override
+  Future<InstalledSource?> get(String id) async => InstalledSource(
+    id: _installed.id,
+    name: _installed.name,
+    type: _installed.type,
+    version: _installed.version,
+    apiVersion: _installed.apiVersion,
+    enabled: true,
+    sortOrder: 0,
+    installedAt: _installed.installedAt,
+    updatedAt: _installed.updatedAt,
+    origin: _installed.origin,
+    manifestSha256: _installed.manifestSha256,
+    manifestJson: _installed.manifestJson,
+    manifest: _manifest,
+  );
 }

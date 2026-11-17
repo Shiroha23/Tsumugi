@@ -126,7 +126,7 @@ docs/
   null 表示全部取默认），与清单在同一行，删除源时随行删除。`sources/model/source_settings.dart` 负责校验
   （`validateSettingDefinitions`，由 `SourceManifest.validate()` 调用）、按清单过滤保存的值（`sanitizeSettingValues`）
   与求有效值（`effectiveSettings`：保存的有效值，否则 `default`）。`install` 升级 / 覆盖时在同一事务中按新清单过滤旧值
-  （丢弃已删除的键、类型变化或不再有效的值）；`SourceRegistry.setSettings` 写入前同样过滤。
+  （丢弃已删除的键、与旧清单相比类型变化、或对新清单不再有效的值）；`SourceRegistry.setSettings` 写入前同样过滤。
   源页面菜单「源设置」（`features/sources/source_settings_dialog.dart`）按清单渲染 `select` / `switch` / `text`，
   没有可显示项的源不出现该菜单项。
 - 注册表只管理清单。可运行的 `Source` 由按引擎注册的 `SourceFactory`（`sourceFactoriesProvider`）构造，
@@ -134,7 +134,8 @@ docs/
   `SourceHttpClient` 适配为引擎的 `Fetcher`；`ScriptSourceFactory`）。
 - **源运行时** `sources/runtime/`：`SourceRuntime`（`sourceRuntimeProvider`）按 sourceId 缓存实例，自行订阅注册表；
   源被禁用 / 删除 / 升级（清单 sha256 变化）或源设置变化（有效值不同）时移出缓存并释放（脚本源的 worker、HTTP 客户端），
-  下次 `get` 时以新的清单与设置重建（`SourceFactory.create(manifest, settings: …)`）；
+  下次 `get` 时以新的清单与设置重建（`SourceFactory.create(manifest, settings: …)`）；释放会中断进行中的调用（取消请求、结束脚本 worker），
+  与升级时一致；
   创建失败不缓存。`sourceInstanceProvider(id)` 在实例被移除时自动失效，依赖它的 provider（如详情）随之重建。
   不直接用 stream provider 的 `.future`：Riverpod 3 会暂停没有监听者的 provider，`ref.read` 读取可能永远等不到值。
 - **脚本存储表** `source_storage_entries`：`tsumugi.storage` 的按源 KV（主键 `(sourceId, key)`，值为 JSON 文本），

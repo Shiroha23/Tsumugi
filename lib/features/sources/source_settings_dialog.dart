@@ -70,13 +70,35 @@ class _SourceSettingsDialogState extends ConsumerState<SourceSettingsDialog> {
     });
   }
 
+  /// 不合法的项（如文本超过 [maxSettingTextLength] 个 UTF-16 码元）：key → 提示。
+  final _errors = <String, String>{};
+
   Future<void> _save() async {
+    _errors
+      ..clear()
+      ..addAll({
+        for (final s in _items)
+          if (!s.accepts(_values[s.key]))
+            s.key: '最长 $maxSettingTextLength 个字符，且不能包含控制字符',
+      });
+    if (_errors.isNotEmpty) {
+      setState(() {});
+      return;
+    }
     setState(() => _saving = true);
     try {
-      await ref.read(sourceRegistryProvider).setSettings(widget.source.id, {
-        for (final s in _items) s.key: _values[s.key],
-      });
-      if (mounted) Navigator.of(context).pop(true);
+      final saved = await ref.read(sourceRegistryProvider).setSettings(
+        widget.source.id,
+        {for (final s in _items) s.key: _values[s.key]},
+      );
+      if (!mounted) return;
+      if (!saved) {
+        setState(() => _saving = false);
+        ScaffoldMessenger.maybeOf(context)
+            ?.showSnackBar(const SnackBar(content: Text('源不可用，设置未保存')));
+        return;
+      }
+      Navigator.of(context).pop(true);
     } on Object catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
@@ -114,10 +136,18 @@ class _SourceSettingsDialogState extends ConsumerState<SourceSettingsDialog> {
       child: TextField(
         controller: _controllers[s.key],
         enabled: !_saving,
-        maxLength: maxSettingTextLength,
-        inputFormatters: [FilteringTextInputFormatter.deny(RegExp('[\r\n]'))],
-        decoration: InputDecoration(labelText: s.label, counterText: ''),
-        onChanged: (v) => _values[s.key] = v,
+        // 不用 maxLength：它按字形簇计数，而上限按 UTF-16 码元（保存前由 accepts 检查）。
+        inputFormatters: [
+          FilteringTextInputFormatter.deny(settingTextForbidden),
+        ],
+        decoration: InputDecoration(
+          labelText: s.label,
+          errorText: _errors[s.key],
+        ),
+        onChanged: (v) {
+          _values[s.key] = v;
+          if (_errors.remove(s.key) != null) setState(() {});
+        },
       ),
     ),
     null => const SizedBox.shrink(),
