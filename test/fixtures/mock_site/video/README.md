@@ -51,5 +51,6 @@ ffmpeg -f lavfi -i "testsrc=size=320x180:rate=15:duration=6" \
 ## 页面
 
 `search.html`、`show_1.html`、`episode.html` 是配合 `test/fixtures/sources/mock_video_declarative.json`
-的虚构页面。第 3、4 集走 `/video/protected/`：请求必须带路径以 `/video/` 开头的 `Referer`，
+的虚构页面；剧集页的 `<track>` 列出 4 条外挂字幕（`subs/` 中的素材，第一条走 `/video/protected/`），
+用于声明式规则的 `content.subtitles`。第 3、4 集走 `/video/protected/`：请求必须带路径以 `/video/` 开头的 `Referer`，
 第 4 集的密钥还要求打开详情页时种下的 `vtoken` Cookie，用来验证播放器请求经过源的网络层。

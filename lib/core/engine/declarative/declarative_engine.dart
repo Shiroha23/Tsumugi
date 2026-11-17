@@ -80,7 +80,7 @@ class DeclarativeEngine {
   static const _contentFields = {
     'comic': {'images'},
     'novel': {'text', 'nextPageId'},
-    'video': {'streams'},
+    'video': {'streams', 'subtitles'},
     'music': {'streams', 'lyrics'},
   };
 
@@ -164,7 +164,10 @@ class DeclarativeEngine {
       );
     }
     final doc = await _fetch(rule.request, {'unitId': unitId});
-    _warnUnknown('content', rule.fields.keys, known);
+    _warnUnknown('content', [
+      ...rule.fields.keys,
+      if (rule.subtitles != null) 'subtitles',
+    ], known);
     final f = rule.fields;
     final e = expressions;
 
@@ -183,7 +186,11 @@ class DeclarativeEngine {
           'nextPageId': ?await e.string(f['nextPageId'], doc),
         };
       case 'video':
-        return {'streams': _streams(await e.strings(f['streams'], doc))};
+        return {
+          'streams': _streams(await e.strings(f['streams'], doc)),
+          if (rule.subtitles case final s?)
+            'subtitles': await _subtitles(s, doc),
+        };
       default: // music
         final lyrics = await e.string(f['lyrics'], doc);
         return {
@@ -207,6 +214,78 @@ class DeclarativeEngine {
       if (_url(s) case final url?)
         {'url': url, 'type': _streamType(url), 'headers': ?_mediaHeaders},
   ];
+
+  static const _subtitleFields = {'url', 'lang', 'format'};
+
+  /// `content.subtitles`（§3.1「视频外挂字幕」）：非法条目丢弃并记录日志，不影响其他条目。
+  Future<List<Map<String, Object?>>> _subtitles(
+    SubtitlesRule rule,
+    SourceDocument doc,
+  ) async {
+    final e = expressions;
+    final out = <Map<String, Object?>>[];
+    void add(String? ref, {String? lang, String? format}) {
+      final url = ref == null ? null : resolveUrl(baseUrl, ref);
+      if (url == null || (url.scheme != 'http' && url.scheme != 'https')) {
+        _log('content.subtitles: 跳过无效的地址 ${ref ?? '(空)'}');
+        return;
+      }
+      final String? fmt;
+      if (format == null) {
+        fmt = _subtitleFormat(url.path);
+      } else {
+        fmt = _subtitleFormats[format.trim().toLowerCase()];
+        if (fmt == null) {
+          _log('content.subtitles: 跳过 format 无效的条目 `$format`');
+          return;
+        }
+      }
+      out.add({
+        'url': url.toString(),
+        'lang': ?lang,
+        'format': ?fmt,
+        'charset': ?rule.charset,
+      });
+    }
+
+    if (rule.urls case final urls?) {
+      for (final s in await e.strings(urls, doc)) {
+        add(s);
+      }
+      return out;
+    }
+    _warnUnknown('content.subtitles.fields', rule.fields.keys, _subtitleFields);
+    final f = rule.fields;
+    for (final node in await e.nodes(rule.list, doc)) {
+      add(
+        await e.string(f['url'], node),
+        lang: await e.string(f['lang'], node),
+        format: await e.string(f['format'], node),
+      );
+    }
+    return out;
+  }
+
+  static const _subtitleFormats = {
+    'srt': 'srt',
+    'vtt': 'vtt',
+    'webvtt': 'vtt',
+    'ass': 'ass',
+    'ssa': 'ass',
+  };
+
+  /// 按 URL 路径的扩展名推断字幕格式；推断不出时为 null（客户端按内容识别）。
+  static String? _subtitleFormat(String path) {
+    final p = path.toLowerCase();
+    final dot = p.lastIndexOf('.');
+    if (dot < 0 || dot < p.lastIndexOf('/')) return null;
+    return switch (p.substring(dot + 1)) {
+      'srt' => 'srt',
+      'vtt' => 'vtt',
+      'ass' || 'ssa' => 'ass',
+      _ => null,
+    };
+  }
 
   static String _streamType(String url) {
     final path = Uri.tryParse(url)?.path.toLowerCase() ?? '';
