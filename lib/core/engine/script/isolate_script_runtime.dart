@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:isolate';
 
+import 'host/tsumugi_api.dart' show interactiveHostPaths;
 import 'quickjs_script_runtime.dart';
 import 'script_runtime.dart';
 
@@ -30,7 +31,7 @@ typedef WorkerHostFactory = WorkerHost Function(Object? config);
 ///     脚本侧同步得到 `undefined`，宿主的返回值与异常都被忽略。用于 `log.*`、`ui.toast`。
 ///   - [workerHost]：在 worker 内构造并同步执行，用于必须同步返回的 API（crypto、HTML）。
 /// - [interactive]：[host] 中需要等待用户操作的路径（如 `ui.openWebView`）。主 isolate 执行
-///   它们期间看门狗改按 [ScriptLimits.interactiveTime] 计时，worker 内的总时长同样暂停
+///   它们（且没有其他宿主函数在执行）期间看门狗改按 [ScriptLimits.interactiveTime] 计时，worker 内的总时长同样暂停
 ///   （[QuickJsScriptRuntime] 的同名参数）。是否处于交互等待只由主 isolate 自己判断，不依赖 worker 的消息。
 /// - 主 isolate 只接受“当前进行中的调用”发来的宿主请求；迟到的请求被拒绝。
 /// - **看门狗**：每次加载 / 调用若在 `wallTime + hangGrace` 内没有回应（交互等待的时间另按
@@ -72,11 +73,16 @@ class IsolateScriptRuntime implements ScriptRuntime {
     }
   }
 
-  /// 符合 [ScriptRuntimeFactory] 签名的工厂。注意 [host] 中的函数在脚本侧一律是异步的。
+  /// 符合 [ScriptRuntimeFactory] 签名的工厂。注意 [host] 中的函数在脚本侧一律是异步的；
+  /// 属于 `interactiveHostPaths` 的路径自动按交互式处理。
   static ScriptRuntime create({
     required Map<String, HostFunction> host,
     ScriptLimits limits = const ScriptLimits(),
-  }) => IsolateScriptRuntime(host: host, limits: limits);
+  }) => IsolateScriptRuntime(
+    host: host,
+    limits: limits,
+    interactive: host.keys.toSet().intersection(interactiveHostPaths),
+  );
 
   final WorkerHostFactory? workerHost;
   final Object? workerHostConfig;
@@ -219,6 +225,13 @@ class _Worker {
   final _wallClock = Stopwatch();
   final _interactiveClock = Stopwatch();
   int _interactiveDepth = 0;
+  int _plainDepth = 0;
+
+  /// 本次调用是否出现过交互等待。两侧切换计时的时刻不同步（worker 可能正执行最长
+  /// `cpuTime` 的同步 JS 才处理宿主结果），出现过时看门狗额外宽限一个 `cpuTime`。
+  bool _hadInteractive = false;
+
+  bool get _paused => _interactiveDepth > 0 && _plainDepth == 0;
   Completer<void>? _ready;
 
   bool get alive => !_dead;
@@ -300,6 +313,8 @@ class _Worker {
       ..stop()
       ..reset();
     _interactiveDepth = 0;
+    _plainDepth = 0;
+    _hadInteractive = false;
     _armWatchdog(id);
     _send!.send(message);
     return pending.future;
@@ -308,12 +323,13 @@ class _Worker {
   /// 按当前计时的预算（总时长或交互等待）加上 [IsolateScriptRuntime.hangGrace] 设置看门狗。
   void _armWatchdog(int id) {
     _watchdog?.cancel();
-    final interactive = _interactiveDepth > 0;
+    final interactive = _paused;
     final budget = interactive
         ? owner.limits.interactiveTime
         : owner.limits.wallTime;
     final used = interactive ? _interactiveClock.elapsed : _wallClock.elapsed;
-    var left = budget + owner.hangGrace - used;
+    final slack = _hadInteractive ? owner.limits.cpuTime : Duration.zero;
+    var left = budget + owner.hangGrace + slack - used;
     if (left < Duration.zero) left = Duration.zero;
     _watchdog = Timer(left, () {
       if (_activeId != id) return;
@@ -330,18 +346,38 @@ class _Worker {
     });
   }
 
-  void _beginInteractive(int id) {
-    if (_activeId != id || _interactiveDepth++ > 0) return;
-    _wallClock.stop();
-    _interactiveClock.start();
-    _armWatchdog(id);
+  void _beginWait(int id, {required bool interactive}) {
+    if (_activeId != id) return;
+    final was = _paused;
+    if (interactive) {
+      _interactiveDepth++;
+      _hadInteractive = true;
+    } else {
+      _plainDepth++;
+    }
+    _switchClock(id, was);
   }
 
-  void _endInteractive(int id) {
-    if (_activeId != id || _interactiveDepth == 0) return;
-    if (--_interactiveDepth > 0) return;
-    _interactiveClock.stop();
-    _wallClock.start();
+  void _endWait(int id, {required bool interactive}) {
+    if (_activeId != id) return;
+    final was = _paused;
+    if (interactive) {
+      if (_interactiveDepth > 0) _interactiveDepth--;
+    } else {
+      if (_plainDepth > 0) _plainDepth--;
+    }
+    _switchClock(id, was);
+  }
+
+  void _switchClock(int id, bool was) {
+    if (_paused == was) return;
+    if (_paused) {
+      _wallClock.stop();
+      _interactiveClock.start();
+    } else {
+      _interactiveClock.stop();
+      _wallClock.start();
+    }
     _armWatchdog(id);
   }
 
@@ -457,15 +493,15 @@ class _Worker {
       return;
     }
     final interactive = owner._interactive.contains(path);
-    if (interactive) _beginInteractive(callId);
+    _beginWait(callId, interactive: interactive);
     Future.sync(() => fn(args)).then(
       (v) {
-        if (interactive) _endInteractive(callId);
+        _endWait(callId, interactive: interactive);
         // 调用已结束：结果丢弃（worker 也会丢弃）。
         if (callId == _activeId) reply(true, v);
       },
       onError: (Object e, StackTrace _) {
-        if (interactive) _endInteractive(callId);
+        _endWait(callId, interactive: interactive);
         if (callId == _activeId) reply(false, _encodeError(e));
       },
     );

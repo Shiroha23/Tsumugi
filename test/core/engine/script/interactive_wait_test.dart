@@ -34,6 +34,17 @@ final _host = <String, HostFunction>{
   'http.wait': _wait,
 };
 
+/// worker 内的测试宿主：在 Dart 代码里忙等，模拟卡住的 worker（必须是顶层函数）。
+WorkerHost _spinHost(Object? _) => WorkerHost({
+  'test.spin': (a) {
+    final until = DateTime.now().add(
+      Duration(milliseconds: (a.first! as num).toInt()),
+    );
+    while (DateTime.now().isBefore(until)) {}
+    return null;
+  },
+});
+
 Matcher _limit(String message) => throwsA(
   isA<ScriptException>()
       .having((e) => e.code, 'code', ScriptException.limit)
@@ -86,19 +97,40 @@ void main() {
       );
     });
 
-    test('a hanging non-interactive request still times out', () async {
+    test('plain requests during the interactive wait count toward wallTime', () async {
+      // 普通请求 400 ms 与交互等待重叠，仍计入 300 ms 总时长。
       final sw = Stopwatch()..start();
       await expectLater(
-        rt.call('loginAlongsideHang', [400]),
+        rt.call('loginAlongside', [600, 400]),
         _limit('Wall time'),
       );
-      // 交互等待 400 ms + 总时长 300 ms。
-      expect(sw.elapsed, greaterThanOrEqualTo(const Duration(milliseconds: 600)));
-      expect(sw.elapsed, lessThan(const Duration(seconds: 3)));
+      expect(sw.elapsed, lessThan(const Duration(milliseconds: 600)));
+      // 普通请求 100 ms 结束后只剩交互等待：暂停总时长。
+      expect(await rt.call('loginAlongside', [600, 100]), 'ok');
+      // 永不结束的普通请求：总时长从不暂停。
+      await expectLater(
+        rt.call('loginAlongside', [600, -1]),
+        _limit('Wall time'),
+      );
+    });
+
+    test('concurrent interactive calls share one budget', () async {
+      expect(await rt.call('loginConcurrently', [400, 600]), 'ok');
+      await expectLater(
+        rt.call('loginConcurrently', [400, 5000]),
+        _limit('Interactive'),
+      );
     });
 
     test('CPU budget still applies during the interactive wait', () async {
       await expectLater(rt.call('spinDuringLogin', [5000]), _limit('CPU'));
+    });
+
+    test('create() treats ui.openWebView as interactive', () async {
+      final created = QuickJsScriptRuntime.create(host: _host, limits: _limits);
+      addTearDown(created.dispose);
+      await created.load(_script);
+      expect(await created.call('login', [600]), 'ok');
     });
 
     test('non-interactive host functions keep counting toward wallTime', () async {
@@ -120,9 +152,41 @@ void main() {
     IsolateScriptRuntime create() => IsolateScriptRuntime(
       host: _host,
       interactive: {'ui.openWebView'},
+      workerHost: _spinHost,
       limits: _limits,
       hangGrace: const Duration(milliseconds: 200),
     );
+
+    Matcher unresponsive = _limit('unresponsive');
+
+    test('watchdog still fires when the worker hangs during the wait', () async {
+      final rt = create();
+      addTearDown(rt.dispose);
+      await rt.load(_script);
+      // 看门狗上限：interactiveTime + hangGrace + cpuTime = 1.3 s。
+      final sw = Stopwatch()..start();
+      await expectLater(rt.call('hangDuringLogin', [5000, 4000]), unresponsive);
+      expect(sw.elapsed, lessThan(const Duration(seconds: 3)));
+      expect(await rt.call('login', [10]), 'ok');
+      expect(rt.restarts, 1);
+    });
+
+    test('watchdog falls back to wallTime after the wait ends', () async {
+      final rt = create();
+      addTearDown(rt.dispose);
+      await rt.load(_script);
+      // 交互结束后卡住：上限为 wallTime + hangGrace + cpuTime = 700 ms，远小于 interactiveTime。
+      final sw = Stopwatch()..start();
+      await expectLater(rt.call('hangAfterLogin', [100, 3000]), unresponsive);
+      expect(sw.elapsed, lessThan(const Duration(milliseconds: 1500)));
+    });
+
+    test('create() treats ui.openWebView as interactive', () async {
+      final rt = IsolateScriptRuntime.create(host: _host, limits: _limits);
+      addTearDown(rt.dispose);
+      await rt.load(_script);
+      expect(await rt.call('login', [600]), 'ok');
+    });
 
     test('watchdog pauses during the interactive wait', () async {
       final rt = create();

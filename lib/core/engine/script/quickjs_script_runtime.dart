@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:qjs/qjs.dart';
 
+import 'host/tsumugi_api.dart' show interactiveHostPaths;
 import 'native_stack.dart';
 import 'script_runtime.dart';
 
@@ -20,8 +21,8 @@ import 'script_runtime.dart';
 ///   需要持久化的数据应使用 `tsumugi.storage`。
 /// - 宿主函数只能在进行中的调用里被调用。
 /// - 等待宿主 Future 的时间不计入 CPU 预算，只计入 [ScriptLimits.wallTime]。
-///   [interactive] 中的宿主函数（等待用户操作）进行中时，总时长暂停，改计入
-///   [ScriptLimits.interactiveTime]（docs/source-spec.md §4.4）。
+///   [interactive] 中的宿主函数（等待用户操作）进行中、且没有其他未完成的宿主 Future 时，
+///   总时长暂停，改计入 [ScriptLimits.interactiveTime]（docs/source-spec.md §4.4）。
 /// - 同一实例上的 [call] 串行执行（宿主 Promise 需要知道属于哪一次调用）。
 /// - 不设置 module loader，脚本内 `import` 一律失败；关闭 `eval` / `Function`。
 ///
@@ -52,11 +53,16 @@ class QuickJsScriptRuntime implements ScriptRuntime {
     _initEngine();
   }
 
-  /// 符合 [ScriptRuntimeFactory] 签名的工厂。
+  /// 符合 [ScriptRuntimeFactory] 签名的工厂。[host] 中属于 `interactiveHostPaths` 的路径
+  /// 自动按交互式处理。
   static ScriptRuntime create({
     required Map<String, HostFunction> host,
     ScriptLimits limits = const ScriptLimits(),
-  }) => QuickJsScriptRuntime(host: host, limits: limits);
+  }) => QuickJsScriptRuntime(
+    host: host,
+    limits: limits,
+    interactive: host.keys.toSet().intersection(interactiveHostPaths),
+  );
 
   final ScriptLimits limits;
   final String? prelude;
@@ -380,8 +386,8 @@ class QuickJsScriptRuntime implements ScriptRuntime {
       throw JSException(_toJsError(e));
     }
     if (result is Future<Object?>) {
-      // 交互式调用：等待期间暂停总时长，改按 interactiveTime 计时（Future 结束时恢复）。
-      if (interactive) owner.beginInteractive();
+      // 交互式调用：只有它们在等待时暂停总时长，改按 interactiveTime 计时（Future 结束时恢复）。
+      owner.beginWait(interactive: interactive);
       return _bridgeFuture(owner, result, interactive: interactive);
     }
     try {
@@ -401,7 +407,7 @@ class QuickJsScriptRuntime implements ScriptRuntime {
     final (promise, resolve, reject) = JSPromise.withResolvers(rt);
 
     void settle(JSFunction settler, JSValue Function() value) {
-      if (interactive) owner.endInteractive();
+      owner.endWait(interactive: interactive);
       if (_disposed || owner.isDone) return;
       // 调用已结束或引擎已重建：迟到的结果直接丢弃。
       if (!identical(_current, owner) || !identical(_rt, rt)) return;
@@ -563,12 +569,15 @@ class _Call {
   final ScriptLimits limits;
   final cpu = Stopwatch();
 
-  /// 总时长；有交互式宿主调用进行中时暂停。
+  /// 总时长；只有交互式宿主调用在等待时暂停。
   final wall = Stopwatch()..start();
 
-  /// 等待交互式宿主调用的累计时长。
+  /// 只有交互式宿主调用在等待的累计时长。
   final interactive = Stopwatch();
   int _interactiveDepth = 0;
+
+  /// 未完成的非交互宿主 Future 数：大于 0 时照常计总时长。
+  int _plainDepth = 0;
   Timer? _timer;
   final _completer = Completer<Object?>();
 
@@ -583,7 +592,7 @@ class _Call {
   Duration get _interactiveLeft =>
       limits.interactiveTime - interactive.elapsed;
 
-  bool get _paused => _interactiveDepth > 0;
+  bool get _paused => _interactiveDepth > 0 && _plainDepth == 0;
 
   /// 当前正在计时的时长预算（总时长，或暂停期间的交互等待时长）还剩多少。
   Duration get _clockLeft => _paused ? _interactiveLeft : _wallLeft;
@@ -632,20 +641,37 @@ class _Call {
     _timer = null;
   }
 
-  /// 交互式宿主调用开始：暂停总时长，开始累计交互等待时长。
-  void beginInteractive() {
-    if (_interactiveDepth++ > 0) return;
-    wall.stop();
-    interactive.start();
-    if (_timer != null) armTimer();
+  /// 开始等待一个宿主 Future。
+  void beginWait({required bool interactive}) {
+    final was = _paused;
+    if (interactive) {
+      _interactiveDepth++;
+    } else {
+      _plainDepth++;
+    }
+    _switchClock(was);
   }
 
-  /// 交互式宿主调用结束（成功或失败）：恢复总时长。
-  void endInteractive() {
-    if (_interactiveDepth == 0) return;
-    if (--_interactiveDepth > 0) return;
-    interactive.stop();
-    wall.start();
+  /// 宿主 Future 结束（成功或失败）。
+  void endWait({required bool interactive}) {
+    final was = _paused;
+    if (interactive) {
+      if (_interactiveDepth > 0) _interactiveDepth--;
+    } else {
+      if (_plainDepth > 0) _plainDepth--;
+    }
+    _switchClock(was);
+  }
+
+  void _switchClock(bool was) {
+    if (_paused == was) return;
+    if (_paused) {
+      wall.stop();
+      interactive.start();
+    } else {
+      interactive.stop();
+      wall.start();
+    }
     if (_timer != null) armTimer();
   }
 

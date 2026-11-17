@@ -29,10 +29,31 @@ export async function loginFails(ms, after) {
   return 'no error';
 }
 
-// 交互调用进行中时并发一个永不结束的普通请求：交互结束后总时长恢复，调用最终仍会超时。
-export async function loginAlongsideHang(ms) {
-  await Promise.all([tsumugi.ui.openWebView(ms), tsumugi.http.wait(-1)]);
-  return 'unreachable';
+// 交互调用进行中时并发普通请求：普通请求在等待期间照常计总时长。
+export async function loginAlongside(ms, plain) {
+  await Promise.all([tsumugi.ui.openWebView(ms), tsumugi.http.wait(plain)]);
+  return 'ok';
+}
+
+// 两个并发的交互调用：共用同一份交互等待预算。
+export async function loginConcurrently(a, b) {
+  await Promise.all([tsumugi.ui.openWebView(a), tsumugi.ui.openWebView(b)]);
+  return 'ok';
+}
+
+// 交互调用进行中时 worker 卡在宿主 Dart 代码里（QuickJS 的中断不起作用）。
+export async function hangDuringLogin(ms, spin) {
+  const p = tsumugi.ui.openWebView(ms);
+  tsumugi.test.spin(spin);
+  await p;
+  return 'ok';
+}
+
+// 交互结束之后 worker 才卡住。
+export async function hangAfterLogin(ms, spin) {
+  await tsumugi.ui.openWebView(ms);
+  tsumugi.test.spin(spin);
+  return 'ok';
 }
 
 // 交互等待期间脚本继续执行 CPU 密集代码：CPU 预算照常有效。

@@ -32,9 +32,9 @@ import 'package:tsumugi/core/engine/script/script_runtime.dart';
 const _resultFile = String.fromEnvironment('TSUMUGI_RESULT_FILE');
 const _exitWhenDone = bool.fromEnvironment('TSUMUGI_EXIT_WHEN_DONE');
 
-/// 发布版的回归下限。source-spec §4.4 对源作者承诺约 100 层（Windows 实测约 107 层），
-/// 这里略低一些，避免机器差异导致误报。
-const _documentedMinDepth = 80;
+/// 发布版的回归下限：source-spec §4.4 对源作者承诺的约 100 层
+/// （2026-11 实测 Windows 107 层、Android 487 层）。
+const _documentedMinDepth = 100;
 
 const _script = '''
 function depth(n) { return n === 0 ? 0 : 1 + depth(n - 1); }

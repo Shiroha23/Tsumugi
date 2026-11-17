@@ -323,6 +323,26 @@ void main() {
       expect(verifier.busy, isFalse);
     });
 
+    test('script requests never join an open page', () async {
+      final gate = Completer<WebViewOutcome>();
+      launcher.onOpen = (_) => gate.future;
+      final session = SourceSession();
+      final first = verifier.verify(
+        request(_config('a')),
+        session,
+        userInitiated: true,
+      );
+      await expectLater(
+        verifier.verify(request(_config('a')), session, userInitiated: false),
+        _sourceError(SourceErrorCode.challenge),
+      );
+      gate.complete(const WebViewOutcome(completed: true));
+      expect(await first, isTrue);
+      expect(launcher.opened, hasLength(1));
+      // 被拒绝的脚本请求不计入冷却。
+      expect(verifier.throttle.blockedFor('a'), isNull);
+    });
+
     test('another source is rejected while a page is open', () async {
       final gate = Completer<WebViewOutcome>();
       launcher.onOpen = (_) => gate.future;
