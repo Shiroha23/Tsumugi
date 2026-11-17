@@ -43,6 +43,12 @@ class ScriptLimits {
   final int memoryBytes;
 
   /// JS 调用栈上限。
+  ///
+  /// **必须小于执行脚本的线程的栈大小**（并为宿主回调中的 Dart / 原生代码留出余量）：
+  /// QuickJS 只按此值检查 JS 递归，超过真实线程栈会让原生栈溢出、整个进程崩溃。
+  /// 脚本运行在 Dart isolate 的线程上，其栈大小不由本项目控制，调大前须先在各平台
+  /// release 构建中确认（`integration_test/script_stack_depth_test.dart`，#41）。
+  /// 对源作者承诺的递归深度见 docs/source-spec.md §4.4。
   final int maxStackBytes;
 }
 

@@ -535,6 +535,10 @@ CPU 预算跨 await 累计、总时长上限、内存上限、栈上限、超限
 - **总时长**：Dart 侧计时器，超时即让本次调用失败（`E_LIMIT`），之后到达的宿主结果被丢弃。
   交互式宿主调用（`ui.openWebView`）进行中时暂停，改按 `interactiveTime` 计时（§5.3）。
 - **内存 / 栈**：`JSRuntimeConfig.memoryLimit` / `maxStackSize`，超限 → `E_LIMIT`。
+- 已知限制：**递归深度偏低**（2026-11 release 实测，`integration_test/script_stack_depth_test.dart`）：默认 512 KB 栈上限下
+  简单递归在 Windows 约 100 层、Android 约数百层（Windows 的 QuickJS 原生库每层栈帧明显更大），已写入 source-spec §4.4。
+  栈上限必须小于执行线程的栈，而脚本所在的 Dart isolate 线程栈大小不可配置，因此不能直接调大；
+  改到栈更大的专用线程上执行需要宿主同步回调跨线程，当前 Dart FFI 不支持，暂不实施（[#41](https://github.com/Shiroha23/Tsumugi/issues/41)）。
 - **值传递**：跨边界只传 JSON 兼容值（JS 侧用初始化时缓存的 `JSON.stringify`）。
 - 宿主对象 `tsumugi` 在注入后冻结。
 - **微任务与结果提交**（2026-11 加固）：每次进入 JS 后在同一 deadline 内清空微任务队列；入口结果先暂存，
