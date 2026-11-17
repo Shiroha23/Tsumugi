@@ -330,6 +330,15 @@ void main() {
         expect(logs, isEmpty);
       });
 
+      test('subtitles 为 null：与省略相同', () async {
+        final r = await video({
+          'streams': 'css:a@href[]',
+          'subtitles': null,
+        }, '<a href="/v.mp4"></a>');
+        expect(r.containsKey('subtitles'), isFalse);
+        expect(logs, isEmpty);
+      });
+
       test('简写：单个字幕', () async {
         final r = await video({
           'streams': 'css:a@href[]',

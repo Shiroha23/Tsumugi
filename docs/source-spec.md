@@ -297,7 +297,7 @@ interface MusicContent {
 其他键忽略并在调试日志中警告。
 
 **视频外挂字幕（`content.subtitles`）**：产出 §2.2 的 `VideoContent.subtitles`（与脚本源相同的结构）。可选，
-省略时没有外挂字幕。有两种写法：
+省略（或为 `null`，与规则中其他可选键一致）时没有外挂字幕。有两种写法：
 
 ```jsonc
 // 简写：一个多值表达式，每个值是一条字幕的 URL（没有 lang，菜单中显示为“字幕 n”）
@@ -324,7 +324,7 @@ interface MusicContent {
   产出时规范化为 `srt` / `vtt` / `ass`），否则**丢弃该条目**（调试日志），不会当作未给出。
 - `charset` 不是表达式，而是与 `request.charset` 相同的常量字符集标签（字符集是站点的属性，而不是页面数据）；
   必须是 §5 支持的标签，否则创建源时报 `E_PARSE`。
-- 结构错误（`subtitles` 既不是字符串也不是对象、缺少 `list` 或 `fields.url`、`fields` 中出现非字符串值）
+- 结构错误（`subtitles` 不是 `null`、字符串或对象、缺少 `list` 或 `fields.url`、`fields` 中出现非字符串值）
   在创建源时报 `E_PARSE`（不论 `type`）；`fields` 中的未知键在调试日志中警告并忽略。只有 `type` 为 `video` 时
   才使用 `subtitles`，其他类型同其他未知键一样警告并忽略。
 - 字幕不附带清单 `headers`：客户端经本源的网络层取字幕，默认 headers 在那里合并（§2.2「视频字幕」）。
