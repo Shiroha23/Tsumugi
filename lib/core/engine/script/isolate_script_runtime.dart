@@ -29,8 +29,12 @@ typedef WorkerHostFactory = WorkerHost Function(Object? config);
 ///   - [notifications]：[host] 中的一部分路径，按“发出即忘”处理：worker 只发消息、
 ///     脚本侧同步得到 `undefined`，宿主的返回值与异常都被忽略。用于 `log.*`、`ui.toast`。
 ///   - [workerHost]：在 worker 内构造并同步执行，用于必须同步返回的 API（crypto、HTML）。
+/// - [interactive]：[host] 中需要等待用户操作的路径（如 `ui.openWebView`）。主 isolate 执行
+///   它们期间看门狗改按 [ScriptLimits.interactiveTime] 计时，worker 内的总时长同样暂停
+///   （[QuickJsScriptRuntime] 的同名参数）。是否处于交互等待只由主 isolate 自己判断，不依赖 worker 的消息。
 /// - 主 isolate 只接受“当前进行中的调用”发来的宿主请求；迟到的请求被拒绝。
-/// - **看门狗**：每次加载 / 调用若在 `wallTime + hangGrace` 内没有回应，视为 worker 卡死：
+/// - **看门狗**：每次加载 / 调用若在 `wallTime + hangGrace` 内没有回应（交互等待的时间另按
+///   `interactiveTime + hangGrace` 计），视为 worker 卡死：
 ///   调用以 `E_LIMIT` 失败，worker 被丢弃（`Isolate.kill(beforeNextEvent)`，回到事件循环时退出），
 ///   下一次调用时新建 worker 并重新加载脚本。一直卡住（原生代码或 Dart 死循环）的 isolate
 ///   无法被终止，只能放弃，其线程可能一直占用，见 architecture §6.1 已知限制。
@@ -41,6 +45,7 @@ class IsolateScriptRuntime implements ScriptRuntime {
   IsolateScriptRuntime({
     Map<String, HostFunction> host = const {},
     Set<String> notifications = const {},
+    Set<String> interactive = const {},
     this.workerHost,
     this.workerHostConfig,
     this.prelude,
@@ -49,10 +54,21 @@ class IsolateScriptRuntime implements ScriptRuntime {
     void Function(String message)? log,
   }) : _host = Map.unmodifiable(host),
        _notifications = Set.unmodifiable(notifications),
+       _interactive = Set.unmodifiable(interactive),
        _log = log ?? _noLog {
     final unknown = notifications.difference(host.keys.toSet());
     if (unknown.isNotEmpty) {
       throw ArgumentError.value(unknown, 'notifications', 'not in host');
+    }
+    final badInteractive = interactive.difference(
+      host.keys.toSet().difference(notifications),
+    );
+    if (badInteractive.isNotEmpty) {
+      throw ArgumentError.value(
+        badInteractive,
+        'interactive',
+        'not an asynchronous host path',
+      );
     }
   }
 
@@ -74,6 +90,7 @@ class IsolateScriptRuntime implements ScriptRuntime {
 
   final Map<String, HostFunction> _host;
   final Set<String> _notifications;
+  final Set<String> _interactive;
   final void Function(String) _log;
 
   static void _noLog(String _) {}
@@ -197,6 +214,11 @@ class _Worker {
   int? _activeId;
   Completer<Object?>? _pending;
   Timer? _watchdog;
+
+  /// 看门狗的计时：进行中的调用已用的总时长（交互等待期间暂停）与交互等待时长。
+  final _wallClock = Stopwatch();
+  final _interactiveClock = Stopwatch();
+  int _interactiveDepth = 0;
   Completer<void>? _ready;
 
   bool get alive => !_dead;
@@ -216,6 +238,7 @@ class _Worker {
               if (!owner._notifications.contains(p)) p,
           ],
           notifications: owner._notifications.toList(),
+          interactive: owner._interactive.toList(),
           workerHost: owner.workerHost,
           workerHostConfig: owner.workerHostConfig,
           prelude: owner.prelude,
@@ -270,10 +293,32 @@ class _Worker {
     final pending = Completer<Object?>();
     _activeId = id;
     _pending = pending;
-    _watchdog = Timer(owner.limits.wallTime + owner.hangGrace, () {
+    _wallClock
+      ..reset()
+      ..start();
+    _interactiveClock
+      ..stop()
+      ..reset();
+    _interactiveDepth = 0;
+    _armWatchdog(id);
+    _send!.send(message);
+    return pending.future;
+  }
+
+  /// 按当前计时的预算（总时长或交互等待）加上 [IsolateScriptRuntime.hangGrace] 设置看门狗。
+  void _armWatchdog(int id) {
+    _watchdog?.cancel();
+    final interactive = _interactiveDepth > 0;
+    final budget = interactive
+        ? owner.limits.interactiveTime
+        : owner.limits.wallTime;
+    final used = interactive ? _interactiveClock.elapsed : _wallClock.elapsed;
+    var left = budget + owner.hangGrace - used;
+    if (left < Duration.zero) left = Duration.zero;
+    _watchdog = Timer(left, () {
       if (_activeId != id) return;
       owner._log(
-        '脚本 worker 在 ${owner.limits.wallTime + owner.hangGrace} 内没有回应，'
+        '脚本 worker 在 ${budget + owner.hangGrace} 内没有回应，'
         '已放弃并将在下次调用时重建（若卡在原生代码中，该 isolate 可能无法被终止）',
       );
       shutdown(
@@ -283,8 +328,21 @@ class _Worker {
         ),
       );
     });
-    _send!.send(message);
-    return pending.future;
+  }
+
+  void _beginInteractive(int id) {
+    if (_activeId != id || _interactiveDepth++ > 0) return;
+    _wallClock.stop();
+    _interactiveClock.start();
+    _armWatchdog(id);
+  }
+
+  void _endInteractive(int id) {
+    if (_activeId != id || _interactiveDepth == 0) return;
+    if (--_interactiveDepth > 0) return;
+    _interactiveClock.stop();
+    _wallClock.start();
+    _armWatchdog(id);
   }
 
   void shutdown(ScriptException reason) {
@@ -398,12 +456,16 @@ class _Worker {
       );
       return;
     }
+    final interactive = owner._interactive.contains(path);
+    if (interactive) _beginInteractive(callId);
     Future.sync(() => fn(args)).then(
       (v) {
+        if (interactive) _endInteractive(callId);
         // 调用已结束：结果丢弃（worker 也会丢弃）。
         if (callId == _activeId) reply(true, v);
       },
       onError: (Object e, StackTrace _) {
+        if (interactive) _endInteractive(callId);
         if (callId == _activeId) reply(false, _encodeError(e));
       },
     );
@@ -417,6 +479,7 @@ class _WorkerBoot {
     required this.main,
     required this.remote,
     required this.notifications,
+    required this.interactive,
     required this.workerHost,
     required this.workerHostConfig,
     required this.prelude,
@@ -426,6 +489,7 @@ class _WorkerBoot {
   final SendPort main;
   final List<String> remote;
   final List<String> notifications;
+  final List<String> interactive;
   final WorkerHostFactory? workerHost;
   final Object? workerHostConfig;
   final String? prelude;
@@ -465,6 +529,7 @@ void _workerMain(_WorkerBoot boot) {
     host: host,
     limits: boot.limits,
     prelude: boot.prelude,
+    interactive: boot.interactive.toSet(),
   );
 
   Future<void> run(int id, Future<Object?> Function() body) async {

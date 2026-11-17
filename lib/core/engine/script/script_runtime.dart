@@ -24,13 +24,20 @@ class ScriptLimits {
     this.wallTime = const Duration(seconds: 30),
     this.memoryBytes = 64 * 1024 * 1024,
     this.maxStackBytes = 512 * 1024,
+    this.interactiveTime = const Duration(minutes: 10),
   });
 
   /// 单次入口调用中，脚本实际执行（不含等待宿主 Future）的累计时长上限。
   final Duration cpuTime;
 
-  /// 单次入口调用的总时长上限（含网络等待）。
+  /// 单次入口调用的总时长上限（含网络等待，不含等待用户操作的时间，见 [interactiveTime]）。
   final Duration wallTime;
+
+  /// 单次入口调用中，等待“交互式”宿主函数（需要用户操作，如 `ui.openWebView`）的累计时长上限。
+  ///
+  /// 有交互式宿主调用进行中时 [wallTime] 暂停计时，改按本上限计时；
+  /// 因此一次调用最长约为 `wallTime + interactiveTime`，脚本不能借此无限挂起。
+  final Duration interactiveTime;
 
   /// JS 堆内存上限（整个运行时共享）。
   final int memoryBytes;

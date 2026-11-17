@@ -408,10 +408,12 @@ tsumugi.ui.openWebView ────────┘   （单飞 / 节流） └�
 - **错误码**：用户取消 → `E_CHALLENGE`；平台不支持 WebView / 缺少 WebView2 Runtime → `E_UNSUPPORTED`。
   `SourceErrorView` 对 `E_CHALLENGE` 与 `E_LOGIN_REQUIRED` 显示「打开验证页」，完成后自动调用重试回调；
   搜索、详情、阅读器复用同一入口（`openSourceVerification`）。
-- **已知限制**：`openWebView` 的等待计入单次调用的 30 s 总时长（source-spec §4.4）。调用超时后验证页
-  仍保持打开，用户完成后 Cookie 照常写回，但这次调用已以 `E_LIMIT` 失败，需要用户重试；
-  需要较长时间的登录建议脚本直接抛出 `E_LOGIN_REQUIRED`，由界面引导用户打开验证页。
-  后续可让引擎在等待 `openWebView` 期间暂停总时长计时（[#23](https://github.com/Shiroha23/Tsumugi/issues/23)）。
+- **等待时长**（#23）：`openWebView` 进行中时引擎暂停单次调用的 30 s 总时长，改按单独的 10 min 上限
+  （`ScriptLimits.interactiveTime`）计时，见 source-spec §4.4。worker 内的 `QuickJsScriptRuntime` 与主 isolate 的看门狗
+  各自计时（交互式路径为 `interactiveHostPaths`），看门狗是否暂停只由主 isolate 自己执行该宿主函数决定。
+  超过上限时验证页仍保持打开，用户完成后 Cookie 照常写回，但这次调用以 `E_LIMIT` 失败。
+  已知限制：搜索 / 发现页另有界面层超时（`searchTimeoutProvider` / `exploreTimeoutProvider`，30 s），
+  在这些入口里打开的验证页仍可能来不及完成。
 - 测试中用假的 `WebViewLauncher` / `WebCookieStore`，不启动真实 WebView；手动验证用
   `tool/mock_server` 的 `/challenge/page`、`/login` 与 `test/fixtures/sources/mock_comic_gated*.json`。
 
@@ -531,6 +533,7 @@ CPU 预算跨 await 累计、总时长上限、内存上限、栈上限、超限
 - **CPU 时间**：每次进入 JS（调用导出、resolve 宿主 Promise）前按本次调用的剩余 CPU 预算设置
   QuickJS 中断 deadline，退出时累计耗时；等待宿主 Future 的时间不计入。超限 → `E_LIMIT`。
 - **总时长**：Dart 侧计时器，超时即让本次调用失败（`E_LIMIT`），之后到达的宿主结果被丢弃。
+  交互式宿主调用（`ui.openWebView`）进行中时暂停，改按 `interactiveTime` 计时（§5.3）。
 - **内存 / 栈**：`JSRuntimeConfig.memoryLimit` / `maxStackSize`，超限 → `E_LIMIT`。
 - **值传递**：跨边界只传 JSON 兼容值（JS 侧用初始化时缓存的 `JSON.stringify`）。
 - 宿主对象 `tsumugi` 在注入后冻结。
@@ -570,7 +573,6 @@ CPU 预算跨 await 累计、总时长上限、内存上限、栈上限、超限
   根治需要给引擎打补丁（在这些循环中加入中断检查）或把脚本放进可被强制结束的独立进程；
   在此之前，恶意源最坏能卡死其所在的 worker（[#29](https://github.com/Shiroha23/Tsumugi/issues/29)）。
 - 同一运行时上的调用**串行执行**（宿主 Promise 需要归属到具体调用）。如需单源并发，可按调用开多个运行时。
-- `ui.openWebView` 的等待时间计入单次调用的 30 s 总时长，用户登录可能来不及完成；M3 的处理与后续工作见 §5.3（[#23](https://github.com/Shiroha23/Tsumugi/issues/23)）。
 - HTML 句柄的 DOM 不在 JS 堆内，只能靠句柄数与解析文本量的上限间接约束（source-spec §4.2.1）。
 - 源脚本**不支持顶层 await**（模块同步求值）；已写入 source-spec §4.1。
 - 移动端：Android 已在真机上手动验证（2026-11，漫画 / 小说 / 脚本源 / WebView）；iOS 仍只验证到能编译（[#31](https://github.com/Shiroha23/Tsumugi/issues/31)）；
