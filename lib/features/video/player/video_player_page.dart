@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
@@ -9,6 +10,7 @@ import '../../../shared/history/providers.dart';
 import '../../../shared/library/providers.dart';
 import '../../../shared/video/media_proxy_providers.dart';
 import '../../../shared/video/player_options.dart';
+import '../../../shared/video/subtitle_providers.dart';
 import '../../../shared/widgets/source_error_view.dart';
 import '../../../sources/model/content.dart';
 import '../../../sources/network_error_mapping.dart';
@@ -21,12 +23,14 @@ import 'video_playback.dart';
 import 'video_player_layout.dart';
 import 'video_playlist.dart';
 import 'video_progress.dart';
+import 'video_subtitles.dart';
 import 'video_touch_controls.dart';
 
 /// 视频播放页（architecture §5.2「视频播放」、§6.4）：取 `content(unitId)` 的流，经本地媒体代理交给
 /// media_kit（libmpv）播放。桌面用 media_kit 的桌面控件（快捷键、窗口全屏）；Android / iOS 用
 /// [VideoTouchControls] 与页面内全屏（[VideoFullscreenController]）。清晰度与倍速在标题栏菜单
-/// （移动端全屏时在顶栏）；选集与线路在画面下方（宽屏时在右侧）。
+/// （移动端全屏时在顶栏）；选集与线路在画面下方（宽屏时在右侧）。字幕菜单同在标题栏，字幕由
+/// [VideoSubtitleOverlay] 显示（外挂字幕不经播放器，architecture §6.4.7）。
 ///
 /// 播放器只拿到 `http://127.0.0.1:<port>/…` 的代理地址；上游请求全部由该源的网络层发出。
 class VideoPlayerPage extends ConsumerStatefulWidget {
@@ -98,11 +102,62 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
 
   /// 在 initState 中取得：dispose 时不能再使用 ref。
   late final VideoProgressRecorder _recorder;
+  late final SubtitlePreferencesStore _subtitleStore;
+
+  // 字幕（architecture §5.2「字幕」）。
+  late final _subtitles = VideoSubtitleController(
+    playback: _playback,
+    embeddedText: _player.stream.subtitle,
+  );
+
+  /// 当前剧集的外挂字幕（`content.subtitles`）。
+  List<SubtitleRef> _externalSubs = const [];
+
+  /// 当前流的内嵌字幕轨（HLS 字幕播放列表）。
+  List<EmbeddedSubtitle> _embeddedSubs = const [];
+  SubtitleChoice _subChoice = const SubtitleChoiceOff();
+
+  /// 按记住的选择自动选字幕；用户在本集手动选择后为 false。
+  bool _subAuto = true;
+  SubtitlePreference? _subPref;
+  bool _subPrefLoaded = false;
+
+  /// 本集已取得的外挂字幕、正在取的与取失败的（下标）；换集时清空。
+  final _subCache = <int, SubtitleDocument>{};
+  final _subPending = <int>{};
+  final _subFailed = <int>{};
+  int _subGeneration = 0;
+
+  /// 换集或离开页面时取消仍在取的外挂字幕。
+  NetCancellation _subCancel = NetCancellation();
+
+  /// 当前流已开始播放、轨道列表已确定（之前找不到记住的内嵌轨不代表它不存在）。
+  bool _embeddedKnown = false;
+
+  /// 用户选了尚未取得的外挂字幕：取得成功后才记住（失败时不记住）。
+  int? _subRememberPending;
 
   @override
   void initState() {
     super.initState();
     _recorder = ref.read(videoProgressRecorderProvider);
+    _subtitleStore = ref.read(subtitlePreferencesStoreProvider);
+    _subtitleStore
+        .load(widget.sourceId)
+        .then(
+          (p) {
+            if (!mounted) return;
+            _subPref = p;
+            _subPrefLoaded = true;
+            _autoPickSubtitle();
+          },
+          onError: (Object e) {
+            debugPrint('[subtitle] preference: $e');
+            if (!mounted) return;
+            _subPrefLoaded = true;
+            _autoPickSubtitle();
+          },
+        );
     _playback; // 尽早订阅播放器状态
     _fullscreen.addListener(_onFullscreenChanged);
     _background.attach();
@@ -115,6 +170,7 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
         }),
       )
       ..add(_player.stream.completed.listen(_onCompleted))
+      ..add(_player.stream.tracks.listen(_onTracks))
       ..add(
         _player.stream.rate.listen((r) {
           if (mounted) setState(() => _rate = r);
@@ -132,7 +188,15 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
       _subscriptions
         ..add(_player.stream.duration.listen((d) => log('duration $d')))
         ..add(_player.stream.buffering.listen((b) => log('buffering $b')))
-        ..add(_player.stream.completed.listen((c) => log('completed $c')));
+        ..add(_player.stream.completed.listen((c) => log('completed $c')))
+        ..add(
+          _player.stream.track.listen(
+            (t) => log('subtitle track ${t.subtitle.id}'),
+          ),
+        )
+        ..add(
+          _player.stream.subtitle.listen((t) => log('sub-text ${t.first}')),
+        );
     }
     ref.listenManual(
       mediaDetailProvider(widget.sourceId, widget.itemId),
@@ -311,6 +375,7 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
     _streams = const [];
     _streamIndex = -1;
     final generation = _begin();
+    _setExternalSubtitles(const []);
     try {
       final source = await ref.read(
         sourceInstanceProvider(widget.sourceId).future,
@@ -331,6 +396,7 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
       final from = await _resolveStart(start);
       if (!_current(generation)) return;
       _streams = streams;
+      _setExternalSubtitles(content.subtitles);
       await _open(generation, pickStream(streams, _quality), from);
     } on Object catch (e) {
       _fail(generation, e);
@@ -340,6 +406,8 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
   /// 换清晰度：沿用已取得的流列表。
   Future<void> _play(int index, {required Duration start}) async {
     final generation = _begin();
+    // 内嵌轨属于具体的流：按记住的标签在新流中重新自动选择（新流没有该轨道时按默认规则）。
+    if (_subChoice is SubtitleChoiceEmbedded) _subAuto = true;
     try {
       await _open(generation, index, start);
     } on Object catch (e) {
@@ -349,6 +417,10 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
 
   int _begin() {
     final generation = ++_generation;
+    // 内嵌字幕轨属于具体的流：新流的轨道列表到达后按所选标签重新匹配，
+    // 开始播放后（轨道列表已确定）才认定某条内嵌轨不存在。
+    _embeddedSubs = const [];
+    _embeddedKnown = false;
     _stream?.close();
     _stream = null;
     _autoNextHandled = false;
@@ -395,6 +467,9 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
     );
     setState(() => _loading = false);
     _report(immediate: true);
+    _embeddedKnown = true;
+    if (_subAuto) _autoPickSubtitle();
+    _applyPlayerSubtitleTrack(force: true);
     // 诊断：实际使用的解码路径（真机比较 hwdec 时看 logcat）。
     if (videoVerboseLogs) {
       Future<void>.delayed(const Duration(seconds: 1), () async {
@@ -413,6 +488,164 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
     });
   }
 
+  // ---------------------------------------------------------------------------
+  // 字幕
+
+  /// 换集：换上新一集的外挂字幕，并按记录重新选择。
+  void _setExternalSubtitles(List<SubtitleRef> subtitles) {
+    _subGeneration++;
+    _subCancel.cancel(); // 上一集仍在取的字幕
+    _subCancel = NetCancellation();
+    _subRememberPending = null;
+    _subCache.clear();
+    _subPending.clear();
+    _subFailed.clear();
+    _subAuto = true;
+    setState(() => _externalSubs = subtitles);
+    _autoPickSubtitle();
+  }
+
+  void _onTracks(Tracks tracks) {
+    if (!mounted) return;
+    final embedded = [
+      for (final t in tracks.subtitle)
+        if (t.id != 'auto' && t.id != 'no')
+          EmbeddedSubtitle(t.id, title: t.title, language: t.language),
+    ];
+    if (listEquals(embedded, _embeddedSubs)) return;
+    if (videoVerboseLogs) {
+      debugPrint(
+        '[subtitle] tracks: '
+        '${[for (final t in embedded) '${t.id}:${t.title}/${t.language}']}',
+      );
+    }
+    setState(() => _embeddedSubs = embedded);
+    if (_subAuto) {
+      _autoPickSubtitle();
+    } else {
+      _applyPlayerSubtitleTrack();
+    }
+  }
+
+  void _autoPickSubtitle() {
+    if (!_subAuto || !_subPrefLoaded) return;
+    _setSubtitle(
+      pickSubtitle(
+        preference: _subPref,
+        external: _externalSubs,
+        embedded: _embeddedSubs,
+        embeddedKnown: _embeddedKnown,
+        failed: _subFailed,
+      ),
+    );
+  }
+
+  /// 用户在菜单中选择：之后本集不再自动选择，并按源记住（外挂字幕在取得成功后才记住）。
+  void _chooseSubtitle(SubtitleChoice choice) {
+    _subAuto = false;
+    _subRememberPending = null;
+    if (choice case SubtitleChoiceExternal(:final index)) {
+      _subFailed.remove(index); // 手动选择时重试
+      if (!_subCache.containsKey(index)) _subRememberPending = index;
+    }
+    _setSubtitle(choice);
+    if (_subRememberPending == null) _rememberSubtitle(choice);
+  }
+
+  void _rememberSubtitle(SubtitleChoice choice) {
+    final preference = subtitlePreferenceFor(choice, _externalSubs);
+    _subPref = preference;
+    _subtitleStore.save(widget.sourceId, preference).catchError((Object e) {
+      debugPrint('[subtitle] save preference: $e');
+    });
+  }
+
+  void _setSubtitle(SubtitleChoice choice) {
+    final changed = choice != _subChoice;
+    if (changed) setState(() => _subChoice = choice);
+    switch (choice) {
+      case SubtitleChoiceOff():
+        _subtitles.hide();
+      case SubtitleChoiceExternal(:final index):
+        if (_subCache[index] case final document?) {
+          _subtitles.showDocument(document);
+        } else {
+          _subtitles.hide();
+          _loadExternalSubtitle(index);
+        }
+      case SubtitleChoiceEmbedded():
+        _subtitles.showEmbedded();
+    }
+    _applyPlayerSubtitleTrack();
+  }
+
+  /// 让播放器选中与 [_subChoice] 相符的内嵌轨；未选内嵌轨时不选任何字幕轨（`sid=no`，不多取字幕分片）。
+  ///
+  /// [force]：即使 media_kit 记录的当前轨道已相同也再设置一次。打开新流期间轨道列表会经历
+  /// “有 → 空 → 有”，media_kit 的 `state.track` 可能与 libmpv 实际的 `sid` 不一致（Android 真机上
+  /// 自动选择内嵌轨后没有字幕），新流开始播放时强制设置一次。
+  void _applyPlayerSubtitleTrack({bool force = false}) {
+    final current = _player.state.track.subtitle;
+    SubtitleTrack target = SubtitleTrack.no();
+    if (_subChoice case SubtitleChoiceEmbedded(:final label)) {
+      final i = matchEmbeddedSubtitle(_embeddedSubs, label);
+      if (i < 0) return; // 轨道列表尚未到达
+      final id = _embeddedSubs[i].id;
+      target = _player.state.tracks.subtitle.firstWhere(
+        (t) => t.id == id,
+        orElse: SubtitleTrack.no,
+      );
+    }
+    if (force || current.id != target.id) {
+      if (videoVerboseLogs) {
+        debugPrint('[subtitle] set track ${current.id} → ${target.id}');
+      }
+      _player.setSubtitleTrack(target).catchError((Object e) {
+        debugPrint('[subtitle] set track: $e');
+      });
+    }
+  }
+
+  Future<void> _loadExternalSubtitle(int index) async {
+    if (!_subPending.add(index)) return;
+    final generation = _subGeneration;
+    try {
+      final document = await ref.read(loadSubtitleProvider)(
+        widget.sourceId,
+        _externalSubs[index],
+        cancellation: _subCancel,
+      );
+      if (!mounted || generation != _subGeneration) return;
+      _subCache[index] = document;
+      if (_subChoice == SubtitleChoiceExternal(index)) {
+        _subtitles.showDocument(document);
+        if (_subRememberPending == index) {
+          _subRememberPending = null;
+          _rememberSubtitle(_subChoice);
+        }
+      }
+    } on Object catch (e) {
+      if (!mounted || generation != _subGeneration) return;
+      debugPrint('[subtitle] load failed: $e');
+      _subFailed.add(index);
+      if (_subRememberPending == index) _subRememberPending = null;
+      if (_subChoice != SubtitleChoiceExternal(index)) return;
+      // 退回关闭（不记住），本集不再自动选择其他字幕；播放不受影响。
+      _subAuto = false;
+      _setSubtitle(const SubtitleChoiceOff());
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          content: Text(
+            '字幕“${externalSubtitleLabel(_externalSubs, index)}”加载失败：'
+            '${subtitleErrorMessage(e)}',
+          ),
+        ),
+      );
+    } finally {
+      if (generation == _subGeneration) _subPending.remove(index);
+    }
+  }
+
   @override
   void dispose() {
     _report(immediate: true);
@@ -422,6 +655,8 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
       ..removeListener(_onFullscreenChanged)
       ..restore().ignore()
       ..dispose();
+    _subCancel.cancel();
+    _subtitles.dispose();
     _playback.dispose();
     for (final s in _subscriptions) {
       s.cancel().ignore();
@@ -479,6 +714,41 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
           ),
         ),
       ),
+    if (_externalSubs.isNotEmpty || _embeddedSubs.isNotEmpty)
+      PopupMenuButton<SubtitleChoice>(
+        tooltip: '字幕',
+        onSelected: _chooseSubtitle,
+        icon: Icon(
+          _subChoice is SubtitleChoiceOff
+              ? Icons.subtitles_off_outlined
+              : Icons.subtitles,
+        ),
+        itemBuilder: (_) => [
+          CheckedPopupMenuItem(
+            value: const SubtitleChoiceOff(),
+            checked: _subChoice is SubtitleChoiceOff,
+            child: const Text('关闭'),
+          ),
+          for (var i = 0; i < _externalSubs.length; i++)
+            CheckedPopupMenuItem(
+              value: SubtitleChoiceExternal(i),
+              checked: _subChoice == SubtitleChoiceExternal(i),
+              child: Text(externalSubtitleLabel(_externalSubs, i)),
+            ),
+          for (var i = 0; i < _embeddedSubs.length; i++)
+            CheckedPopupMenuItem(
+              value: SubtitleChoiceEmbedded(
+                embeddedSubtitleLabel(_embeddedSubs, i),
+              ),
+              checked:
+                  _subChoice ==
+                  SubtitleChoiceEmbedded(
+                    embeddedSubtitleLabel(_embeddedSubs, i),
+                  ),
+              child: Text('${embeddedSubtitleLabel(_embeddedSubs, i)}（内嵌）'),
+            ),
+        ],
+      ),
     PopupMenuButton<double>(
       tooltip: '倍速',
       initialValue: _rate,
@@ -492,6 +762,17 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
       ),
     ),
   ];
+
+  // 方法引用而不是闭包：Video 按 == 比较 controls，每次 build 新建闭包会让它反复更新。
+  Widget _subtitlesOnly(VideoState state) =>
+      VideoSubtitleOverlay(text: _subtitles);
+
+  Widget _subtitlesAndDesktopControls(VideoState state) => Stack(
+    children: [
+      Positioned.fill(child: VideoSubtitleOverlay(text: _subtitles)),
+      Positioned.fill(child: AdaptiveVideoControls(state)),
+    ],
+  );
 
   Widget _buildPlayer(BuildContext context) {
     if (_error case final error?) {
@@ -517,11 +798,16 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
             children: [
               // 真正从起始位置开始播放之前不显示控件，用加载遮罩盖住画面与进度。
               // 常亮：Video 的 wakelock 随播放状态开关（architecture §5.2「屏幕常亮」）。
+              // 字幕层放在控件构造器里：桌面的窗口全屏路由同样显示，位于控件之下。
+              // media_kit 自带的 SubtitleView 不用（外挂字幕不经播放器，architecture §6.4.7）。
               Video(
                 controller: _video,
                 controls: touch || _loading
-                    ? NoVideoControls
-                    : AdaptiveVideoControls,
+                    ? _subtitlesOnly
+                    : _subtitlesAndDesktopControls,
+                subtitleViewConfiguration: const SubtitleViewConfiguration(
+                  visible: false,
+                ),
                 // 移动端由 _background 处理（含加载期间切到后台）；桌面沿用 media_kit 的默认行为。
                 pauseUponEnteringBackgroundMode: !touch,
               ),

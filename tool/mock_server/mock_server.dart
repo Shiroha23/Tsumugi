@@ -47,11 +47,11 @@
 /// | `GET /video/search?q=` | 视频搜索（一部虚构剧集） |
 /// | `GET /video/show/1` | 视频详情（6 集，第 5、6 集为诊断用的 MPEG-TS）；种下 `vtoken=1` Cookie |
 /// | `GET /video/show/1/ep/1..6` | 剧集页：`<video><source src=…>` 指向下面的素材 |
-/// | `GET\|HEAD /video/media/<文件>` | `test/fixtures/mock_site/video/` 中的测试视频（`clip.mp4`、`hls/*`），支持 `Range` |
+/// | `GET\|HEAD /video/media/<文件>` | `test/fixtures/mock_site/video/` 中的测试视频（`clip.mp4`、`hls/*`）与字幕（`subs/*`），支持 `Range` |
 /// | `GET\|HEAD /video/protected/<文件>` | 同上，但要求 `Referer` 的路径以 `/video/` 开头（否则 403）；`hls/key.bin` 另需 `vtoken` Cookie |
 /// | `GET /video/api/search?q=` | 视频 JSON 接口（脚本源）：搜索，一部多线路的虚构剧集 |
 /// | `GET /video/api/show/2` | JSON 详情：两条线路（A：需要 Referer / Cookie；B：无保护）各 3 集；种下 `vtoken=1` Cookie |
-/// | `GET /video/api/play/<a\|b>/<1..3>` | JSON 剧集：两个清晰度（`720p` 为 AES-128 HLS，`360p` 为 MP4） |
+/// | `GET /video/api/play/<a\|b>/<1..3>` | JSON 剧集：两个清晰度（`720p` 为带 HLS 字幕轨的 AES-128 HLS，`360p` 为 MP4）与 5 条外挂字幕（含 GBK 编码的 srt 与伪装成 srt 的 HTML） |
 library;
 
 import 'dart:async';
@@ -59,7 +59,18 @@ import 'dart:convert';
 import 'dart:io';
 
 class MockServer {
-  MockServer._(this._server, this.fixturesDir, this.rewriteFictionalHosts);
+  MockServer._(
+    this._server,
+    this.fixturesDir,
+    this.rewriteFictionalHosts,
+    this.testControl,
+  );
+
+  /// 在设备上运行集成测试用（`main.dart --test-control`）：开启 `/__test/*` 控制接口——
+  /// `GET /__test/requests`（已记录的请求，JSON）、`POST /__test/reset`（清空请求记录与计数器）、
+  /// `GET /__test/fixture?path=<test/fixtures 下的相对路径>`（原样返回测试数据，如虚构源清单）。
+  /// 控制接口的请求本身不记录。设备读不到电脑上的 `test/fixtures/`，测试经这些接口取数据与断言请求。
+  final bool testControl;
 
   /// 手动调试模式：把页面 / JSON 中虚构的图片主机（[fictionalImageOrigin]）换成本次请求所用的地址，
   /// 这样在桌面或真机上直接访问本服务器时，封面与漫画页也能加载。
@@ -94,6 +105,7 @@ class MockServer {
     InternetAddress? address,
     String? fixturesDir,
     bool rewriteFictionalHosts = false,
+    bool testControl = false,
   }) async {
     final dir = Directory(fixturesDir ?? 'test/fixtures/mock_site');
     if (!dir.existsSync()) {
@@ -103,7 +115,7 @@ class MockServer {
       address ?? InternetAddress.loopbackIPv4,
       port,
     );
-    final mock = MockServer._(server, dir, rewriteFictionalHosts);
+    final mock = MockServer._(server, dir, rewriteFictionalHosts, testControl);
     server.listen(mock._handle);
     return mock;
   }
@@ -115,6 +127,9 @@ class MockServer {
 
   Future<void> _handle(HttpRequest req) async {
     final body = await utf8.decoder.bind(req).join();
+    if (testControl && req.uri.path.startsWith('/__test/')) {
+      return _testControl(req);
+    }
     requests.add(
       RecordedRequest(
         method: req.method,
@@ -137,6 +152,45 @@ class MockServer {
         await req.response.close();
       } catch (_) {}
     }
+  }
+
+  Future<void> _testControl(HttpRequest req) async {
+    final res = req.response;
+    switch ((req.method, req.uri.path)) {
+      case ('GET', '/__test/requests'):
+        return _json(res, [
+          for (final r in requests)
+            {
+              'method': r.method,
+              'host': r.host,
+              'path': r.path,
+              'query': r.query,
+              'headers': r.headers,
+              'body': r.body,
+            },
+        ]);
+      case ('POST', '/__test/reset'):
+        requests.clear();
+        _flakyCounters.clear();
+        return res.close();
+      case ('GET', '/__test/fixture'):
+        final rel = req.uri.queryParameters['path'] ?? '';
+        // 只允许 test/fixtures 下的普通相对路径。
+        if (!RegExp(r'^[\w.-]+(/[\w.-]+)*$').hasMatch(rel) ||
+            rel.split('/').any((s) => s == '..' || s == '.')) {
+          res.statusCode = HttpStatus.badRequest;
+          return res.close();
+        }
+        final file = File('${fixturesDir.parent.path}/$rel');
+        if (!file.existsSync()) {
+          res.statusCode = HttpStatus.notFound;
+          return res.close();
+        }
+        res.add(await file.readAsBytes());
+        return res.close();
+    }
+    res.statusCode = HttpStatus.notFound;
+    return res.close();
   }
 
   /// 虚构源固定写的地址；[_source] 会把它换成请求实际使用的地址。
@@ -486,8 +540,21 @@ class MockServer {
       final (_, base) = lines[m[1]]!;
       return _json(res, {
         'streams': [
-          {'url': '${base}hls/master.m3u8', 'type': 'hls', 'quality': '720p'},
+          {
+            'url': '${base}hls/master_sub.m3u8',
+            'type': 'hls',
+            'quality': '720p',
+          },
           {'url': '${base}clip.mp4', 'type': 'mp4', 'quality': '360p'},
+        ],
+        // 外挂字幕（architecture §6.4.7）：GBK 的 srt 不声明编码（按 GB18030 回退），
+        // bad.srt 是伪装成字幕的 HTML（应被拒绝）。
+        'subtitles': [
+          {'url': '${base}subs/zh.srt', 'lang': '简体中文', 'format': 'srt'},
+          {'url': '${base}subs/zh_gbk.srt', 'lang': '简体中文（GBK）'},
+          {'url': '${base}subs/en.vtt', 'lang': 'English', 'format': 'vtt'},
+          {'url': '${base}subs/ja.ass', 'lang': '日本語', 'format': 'ass'},
+          {'url': '${base}subs/bad.srt', 'lang': '损坏示例', 'format': 'srt'},
         ],
       });
     }
@@ -511,12 +578,23 @@ class MockServer {
     'clip.ts': 'video/mp2t',
     'clip_pts0.ts': 'video/mp2t',
     'hls/master.m3u8': 'application/vnd.apple.mpegurl',
+    'hls/master_sub.m3u8': 'application/vnd.apple.mpegurl',
+    'hls/sub.m3u8': 'application/vnd.apple.mpegurl',
+    'hls/sub0.vtt': 'text/vtt',
+    'hls/sub1.vtt': 'text/vtt',
+    'hls/sub2.vtt': 'text/vtt',
     'hls/index.m3u8': 'application/vnd.apple.mpegurl',
     'hls/mixed.m3u8': 'application/vnd.apple.mpegurl',
     'hls/key.bin': 'application/octet-stream',
     'hls/seg0.ts': 'video/mp2t',
     'hls/seg1.ts': 'video/mp2t',
     'hls/seg2.ts': 'video/mp2t',
+    // 字幕：srt / ass 不带 charset（GBK 的按回退规则识别），bad.srt 实为 HTML。
+    'subs/zh.srt': 'text/plain',
+    'subs/zh_gbk.srt': 'text/plain',
+    'subs/en.vtt': 'text/vtt; charset=utf-8',
+    'subs/ja.ass': 'text/plain',
+    'subs/bad.srt': 'text/html',
   };
 
   /// 发送 `video/` 下的测试素材（只认 [_videoFiles] 中的文件名），支持单个 `Range`。

@@ -80,9 +80,21 @@ void main() {
       expect(streams.first.type, StreamType.hls);
       expect(
         streams.first.url,
-        'http://127.0.0.1:8080/video/protected/hls/master.m3u8',
+        'http://127.0.0.1:8080/video/protected/hls/master_sub.m3u8',
       );
       expect(streams.last.type, StreamType.mp4);
+      // 外挂字幕：相对地址解析为绝对地址，lang / format 保留。
+      expect(content.subtitles.map((s) => (s.lang, s.format)), [
+        ('简体中文', 'srt'),
+        ('简体中文（GBK）', null),
+        ('English', 'vtt'),
+        ('日本語', 'ass'),
+        ('损坏示例', 'srt'),
+      ]);
+      expect(
+        content.subtitles.first.url,
+        'http://127.0.0.1:8080/video/protected/subs/zh.srt',
+      );
     });
   });
 }

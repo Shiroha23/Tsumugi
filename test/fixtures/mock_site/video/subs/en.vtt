@@ -1,0 +1,19 @@
+WEBVTT - Tsumugi test captions
+Kind: captions
+Language: en
+
+NOTE
+This file is made up for Tsumugi's tests.
+
+STYLE
+::cue { color: yellow; }
+
+intro
+00:00.000 --> 00:02.000 align:center line:90%
+<v Narrator>Color bars &amp; a tone</v>
+
+00:00:02.000 --> 00:00:04.000
+<c.loud>Second</c> part <00:00:03.000>still
+
+00:00:04.000 --> 00:00:06.000
+Last part &lt;end&gt;

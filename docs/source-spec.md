@@ -120,7 +120,12 @@ interface VideoContent {
     quality?: string;    // "1080p" 等
     headers?: Headers;
   }[];
-  subtitles?: { url: string; lang?: string; format?: "srt" | "vtt" | "ass" }[];
+  subtitles?: {
+    url: string;
+    lang?: string;       // 显示在字幕菜单中的标签，如 "简体中文"；缺省为“字幕 n”
+    format?: "srt" | "vtt" | "ass";  // 给出时必须与内容一致（见下）；空串视为未给出
+    charset?: string;    // 可选：字幕文件的字符集，如 "big5"（§5 的标签）
+  }[];
 }
 
 // music
@@ -129,6 +134,14 @@ interface MusicContent {
   lyrics?: { format: "lrc" | "text"; content: string };
 }
 ```
+
+**视频字幕（`VideoContent.subtitles`）**：客户端经本源的网络层取得字幕文件（与其他请求一样受白名单、Cookie 域、默认 headers 与
+`rateLimit` 约束，只在用户选中时请求），在客户端内解析为纯文本显示，**不交给播放器**。
+
+- 格式按内容识别：vtt 以 `WEBVTT` 开头，ass（含 SSA）以 `[Script Info]` 开头，srt 以序号 + 时间轴（或直接以时间轴）开头；
+  识别不了的、与 `format` 不符的拒绝。只显示文字：ass 的样式、位置与特效，内嵌字体与绘图指令都被忽略。
+- 文件不超过 4 MB、须在 30 s 内取完；字符集依次取 `charset`、BOM、`Content-Type` 的 charset；都没有时，内容是合法 UTF-8 则按 UTF-8，否则按 GB18030（GBK）。
+- HLS 流在主播放列表中声明的字幕轨（`EXT-X-MEDIA:TYPE=SUBTITLES`，WebVTT）也可以选择，不需要写进 `subtitles`。
 
 #### 2.2.1 小说正文（`NovelContent`）
 
