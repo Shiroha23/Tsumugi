@@ -1,0 +1,17 @@
+{
+  "repoVersion": 1,
+  "name": "流程测试仓库",
+  "sources": [
+    {
+      "id": "com.example.repo.flow",
+      "name": "流程测试漫画",
+      "type": "comic",
+      "version": "1.1.0",
+      "apiVersion": 1,
+      "lang": "zh",
+      "nsfw": false,
+      "url": "sources/flow.json",
+      "sha256": "e0f31d6ae2022479e661acbe7a000ee87278bae7e99017708dc44606a8ebef17"
+    }
+  ]
+}

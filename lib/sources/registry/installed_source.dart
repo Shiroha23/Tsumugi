@@ -8,27 +8,38 @@ import '../model/source_settings.dart';
 /// 源的安装来源。
 final class SourceOrigin {
   /// 本地导入；[label] 可选，例如文件名。
-  const SourceOrigin.local([this.label]) : kind = SourceOriginKind.local;
+  const SourceOrigin.local([this.label])
+    : kind = SourceOriginKind.local,
+      repositoryUrl = null;
 
-  /// 从规则仓库安装（M6），[label] 为清单 URL。
-  const SourceOrigin.repository(String url)
-    : kind = SourceOriginKind.repository,
-      label = url;
+  /// 从规则仓库安装（M6，architecture §4.4）：[url] 为清单的绝对地址，
+  /// [repositoryUrl] 为所属仓库 index.json 的规范化地址。
+  const SourceOrigin.repository(
+    String url, {
+    required String this.repositoryUrl,
+  }) : kind = SourceOriginKind.repository,
+       label = url;
 
-  const SourceOrigin._(this.kind, this.label);
+  const SourceOrigin._(this.kind, this.label, this.repositoryUrl);
 
   final SourceOriginKind kind;
   final String? label;
 
+  /// 所属仓库（仅 [SourceOriginKind.repository]）。
+  final String? repositoryUrl;
+
   @override
   bool operator ==(Object other) =>
-      other is SourceOrigin && other.kind == kind && other.label == label;
+      other is SourceOrigin &&
+      other.kind == kind &&
+      other.label == label &&
+      other.repositoryUrl == repositoryUrl;
 
   @override
-  int get hashCode => Object.hash(kind, label);
+  int get hashCode => Object.hash(kind, label, repositoryUrl);
 
   @override
-  String toString() => 'SourceOrigin(${kind.name}, $label)';
+  String toString() => 'SourceOrigin(${kind.name}, $label, $repositoryUrl)';
 }
 
 /// 一个已安装的源（只是清单与管理状态，不是可运行的 [Source] 实例）。
@@ -78,7 +89,7 @@ final class InstalledSource {
       sortOrder: row.sortOrder,
       installedAt: row.installedAt,
       updatedAt: row.updatedAt,
-      origin: SourceOrigin._(row.originKind, row.originUrl),
+      origin: SourceOrigin._(row.originKind, row.originUrl, row.repositoryUrl),
       manifestSha256: row.manifestSha256,
       manifestJson: row.manifestJson,
       manifest: manifest,

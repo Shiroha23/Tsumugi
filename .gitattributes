@@ -6,3 +6,6 @@ test/fixtures/mock_site/encoding/** -text
 
 # 视频测试素材按字节保存
 test/fixtures/mock_site/video/** -text
+
+# 规则仓库测试数据：索引中记录了清单原始字节的 sha256，不做换行转换
+test/fixtures/repository/** -text

@@ -21,6 +21,9 @@ enum SourceImportError {
 
   /// 已安装完全相同的清单。
   alreadyInstalled,
+
+  /// 从仓库安装 / 更新时，同 id 的已装源来自本地导入或其他仓库（architecture §4.4）。
+  otherOrigin,
 }
 
 class SourceImportException implements Exception {

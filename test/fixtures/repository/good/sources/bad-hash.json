@@ -1,0 +1,26 @@
+{
+  "apiVersion": 1,
+  "id": "com.example.repo.badhash",
+  "name": "哈希不符",
+  "type": "comic",
+  "version": "1.0.0",
+  "author": "tsumugi",
+  "lang": "zh",
+  "nsfw": false,
+  "description": "虚构源，仅用于规则仓库测试。",
+  "baseUrl": "https://bad.example.com",
+  "allowedHosts": [],
+  "engine": "declarative",
+  "rules": {
+    "search": {
+      "request": {
+        "url": "/search?q={{keyword}}&page={{page}}"
+      },
+      "list": "css:.result-item",
+      "fields": {
+        "id": "css:a@href",
+        "title": "css:.title@text"
+      }
+    }
+  }
+}

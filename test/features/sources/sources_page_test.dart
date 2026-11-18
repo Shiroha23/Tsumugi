@@ -12,6 +12,7 @@ import 'package:tsumugi/features/sources/manifest_file_picker.dart';
 import 'package:tsumugi/features/sources/sources_page.dart';
 import 'package:tsumugi/shared/webview/providers.dart';
 import 'package:tsumugi/sources/registry/providers.dart';
+import 'package:tsumugi/sources/repository/providers.dart';
 import 'package:tsumugi/sources/session/source_sessions.dart';
 import 'package:tsumugi/sources/source.dart';
 
@@ -550,6 +551,70 @@ void main() {
       expect(find.text('登录 / 打开网页'), findsNothing);
       expect(find.text('源设置'), findsNothing);
       expect(find.text('删除'), findsOneWidget);
+      await tester.tapAt(Offset.zero);
+      await tester.pumpAndSettle();
+      await unmount(tester);
+    });
+  });
+
+  group('规则仓库状态', () {
+    const repoUrl = 'https://repo.example.com/repo/live/index.json';
+
+    Future<RepositoryService> setUpRepository(String published) async {
+      final service = RepositoryService(db, registry, RepositoryHttpClient());
+      // 已安装 flow-v1；仓库索引为 [published]。
+      await registry.install(
+        await registry.prepareImportBytes(
+          File('test/fixtures/repository/flow-v1/sources/flow.json')
+              .readAsBytesSync(),
+          origin: const SourceOrigin.repository(
+            'https://repo.example.com/repo/live/sources/flow.json',
+            repositoryUrl: repoUrl,
+          ),
+        ),
+      );
+      await service.subscribe(
+        parseRepositoryIndex(
+          File('test/fixtures/repository/$published/index.json')
+              .readAsBytesSync(),
+          Uri.parse(repoUrl),
+        ),
+      );
+      return service;
+    }
+
+    testWidgets('仓库有更高版本：标“可更新”，入口显示数量，菜单有「更新」', (tester) async {
+      await setUpRepository('flow-v2');
+      await pumpPage(tester);
+      expect(find.textContaining('可更新到 1.1.0'), findsOneWidget);
+      expect(
+        find.descendant(of: find.byTooltip('规则仓库'), matching: find.text('1')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byTooltip('源菜单'));
+      await tester.pumpAndSettle();
+      expect(find.text('更新'), findsOneWidget);
+      await tester.tapAt(Offset.zero);
+      await tester.pumpAndSettle();
+      expect(
+        (await registry.get('com.example.repo.flow'))!.version,
+        '1.0.0',
+        reason: '只提示，不自动安装',
+      );
+      await unmount(tester);
+    });
+
+    testWidgets('退订后显示“仓库已移除”', (tester) async {
+      final service = await setUpRepository('flow-v1');
+      await pumpPage(tester);
+      expect(find.textContaining('可更新'), findsNothing);
+      expect(find.textContaining('仓库已移除'), findsNothing);
+      await service.unsubscribe(repoUrl);
+      await tester.pumpAndSettle();
+      expect(find.textContaining('仓库已移除'), findsOneWidget);
+      await tester.tap(find.byTooltip('源菜单'));
+      await tester.pumpAndSettle();
+      expect(find.text('更新'), findsNothing);
       await tester.tapAt(Offset.zero);
       await tester.pumpAndSettle();
       await unmount(tester);

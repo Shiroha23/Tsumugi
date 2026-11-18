@@ -1,0 +1,84 @@
+{
+  "repoVersion": 1,
+  "name": "测试仓库",
+  "sources": [
+    {
+      "id": "com.example.repo.comic",
+      "name": "仓库漫画",
+      "type": "comic",
+      "version": "1.0.0",
+      "apiVersion": 1,
+      "lang": "zh",
+      "nsfw": false,
+      "url": "sources/comic.json",
+      "sha256": "eaa2d265bfa7d235a2a1fd184f06883e44d7c80ffc8691a4fcbfdb760e05ad48"
+    },
+    {
+      "id": "com.example.repo.novel",
+      "name": "仓库小说",
+      "type": "novel",
+      "version": "2.0.0",
+      "apiVersion": 1,
+      "lang": "ja",
+      "nsfw": true,
+      "url": "sources/novel.json",
+      "sha256": "dfc6e0e8e83fa1e0f1eb1414c414d469df7f628278e2bdb400dcb01bf3da208a"
+    },
+    {
+      "id": "com.example.repo.badhash",
+      "name": "哈希不符",
+      "type": "comic",
+      "version": "1.0.0",
+      "apiVersion": 1,
+      "lang": "zh",
+      "nsfw": false,
+      "url": "sources/bad-hash.json",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "id": "com.example.repo.mismatch",
+      "name": "版本不一致",
+      "type": "comic",
+      "version": "1.0.0",
+      "apiVersion": 1,
+      "lang": "zh",
+      "nsfw": false,
+      "url": "sources/mismatch.json",
+      "sha256": "f278c713ad148360abcfa5e97f14f7b44c2ced78a538b53302414138dbbe8814"
+    },
+    {
+      "id": "com.example.repo.future",
+      "name": "需要新客户端",
+      "type": "video",
+      "version": "1.0.0",
+      "apiVersion": 99,
+      "lang": "zh",
+      "nsfw": false,
+      "url": "sources/future.json",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "id": "com.example.repo.insecure",
+      "name": "重定向到 http",
+      "type": "music",
+      "version": "1.0.0",
+      "apiVersion": 1,
+      "lang": "zh",
+      "nsfw": false,
+      "url": "/redirect?to=http://repo.example.com/sources/comic.json",
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    {
+      "id": "com.example.repo.large",
+      "name": "清单超限",
+      "type": "comic",
+      "version": "1.0.0",
+      "apiVersion": 1,
+      "lang": "zh",
+      "nsfw": false,
+      "url": "/large?bytes=5000000",
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+    }
+  ],
+  "someFutureField": 1
+}
