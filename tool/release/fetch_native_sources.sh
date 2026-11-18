@@ -60,5 +60,6 @@ cp "$here/windows_libmpv_build_config.txt" "$stage/"
 cp "$here/SOURCES_README.md" "$stage/README.md"
 
 tar -C "$out" -cf "$out/$name.tar" "$name"
-(cd "$out" && sha256 "$name.tar" >"$name.tar.sha256")
+# 标准格式“哈希  文件名”，可直接 `sha256sum -c` 校验。
+(cd "$out" && printf '%s  %s\n' "$(sha256 "$name.tar")" "$name.tar" >"$name.tar.sha256")
 du -sh "$out/$name.tar"
