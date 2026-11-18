@@ -50,6 +50,8 @@ Matcher _limit(String message) => throwsA(
       .having((e) => e.message, 'message', contains(message)),
 );
 
+var keys = 0;
+
 void main() {
   group('QuickJsScriptRuntime', () {
     late QuickJsScriptRuntime rt;
@@ -164,6 +166,8 @@ void main() {
       hangCooldown: Duration.zero,
       maxStuckWorkers: 100,
       maxStuckWorkersGlobal: 100,
+      // 无响应记录是进程级的：每个实例用独立的 key，不影响下面用默认 key 的用例。
+      hangKey: 'interactive-${++keys}',
     );
 
     Matcher unresponsive = _limit('unresponsive');

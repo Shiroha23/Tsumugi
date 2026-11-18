@@ -135,7 +135,7 @@ void main() {
       ),
       compact: true,
     );
-    expect(find.text('等待验证超时'), findsOneWidget);
+    expect(find.text('验证后仍然超时'), findsOneWidget);
     await tester.tap(find.text('打开验证页'));
     await tester.pumpAndSettle();
     expect(verification.calls, ['com.example.a']);

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tsumugi/core/engine/script/isolate_script_runtime.dart';
@@ -10,6 +11,8 @@ WorkerHost _testWorkerHost(Object? config) {
   return WorkerHost({
     'echo.sync': (a) => 'sync:${a.first}',
     'test.calls': (_) => calls,
+    // config 为文件路径：文件存在时脚本在模块加载阶段卡住（见 fixture）。
+    'test.flag': (_) => config is String && File(config).existsSync(),
     // 在 Dart 代码里忙等：QuickJS 的中断 deadline 不起作用，只能靠主 isolate 的看门狗。
     // 有限时长，便于被放弃的 worker 最终回到事件循环并退出。
     'test.spin': (a) {
@@ -25,29 +28,10 @@ WorkerHost _testWorkerHost(Object? config) {
   }, onCallEnd: () => calls++);
 }
 
-const _script = '''
-let counter = 0;
-export async function add(a, b) { return a + b; }
-export async function bump() { return ++counter; }
-export async function remote(x) { return await tsumugi.echo.async(x); }
-export function sync(x) { return tsumugi.echo.sync(x); }
-export async function remoteError() {
-  try { await tsumugi.echo.fail(); } catch (e) { return [e.code, e.status, e.message]; }
-}
-export function notify() { return tsumugi.log.info('hi', 1) == null; }
-export function calls() { return tsumugi.test.calls(); }
-export function loop() { for (;;) {} }
-export function spin(ms) { tsumugi.test.spin(ms); }
-export async function crash() {
-  tsumugi.test.crash();
-  return await tsumugi.echo.slow();
-}
-export async function slowRemote() { return await tsumugi.echo.slow(); }
-export async function crashLater() {
-  tsumugi.test.spin(300);
-  return await tsumugi.echo.slow();
-}
-''';
+final _script = File('test/fixtures/scripts/isolate_runtime.js')
+    .readAsStringSync();
+
+var keys = 0;
 
 void main() {
   late List<String> logs;
@@ -59,6 +43,8 @@ void main() {
     Duration hangCooldown = Duration.zero,
     int maxStuckWorkers = 100,
     int maxStuckWorkersGlobal = 100,
+    String? hangKey,
+    Object? workerHostConfig,
   }) => IsolateScriptRuntime(
     host: {
       'echo.async': (a) async => 'async:${a.first}',
@@ -75,6 +61,9 @@ void main() {
     },
     notifications: {'log.info'},
     workerHost: _testWorkerHost,
+    workerHostConfig: workerHostConfig,
+    // 无响应记录是进程级的：每个实例默认用独立的 key，测试之间互不影响。
+    hangKey: hangKey ?? 'test-${++keys}',
     limits: limits,
     hangGrace: hangGrace,
     hangCooldown: hangCooldown,
@@ -358,4 +347,103 @@ void main() {
     await expectLater(pending, cancelled);
     expect(await rt.call('add', [2, 3]), 5);
   });
+
+  // --- #29：无响应记录是进程级的，反复新建实例同样受限 ------------------------
+
+  test('a load that hangs suspends new instances with the same key', () async {
+    await waitUntil(() => IsolateScriptRuntime.stuckWorkersGlobal == 0);
+    final dir = Directory.systemTemp.createTempSync('tsumugi-hang');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final flag = File('${dir.path}/hang')..writeAsStringSync('');
+    IsolateScriptRuntime make() => create(
+      limits: const ScriptLimits(wallTime: Duration(milliseconds: 200)),
+      hangGrace: const Duration(milliseconds: 100),
+      hangCooldown: const Duration(milliseconds: 800),
+      maxStuckWorkers: 1,
+      hangKey: 'load-hang',
+      workerHostConfig: flag.path,
+    );
+    final first = make();
+    addTearDown(first.dispose);
+    await expectLater(
+      first.load(_script),
+      throwsA(isA<ScriptException>().having((e) => e.code, 'code', 'E_LIMIT')),
+    );
+    expect(IsolateScriptRuntime.stuckWorkersGlobal, 1);
+    // 新实例（如加载失败后重试）：不再新建 worker。
+    for (var i = 0; i < 3; i++) {
+      final again = make();
+      addTearDown(again.dispose);
+      await expectLater(again.load(_script), suspended);
+      expect(again.suspension, ScriptSuspension.source);
+    }
+    expect(IsolateScriptRuntime.stuckWorkersGlobal, 1);
+    // 冷却结束、卡住的 worker 退出后恢复。
+    flag.deleteSync();
+    final later = make();
+    addTearDown(later.dispose);
+    await waitUntil(() => IsolateScriptRuntime.stuckWorkersGlobal == 0);
+    await Future<void>.delayed(const Duration(milliseconds: 800));
+    await later.load(_script);
+    expect(await later.call('add', [1, 2]), 3);
+  });
+
+  test('process-wide cap also blocks loads, reported as process', () async {
+    await waitUntil(() => IsolateScriptRuntime.stuckWorkersGlobal == 0);
+    final a = create(
+      limits: const ScriptLimits(wallTime: Duration(milliseconds: 200)),
+      hangGrace: const Duration(milliseconds: 100),
+      maxStuckWorkersGlobal: 1,
+    );
+    addTearDown(a.dispose);
+    await a.load(_script);
+    await expectLater(a.call('spin', [1500]), throwsA(isA<ScriptException>()));
+    final b = create(maxStuckWorkersGlobal: 1);
+    addTearDown(b.dispose);
+    await expectLater(
+      b.load(_script),
+      throwsA(
+        isA<ScriptException>()
+            .having((e) => e.code, 'code', 'E_SUSPENDED')
+            .having(
+              (e) => e.message,
+              'message',
+              IsolateScriptRuntime.processWideSuspensionMessage,
+            ),
+      ),
+    );
+    expect(b.suspension, ScriptSuspension.process);
+    expect(a.suspension, ScriptSuspension.process);
+    await waitUntil(() => IsolateScriptRuntime.stuckWorkersGlobal == 0);
+  });
+
+  test(
+    'a rebuild that hangs keeps the script loaded for a later retry',
+    () async {
+      final dir = Directory.systemTemp.createTempSync('tsumugi-hang');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final flag = File('${dir.path}/hang');
+      final rt = create(
+        limits: const ScriptLimits(wallTime: Duration(milliseconds: 200)),
+        hangGrace: const Duration(milliseconds: 100),
+        workerHostConfig: flag.path,
+      );
+      addTearDown(rt.dispose);
+      await rt.load(_script);
+      await expectLater(
+        rt.call('spin', [1500]),
+        throwsA(isA<ScriptException>()),
+      );
+      // 重建时重新加载也卡住。
+      flag.writeAsStringSync('');
+      await expectLater(
+        rt.call('add', [1, 1]),
+        throwsA(
+          isA<ScriptException>().having((e) => e.code, 'code', 'E_LIMIT'),
+        ),
+      );
+      flag.deleteSync();
+      expect(await rt.call('add', [1, 1]), 2);
+    },
+  );
 }

@@ -17,9 +17,15 @@ final class SourceCallTicket {
       Zone.current[_zoneKey] as SourceCallTicket?;
 
   bool _cancelled = false;
+  bool _awaitedUser = false;
   final _listeners = <void Function()>[];
 
   bool get cancelled => _cancelled;
+
+  /// 本票据的调用曾等待用户操作（打开过验证 / 登录页）。由源在交互式宿主调用开始时标记。
+  bool get awaitedUser => _awaitedUser;
+
+  void markAwaitedUser() => _awaitedUser = true;
 
   /// 在本票据的 zone 中执行 [body]。
   R run<R>(R Function() body) => runZoned(body, zoneValues: {_zoneKey: this});
@@ -76,21 +82,24 @@ class SourceCallTimeoutException extends TimeoutException {
 /// 带界面层超时执行一次源调用：[acquire] 取得（可能新建）源实例，[run] 发起入口调用。
 ///
 /// - 超时 [timeout] 计入创建实例、排队与执行的时间；源报告等待用户操作
-///   （[UserWaitReporting]）期间暂停计时。等待用户本身另由脚本沙箱限时（source-spec §4.4）。
-/// - 超时后取消这次调用（[SourceCallTicket]），以 [SourceCallTimeoutException] 失败；
-///   之后底层调用的结果或错误被丢弃。
+///   （[UserWaitReporting]，含排在一次等待之后）期间暂停计时。等待结束后**重新给出完整的
+///   [timeout]**：用户刚完成验证，后续请求不应因此前用掉的时间而被取消。
+///   等待用户本身另由脚本沙箱限时（source-spec §4.4）。
+/// - 超时后取消这次调用（[ticket]，缺省新建），以 [SourceCallTimeoutException] 失败；
+///   之后底层调用的结果或错误被丢弃。调用方也可以自行 `ticket.cancel()`（如被新的搜索取代），
+///   此时以 [SourceCallCancelledException] 失败。
 Future<T> runSourceCall<T>({
   required Future<Source> Function() acquire,
   required Future<T> Function(Source source) run,
   required Duration timeout,
+  SourceCallTicket? ticket,
 }) {
-  final ticket = SourceCallTicket();
+  final t = ticket ?? SourceCallTicket();
   final done = Completer<T>();
   final clock = Stopwatch()..start();
   Timer? timer;
   StreamSubscription<bool>? waits;
   var paused = false;
-  var awaitedUser = false;
 
   void finish() {
     timer?.cancel();
@@ -101,9 +110,9 @@ Future<T> runSourceCall<T>({
   void onTimeout() {
     if (done.isCompleted) return;
     finish();
-    ticket.cancel();
+    t.cancel();
     done.completeError(
-      SourceCallTimeoutException(timeout, awaitedUser: awaitedUser),
+      SourceCallTimeoutException(timeout, awaitedUser: t.awaitedUser),
     );
   }
 
@@ -118,20 +127,21 @@ Future<T> runSourceCall<T>({
     if (value == paused || done.isCompleted) return;
     paused = value;
     if (value) {
-      awaitedUser = true;
       clock.stop();
       timer?.cancel();
     } else {
-      clock.start();
+      clock
+        ..reset()
+        ..start();
       arm();
     }
   }
 
   arm();
-  ticket
+  t
       .run(() async {
         final source = await acquire();
-        if (ticket.cancelled) throw const SourceCallCancelledException();
+        if (t.cancelled) throw const SourceCallCancelledException();
         if (source is UserWaitReporting) {
           final reporting = source as UserWaitReporting;
           waits = reporting.waitingForUserChanges.listen(setPaused);

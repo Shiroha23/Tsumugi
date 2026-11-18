@@ -902,5 +902,36 @@ void main() {
       expect((await source.search('fast', 1)).items, hasLength(1));
       expect(sw.elapsed, lessThan(const Duration(seconds: 2)));
     });
+
+    test(
+      'a cancelled call stops counting as waiting even if the page stays open',
+      () async {
+        final ui = _GatedUi();
+        final source = await open(_callControlManifest(), ui: ui);
+        final ticket = SourceCallTicket();
+        final waiting = ticket.run(() => source.search('verify', 1));
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        expect(source.waitingForUser, isTrue);
+        expect(ticket.awaitedUser, isTrue);
+        ticket.cancel();
+        await expectLater(
+          waiting,
+          throwsA(isA<SourceCallCancelledException>()),
+        );
+        // 验证页仍开着，但已没有调用在等待用户：其他调用的界面超时照常计时。
+        expect(ui.gate.isCompleted, isFalse);
+        expect(source.waitingForUser, isFalse);
+        final other = SourceCallTicket();
+        expect(
+          (await other.run(() => source.search('fast', 1))).items,
+          hasLength(1),
+        );
+        expect(other.awaitedUser, isFalse);
+        // 迟到的结束通知不会把计数减成负数或影响之后的调用。
+        ui.gate.complete();
+        await pumpEventQueue();
+        expect(source.waitingForUser, isFalse);
+      },
+    );
   });
 }

@@ -97,13 +97,18 @@ class ScriptSource implements Source, UserWaitReporting {
       }),
       limits: limits,
       hangGrace: hangGrace,
+      // 无响应记录按源保存在进程级的表里：反复新建实例同样受冷却与数量上限约束。
+      hangKey: 'script:${manifest.id}',
       log: (m) => logger('[${manifest.id}] $m'),
     );
     final source = ScriptSource._(manifest, host, runtime, waits);
     try {
       await runtime.load(script, name: '${manifest.id}.js');
     } on ScriptException catch (e) {
+      // 先按运行时状态映射（停用 / 无响应），再释放。
+      final suspended = source._mapScriptException(e);
       source.dispose();
+      if (suspended is SourceSuspendedException) throw suspended;
       // 保留引擎 / 脚本给出的错误码（如模块初始化超限 → E_LIMIT），其余为 E_PARSE。
       final mapped = _toSourceException(e);
       throw SourceException(
@@ -209,8 +214,8 @@ class ScriptSource implements Source, UserWaitReporting {
       if (ticket != null && ticket.cancelled) {
         throw const SourceCallCancelledException();
       }
-      if (_runtime.suspended) throw SourceSuspendedException(manifest.name);
       final scope = _host.begin();
+      final waitCall = _waits.beginCall(ticket);
       // 入口调用串行执行：注册期间运行时进行中的调用就是这一次。
       final unregister = ticket?.onCancel(_runtime.cancelCurrent);
       final Object? value;
@@ -222,6 +227,8 @@ class ScriptSource implements Source, UserWaitReporting {
         throw SourceException(SourceErrorCode.parse, e.message);
       } finally {
         unregister?.call();
+        // 调用结束（含取消 / 超限）即不再算“等待用户”，即使验证页仍开着。
+        _waits.endCall(waitCall);
         scope.close();
       }
       try {
@@ -241,9 +248,14 @@ class ScriptSource implements Source, UserWaitReporting {
       case ScriptException.cancelled:
         return const SourceCallCancelledException();
       case ScriptException.suspended:
-        return SourceSuspendedException(manifest.name);
-      // 看门狗判定 worker 无响应（此后运行时进入停用）：同样提示暂时停用。
-      case ScriptException.limit when _runtime.suspended:
+        return SourceSuspendedException(
+          manifest.name,
+          processWide: _runtime.suspension == ScriptSuspension.process,
+        );
+      // 本源的 worker 被看门狗放弃（此后进入停用）：同样提示暂时停用。
+      // 全进程原因导致的停用不归咎于本源，这里按普通 E_LIMIT 处理。
+      case ScriptException.limit
+          when _runtime.suspension == ScriptSuspension.source:
         return SourceSuspendedException(manifest.name);
     }
     return _toSourceException(e);
@@ -348,26 +360,50 @@ class ScriptSource implements Source, UserWaitReporting {
   };
 }
 
-/// 交互式宿主调用（`ui.openWebView`）的进行中计数。
+/// 进行中的入口调用里，交互式宿主调用（`ui.openWebView`）的计数。
+///
+/// 只统计当前调用发起的：调用结束（含取消、超限）后即使验证页仍开着也不再算等待，
+/// 迟到的结束通知按调用编号忽略。
 class _UserWaits {
   final _controller = StreamController<bool>.broadcast(sync: true);
+  int _seq = 0;
+  int? _call;
+  SourceCallTicket? _ticket;
   int _depth = 0;
 
   bool get waiting => _depth > 0;
   Stream<bool> get changes => _controller.stream;
 
+  int beginCall(SourceCallTicket? ticket) {
+    _call = ++_seq;
+    _ticket = ticket;
+    _set(0);
+    return _seq;
+  }
+
+  void endCall(int call) {
+    if (_call != call) return;
+    _call = null;
+    _ticket = null;
+    _set(0);
+  }
+
   HostFunction track(HostFunction fn) => (args) async {
-    _set(_depth + 1);
+    final call = _call;
+    if (call != null) {
+      _ticket?.markAwaitedUser();
+      _set(_depth + 1);
+    }
     try {
       return await fn(args);
     } finally {
-      _set(_depth - 1);
+      if (call != null && call == _call) _set(_depth - 1);
     }
   };
 
   void _set(int depth) {
     final was = waiting;
-    _depth = depth;
+    _depth = depth < 0 ? 0 : depth;
     if (waiting != was && !_controller.isClosed) _controller.add(waiting);
   }
 

@@ -15,7 +15,15 @@ class _FakeSource implements Source, UserWaitReporting {
   bool _waiting = false;
   SourceCallTicket? seenTicket;
 
+  /// 模拟本次调用打开 / 关闭验证页（同时标记票据，与 ScriptSource 一致）。
   set waiting(bool value) {
+    if (value) seenTicket?.markAwaitedUser();
+    _waiting = value;
+    _changes.add(value);
+  }
+
+  /// 模拟排在另一次调用的等待之后（不标记本次票据）。
+  set waitingForOther(bool value) {
     _waiting = value;
     _changes.add(value);
   }
@@ -97,13 +105,24 @@ void main() {
     expect(source.seenTicket!.cancelled, isFalse);
   });
 
-  test('time before and after the wait still adds up', () async {
+  test('after the wait the full budget is available again', () async {
     final result = call(const Duration(milliseconds: 300));
-    await Future<void>.delayed(const Duration(milliseconds: 200));
+    await Future<void>.delayed(const Duration(milliseconds: 250));
     source.waiting = true;
     await Future<void>.delayed(const Duration(milliseconds: 300));
     source.waiting = false;
-    final sw = Stopwatch()..start();
+    // 等待前已用掉 250 ms；等待后仍有完整的 300 ms。
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    source.gate.complete(_empty);
+    expect(await result, same(_empty));
+  });
+
+  test('timeout after the own wait is flagged as awaitedUser', () async {
+    final result = call(const Duration(milliseconds: 200));
+    await pumpEventQueue();
+    source.waiting = true;
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    source.waiting = false;
     await expectLater(
       result,
       throwsA(
@@ -114,8 +133,39 @@ void main() {
         ),
       ),
     );
-    // 只剩约 100 ms 的预算。
-    expect(sw.elapsed, lessThan(const Duration(milliseconds: 250)));
+  });
+
+  test('waiting behind another call pauses but is not awaitedUser', () async {
+    final result = call(const Duration(milliseconds: 200));
+    await pumpEventQueue();
+    source.waitingForOther = true;
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    source.waitingForOther = false;
+    await expectLater(
+      result,
+      throwsA(
+        isA<SourceCallTimeoutException>().having(
+          (e) => e.awaitedUser,
+          'awaitedUser',
+          isFalse,
+        ),
+      ),
+    );
+  });
+
+  test('caller-supplied ticket can cancel the call', () async {
+    final ticket = SourceCallTicket();
+    final result = runSourceCall(
+      acquire: () async => source,
+      run: (s) => s.search('k', 1),
+      timeout: const Duration(seconds: 5),
+      ticket: ticket,
+    );
+    await pumpEventQueue();
+    expect(source.seenTicket, same(ticket));
+    ticket.cancel();
+    source.gate.completeError(const SourceCallCancelledException());
+    await expectLater(result, throwsA(isA<SourceCallCancelledException>()));
   });
 
   test(
@@ -157,7 +207,7 @@ void main() {
         awaitedUser: true,
       ),
     );
-    expect(verify.title, '等待验证超时');
+    expect(verify.title, '验证后仍然超时');
     expect(verify.needsVerification, isTrue);
 
     expect(

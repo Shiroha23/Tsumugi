@@ -288,6 +288,21 @@ void main() {
     );
     final info = describeSourceError(error!);
     expect(info.needsVerification, isTrue);
-    expect(info.title, '等待验证超时');
+    expect(info.title, '验证后仍然超时');
+  });
+
+  test('界面超时（#65）：新搜索取消上一轮仍在进行的调用', () async {
+    await registry.importText(callControlSourceJson());
+    makeContainer();
+    final (search, _) = controller();
+    final first = search.search('slow:5000');
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    final sw = Stopwatch()..start();
+    await search.search('fast');
+    // 不必等上一轮 5 s 的慢请求结束。
+    expect(sw.elapsed, lessThan(const Duration(seconds: 2)));
+    expect(group(_callControl).items.single.title, 'fast');
+    await first;
+    expect(group(_callControl).error, isNull);
   });
 }

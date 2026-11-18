@@ -52,13 +52,25 @@ class SourceException implements Exception {
       'SourceException(${code.wire}${status != null ? ' $status' : ''}${message != null ? ': $message' : ''})';
 }
 
-/// 源暂时停用：脚本源的 worker 曾长时间无响应（docs/architecture.md §5.5，#29）。
+/// 源暂时停用：脚本的 worker 曾长时间无响应（docs/architecture.md §5.5，#29）。
 /// 冷却期过后、且卡住的 worker 已退出时自动恢复；用户也可以禁用该源。
-class SourceSuspendedException implements Exception {
-  const SourceSuspendedException(this.sourceName);
+///
+/// 属于 [SourceErrorCode.limit]，不认识它的错误展示处按 `E_LIMIT` 显示 [message]。
+class SourceSuspendedException extends SourceException {
+  const SourceSuspendedException(this.sourceName, {this.processWide = false})
+    : super(
+        SourceErrorCode.limit,
+        processWide
+            ? '当前有其他源的脚本长时间无响应，暂时无法启动新的脚本，请稍后重试'
+            : '该源的脚本长时间没有响应，已暂时停用，请稍后重试',
+      );
 
   final String sourceName;
 
+  /// 原因不在本源：全进程卡住的脚本 worker 过多（可能来自其他源）。
+  final bool processWide;
+
   @override
-  String toString() => 'SourceSuspendedException($sourceName)';
+  String toString() =>
+      'SourceSuspendedException($sourceName${processWide ? ', process' : ''})';
 }

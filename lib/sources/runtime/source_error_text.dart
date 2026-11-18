@@ -26,6 +26,15 @@ final class SourceErrorInfo {
 }
 
 SourceErrorInfo describeSourceError(Object error) => switch (error) {
+  // 先于 SourceException：它是 E_LIMIT 的子类型。
+  SourceSuspendedException(:final sourceName, :final processWide) =>
+    SourceErrorInfo(
+      title: processWide ? '暂时无法启动脚本源' : '「$sourceName」暂时不可用',
+      detail: processWide
+          ? '其他源的脚本长时间没有响应，暂时不能启动新的脚本。请稍后重试'
+          : '该源的脚本长时间没有响应，已暂时停用。请稍后重试；若反复出现，建议禁用或删除该源',
+      code: SourceErrorCode.limit,
+    ),
   SourceException(:final code, :final message, :final status) =>
     SourceErrorInfo(
       title: switch (code) {
@@ -46,8 +55,8 @@ SourceErrorInfo describeSourceError(Object error) => switch (error) {
           code == SourceErrorCode.loginRequired,
     ),
   SourceCallTimeoutException(awaitedUser: true) => const SourceErrorInfo(
-    title: '等待验证超时',
-    detail: '验证或登录没有在限定时间内完成，请打开验证页完成后重试',
+    title: '验证后仍然超时',
+    detail: '本次请求中打开过验证页，之后源仍未及时返回；若仍需验证，可再次打开验证页后重试',
     code: SourceErrorCode.challenge,
     needsVerification: true,
   ),
@@ -57,11 +66,6 @@ SourceErrorInfo describeSourceError(Object error) => switch (error) {
     code: SourceErrorCode.network,
   ),
   SourceCallCancelledException() => const SourceErrorInfo(title: '请求已取消'),
-  SourceSuspendedException(:final sourceName) => SourceErrorInfo(
-    title: '「$sourceName」暂时不可用',
-    detail: '该源的脚本长时间没有响应，已暂时停用。请稍后重试；若反复出现，建议禁用或删除该源',
-    code: SourceErrorCode.limit,
-  ),
   TimeoutException() => const SourceErrorInfo(
     title: '请求超时',
     code: SourceErrorCode.network,
