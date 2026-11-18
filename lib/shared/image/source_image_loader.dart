@@ -16,8 +16,11 @@ typedef ImageHttpClientResolver = FutureOr<SourceHttpClient> Function(
   String sourceId,
 );
 
-/// 图片加载进度。目前网络层只在响应完整读取后返回，[receivedBytes] / [totalBytes]
-/// 在下载过程中为 null（不确定进度），完成时为最终字节数。
+/// 图片加载进度。
+///
+/// 下载中（[ImageLoadStage.downloading]）[receivedBytes] 为已收到的字节数（响应头到达前为 null），
+/// [totalBytes] 为 `Content-Length` 声明的长度（没有时为 null，界面退回不确定进度）；
+/// 重试时 [receivedBytes] 从 0 重新开始。完成时二者都是最终字节数。
 final class ImageLoadProgress {
   const ImageLoadProgress(this.stage, {this.receivedBytes, this.totalBytes});
 
@@ -161,6 +164,13 @@ class SourceImageLoader {
               headers: ref.headers ?? const {},
               throwOnHttpError: true,
               timeout: timeout,
+              onReceiveProgress: (received, total) => pending.emit(
+                ImageLoadProgress(
+                  ImageLoadStage.downloading,
+                  receivedBytes: received,
+                  totalBytes: total,
+                ),
+              ),
             ),
           );
           if (res.bytes.isEmpty) {

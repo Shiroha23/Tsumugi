@@ -75,6 +75,7 @@ class DioSourceHttpClient implements SourceHttpClient {
         body,
         timeout,
         request.cancellation,
+        request.onReceiveProgress,
       );
       final location = raw.headers['location']?.firstOrNull;
       if (request.followRedirects &&
@@ -503,6 +504,7 @@ class DioSourceHttpClient implements SourceHttpClient {
     List<int>? body,
     Duration timeout,
     NetCancellation? cancellation,
+    _ProgressCallback? onProgress,
   ) async {
     final retryable = _idempotent.contains(method);
     for (var attempt = 0; ; attempt++) {
@@ -511,7 +513,15 @@ class DioSourceHttpClient implements SourceHttpClient {
       final canRetry = retryable && attempt < config.maxRetries;
       _RawResponse raw;
       try {
-        raw = await _attempt(method, uri, headers, body, timeout, cancellation);
+        raw = await _attempt(
+          method,
+          uri,
+          headers,
+          body,
+          timeout,
+          cancellation,
+          onProgress,
+        );
       } on NetworkException catch (e) {
         if (canRetry && e.kind == NetworkErrorKind.connection) {
           await _backoff(attempt);
@@ -583,6 +593,7 @@ class DioSourceHttpClient implements SourceHttpClient {
     List<int>? body,
     Duration timeout,
     NetCancellation? cancellation,
+    _ProgressCallback? onProgress,
   ) {
     final token = CancelToken();
     final abort = Completer<_RawResponse>();
@@ -606,7 +617,7 @@ class DioSourceHttpClient implements SourceHttpClient {
       (_) => fail(NetworkException(NetworkErrorKind.cancelled, uri: uri)),
     );
 
-    final work = _send(method, uri, headers, body, token);
+    final work = _send(method, uri, headers, body, token, onProgress);
     // 先完成者胜出；另一方之后的结果 / 错误由 Future.any 吞掉。
     return Future.any([work, abort.future]).whenComplete(timer.cancel);
   }
@@ -617,6 +628,7 @@ class DioSourceHttpClient implements SourceHttpClient {
     Map<String, String> headers,
     List<int>? body,
     CancelToken token,
+    _ProgressCallback? onProgress,
   ) async {
     try {
       final response = await _dio.requestUri<ResponseBody>(
@@ -643,6 +655,10 @@ class DioSourceHttpClient implements SourceHttpClient {
         uri,
         token,
         checkDeclaredLength: !bodyless,
+        // 只上报 2xx 的响应体（重定向、错误页、验证页不算图片 / 页面本身的下载进度）。
+        onProgress: status >= 200 && status < 300 && method != 'HEAD'
+            ? onProgress
+            : null,
       );
       return _RawResponse(status, response.headers.map, bytes);
     } on DioException catch (e) {
@@ -655,6 +671,7 @@ class DioSourceHttpClient implements SourceHttpClient {
     Uri uri,
     CancelToken token, {
     required bool checkDeclaredLength,
+    _ProgressCallback? onProgress,
   }) async {
     final limit = config.maxResponseBytes;
     NetworkException tooLarge() => NetworkException(
@@ -666,14 +683,17 @@ class DioSourceHttpClient implements SourceHttpClient {
       token.cancel('too large');
       throw tooLarge();
     }
+    final total = onProgress == null ? null : _declaredLength(body.headers);
     final builder = BytesBuilder(copy: false);
     try {
+      onProgress?.call(0, total);
       await for (final chunk in body.stream) {
         builder.add(chunk);
         if (builder.length > limit) {
           token.cancel('too large');
           throw tooLarge();
         }
+        onProgress?.call(builder.length, total);
       }
     } on NetworkException {
       rethrow;
@@ -688,7 +708,23 @@ class DioSourceHttpClient implements SourceHttpClient {
     }
     return builder.takeBytes();
   }
+
+  /// 进度用的总长度：`Content-Length`（经过内容编码时收到的是解压后的字节，长度不可比 → null）。
+  static int? _declaredLength(Map<String, List<String>> headers) {
+    final encoding = headers['content-encoding']?.firstOrNull?.trim();
+    if (encoding != null &&
+        encoding.isNotEmpty &&
+        encoding.toLowerCase() != 'identity') {
+      return null;
+    }
+    final values = headers['content-length'];
+    if (values == null || values.length != 1) return null;
+    final n = int.tryParse(values.single.trim());
+    return n != null && n >= 0 ? n : null;
+  }
 }
+
+typedef _ProgressCallback = void Function(int received, int? total);
 
 class _RawStream {
   _RawStream(this.status, this.headers, this.body, this.token);
