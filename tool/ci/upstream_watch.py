@@ -13,6 +13,7 @@
 已有该标记就跳过。
 
 环境变量：GH_TOKEN（gh 使用）、GITHUB_REPOSITORY、DRY_RUN=1（只打印不评论）。
+不在 GitHub Actions 中（`GITHUB_ACTIONS` 不是 true）或没有 `GITHUB_REPOSITORY` 时总是 dry run。
 只用 Python 标准库与 gh CLI。
 """
 from __future__ import annotations
@@ -28,8 +29,15 @@ import time
 import urllib.request
 from dataclasses import dataclass, field
 
-REPO = os.environ.get("GITHUB_REPOSITORY", "Shiroha23/Tsumugi")
-DRY_RUN = os.environ.get("DRY_RUN") == "1"
+# 只有在 GitHub Actions 中、且明确给出仓库时才真正评论；其他情况（例如本机运行）一律 dry run，
+# 避免用本机已登录的 gh 意外发出评论。
+IN_ACTIONS = os.environ.get("GITHUB_ACTIONS") == "true"
+REPO = os.environ.get("GITHUB_REPOSITORY") or "Shiroha23/Tsumugi"  # dry run 时只用于读取评论
+DRY_RUN = (
+    os.environ.get("DRY_RUN") == "1"
+    or not IN_ACTIONS
+    or not os.environ.get("GITHUB_REPOSITORY")
+)
 LOCKFILE = "pubspec.lock"
 
 # 已经看过、不需要再提醒的上游状态（2026-11-19 的基线）。
