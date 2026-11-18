@@ -70,10 +70,12 @@ class _RepositoryBrowsePageState extends ConsumerState<RepositoryBrowsePage> {
     }
     final langs = {for (final e in repo.entries) ?e.lang}.toList()..sort();
     final types = {for (final e in repo.entries) e.type};
+    // 刷新后索引里可能不再有所选语言：视为“全部语言”，避免无法清除的筛选。
+    final lang = langs.contains(_lang) ? _lang : null;
     final visible = [
       for (final e in repo.entries)
         if ((_type == null || e.type == _type) &&
-            (_lang == null || e.lang == _lang) &&
+            (lang == null || e.lang == lang) &&
             !(_hideNsfw && e.nsfw))
           e,
     ];
@@ -115,7 +117,7 @@ class _RepositoryBrowsePageState extends ConsumerState<RepositoryBrowsePage> {
                     ),
                 if (langs.isNotEmpty)
                   DropdownButton<String?>(
-                    value: _lang,
+                    value: lang,
                     hint: const Text('全部语言'),
                     onChanged: (v) => setState(() => _lang = v),
                     items: [

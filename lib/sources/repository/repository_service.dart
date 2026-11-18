@@ -25,16 +25,11 @@ final class SubscribedRepository {
     this.index,
   });
 
-  factory SubscribedRepository.fromRow(SourceRepositoryRow row) {
-    RepositoryIndex? index;
-    try {
-      index = parseRepositoryIndex(
-        utf8.encode(row.indexJson),
-        Uri.parse(row.url),
-      );
-    } on Object {
-      // 缓存的索引无法解析（例如客户端被降级）：仍可退订与刷新。
-    }
+  /// [index] 为 [SourceRepositoryRow.indexJson] 解析的结果（无法解析时为 null）。
+  factory SubscribedRepository.fromRow(
+    SourceRepositoryRow row, {
+    RepositoryIndex? index,
+  }) {
     return SubscribedRepository(
       url: row.url,
       name: row.name,
@@ -168,6 +163,41 @@ class RepositoryService {
   final DateTime Function() _clock;
   Future<void>? _refreshing;
 
+  /// 已解析的缓存索引（按仓库地址，带索引 sha256）：数据库每次推送不必重新解析未变化的索引。
+  final _parsed = <String, (String, RepositoryIndex?)>{};
+
+  bool get _loopback => _http.allowLoopbackHttp;
+
+  SubscribedRepository _fromRow(SourceRepositoryRow row) {
+    final cached = _parsed[row.url];
+    final RepositoryIndex? index;
+    if (cached != null && cached.$1 == row.indexSha256) {
+      index = cached.$2;
+    } else {
+      RepositoryIndex? parsed;
+      try {
+        parsed = parseRepositoryIndex(
+          utf8.encode(row.indexJson),
+          Uri.parse(row.url),
+          allowLoopbackHttp: _loopback,
+        );
+      } on Object {
+        // 缓存的索引无法解析（例如客户端被降级）：仍可退订与刷新。
+      }
+      // 每个仓库只缓存当前的那一份。
+      _parsed[row.url] = (row.indexSha256, parsed);
+      index = parsed;
+    }
+    return SubscribedRepository.fromRow(row, index: index);
+  }
+
+  Future<bool> _exists(String url) async {
+    final q = _db.selectOnly(_t)
+      ..addColumns([_t.url])
+      ..where(_t.url.equals(url));
+    return await q.getSingleOrNull() != null;
+  }
+
   $SourceRepositoriesTable get _t => _db.sourceRepositories;
 
   SimpleSelectStatement<$SourceRepositoriesTable, SourceRepositoryRow>
@@ -177,24 +207,23 @@ class RepositoryService {
       (t) => OrderingTerm.asc(t.url),
     ]);
 
-  Stream<List<SubscribedRepository>> watchAll() => _query().watch().map(
-    (rows) => rows.map(SubscribedRepository.fromRow).toList(),
-  );
+  Stream<List<SubscribedRepository>> watchAll() =>
+      _query().watch().map((rows) => rows.map(_fromRow).toList());
 
   Future<List<SubscribedRepository>> getAll() async =>
-      (await _query().get()).map(SubscribedRepository.fromRow).toList();
+      (await _query().get()).map(_fromRow).toList();
 
   Future<SubscribedRepository?> get(String url) async {
     final row = await (_db.select(
       _t,
     )..where((t) => t.url.equals(url))).getSingleOrNull();
-    return row == null ? null : SubscribedRepository.fromRow(row);
+    return row == null ? null : _fromRow(row);
   }
 
   /// 规范化 [input] 并取得、校验索引；不写数据库。已订阅时抛出 [RepositoryErrorKind.alreadySubscribed]。
   Future<RepositoryIndex> fetchIndex(String input) async {
-    final url = normalizeRepositoryUrl(input);
-    if (await get(url.toString()) != null) {
+    final url = normalizeRepositoryUrl(input, allowLoopbackHttp: _loopback);
+    if (await _exists(url.toString())) {
       throw RepositoryException(
         RepositoryErrorKind.alreadySubscribed,
         '已订阅该仓库：$url',
@@ -208,14 +237,14 @@ class RepositoryService {
       url,
       maxBytes: RepositoryHttpClient.maxIndexBytes,
     );
-    return parseRepositoryIndex(res.bytes, url);
+    return parseRepositoryIndex(res.bytes, url, allowLoopbackHttp: _loopback);
   }
 
   /// 订阅 [fetchIndex] 取得的索引。
   Future<SubscribedRepository> subscribe(RepositoryIndex index) =>
       _db.transaction(() async {
         final url = index.url.toString();
-        if (await get(url) != null) {
+        if (await _exists(url)) {
           throw RepositoryException(
             RepositoryErrorKind.alreadySubscribed,
             '已订阅该仓库：$url',
@@ -280,7 +309,7 @@ class RepositoryService {
   /// 下载并校验 [entry] 的清单，生成安装 / 更新预览（之后由 [SourceRegistry.install] 安装）。
   ///
   /// 依次检查：apiVersion 受支持 → 同 id 已装源来自本仓库 → 下载（≤ 4 MiB）→ sha256 → 解析与清单校验
-  /// （[SourceRegistry.prepareImportBytes]，含拒绝降级）→ 清单 id / version / apiVersion 与条目一致。
+  /// → 清单 id / version / apiVersion 与条目一致 → 预览（[SourceRegistry.prepareImportBytes]，含拒绝降级）。
   /// 失败时抛出 [RepositoryException] 或 [SourceImportException]。
   Future<ImportPreview> prepareInstall(
     SubscribedRepository repository,
@@ -314,14 +343,11 @@ class RepositoryService {
         '「${entry.name}」的清单与仓库索引中的 sha256 不符，已拒绝安装',
       );
     }
-    final preview = await _registry.prepareImportBytes(
-      res.bytes,
-      origin: SourceOrigin.repository(
-        entry.url.toString(),
-        repositoryUrl: repository.url,
-      ),
-    );
-    final m = preview.manifest;
+    // 先与条目比对（在按清单 id 查已装源之前），错误信息才指向真正的问题。
+    final m = parseManifest(
+      decodeManifestBytes(res.bytes),
+      rawBytes: res.bytes,
+    ).manifest;
     final mismatched = [
       if (m.id != entry.id) 'id（索引 ${entry.id}，清单 ${m.id}）',
       if (m.version != entry.version)
@@ -335,6 +361,13 @@ class RepositoryService {
         '清单与仓库索引不一致：${mismatched.join('、')}，已拒绝安装',
       );
     }
+    final preview = await _registry.prepareImportBytes(
+      res.bytes,
+      origin: SourceOrigin.repository(
+        entry.url.toString(),
+        repositoryUrl: repository.url,
+      ),
+    );
     return preview;
   }
 }

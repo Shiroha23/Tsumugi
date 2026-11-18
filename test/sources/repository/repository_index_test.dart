@@ -74,28 +74,51 @@ void main() {
       }
       expect(
         () => normalizeRepositoryUrl('repo.example.com/index.json'),
-        _throwsKind(RepositoryErrorKind.invalidIndex),
+        _throwsKind(RepositoryErrorKind.invalidUrl),
       );
       expect(
         () => normalizeRepositoryUrl('file:///c:/index.json'),
-        _throwsKind(RepositoryErrorKind.invalidIndex),
+        _throwsKind(RepositoryErrorKind.invalidUrl),
       );
       for (final ok in [
         'http://127.0.0.1:8080/index.json',
         'http://localhost/index.json',
         'http://[::1]:8080/index.json',
       ]) {
-        expect(normalizeRepositoryUrl(ok).scheme, 'http', reason: ok);
+        // 默认（应用中）拒绝；只有测试显式开启时允许。
+        expect(
+          () => normalizeRepositoryUrl(ok),
+          _throwsKind(RepositoryErrorKind.insecureUrl),
+          reason: ok,
+        );
+        expect(
+          normalizeRepositoryUrl(ok, allowLoopbackHttp: true).scheme,
+          'http',
+          reason: ok,
+        );
       }
     });
 
-    test('回环例外只限三个地址', () {
-      expect(isAllowedRepositoryUri(Uri.parse('http://127.0.0.2/')), isFalse);
+    test('回环例外默认关闭；开启时也只限三个地址', () {
+      bool allowed(String u) =>
+          isAllowedRepositoryUri(Uri.parse(u), allowLoopbackHttp: true);
+      expect(isAllowedRepositoryUri(Uri.parse('http://127.0.0.1/')), isFalse);
+      expect(isAllowedRepositoryUri(Uri.parse('http://[::1]/')), isFalse);
+      expect(allowed('http://127.0.0.1/'), isTrue);
+      expect(allowed('http://[::1]/'), isTrue);
+      expect(allowed('http://127.0.0.2/'), isFalse);
+      expect(allowed('http://localhost.example.com/'), isFalse);
+    });
+
+    test('默认配置下索引条目不能指向回环 http', () {
       expect(
-        isAllowedRepositoryUri(Uri.parse('http://localhost.example.com/')),
-        isFalse,
+        () => _parse(
+          _index([
+            _entry({'url': 'http://127.0.0.1:631/a.json'}),
+          ]),
+        ),
+        _throwsKind(RepositoryErrorKind.invalidIndex),
       );
-      expect(isAllowedRepositoryUri(Uri.parse('http://[::1]/')), isTrue);
     });
   });
 

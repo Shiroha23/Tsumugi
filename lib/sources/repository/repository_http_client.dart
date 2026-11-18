@@ -8,7 +8,7 @@ import 'repository_exception.dart';
 /// 规则仓库专用的 HTTP 客户端（docs/architecture.md §4.4）。
 ///
 /// 与源的网络层完全独立：无 Cookie、不带任何源的 headers、固定 UA；只允许 `https`
-/// （回环地址 `127.0.0.1` / `localhost` / `::1` 例外，供测试使用）；重定向逐跳检查同样的规则，最多 [maxRedirects] 跳；
+/// （[allowLoopbackHttp] 为 true 时回环地址 `127.0.0.1` / `localhost` / `::1` 例外，仅供测试；应用中始终为 false）；重定向逐跳检查同样的规则，最多 [maxRedirects] 跳；
 /// 一次获取（含全部重定向与读取响应体）不超过 [timeout]；响应体超过上限即中止。
 class RepositoryHttpClient {
   /// [adapter] 仅用于测试（例如把连接接到本地 mock 服务器）。
@@ -16,8 +16,10 @@ class RepositoryHttpClient {
     HttpClientAdapter? adapter,
     this.timeout = const Duration(seconds: 15),
     this.maxRedirects = 5,
+    this.allowLoopbackHttp = false,
   }) {
-    _dio = Dio();
+    // connectTimeout：总时限到期后连接阶段也会被放弃，不在后台挂到系统超时。
+    _dio = Dio(BaseOptions(connectTimeout: timeout));
     if (adapter != null) _dio.httpClientAdapter = adapter;
   }
 
@@ -32,11 +34,14 @@ class RepositoryHttpClient {
 
   final Duration timeout;
   final int maxRedirects;
+
+  /// 是否允许回环地址上的 `http`（仅测试）。发布版中远程仓库因此不能把客户端引向本机服务。
+  final bool allowLoopbackHttp;
   late final Dio _dio;
 
   /// 取 [url] 的原始字节，最多 [maxBytes] 字节。失败时抛出 [RepositoryException]。
-  Future<RepositoryResponse> get(Uri url, {required int maxBytes}) {
-    checkRepositoryUri(url);
+  Future<RepositoryResponse> get(Uri url, {required int maxBytes}) async {
+    checkRepositoryUri(url, allowLoopbackHttp: allowLoopbackHttp);
     final state = _FetchState();
     final abort = Completer<RepositoryResponse>();
     final timer = Timer(timeout, () {
@@ -50,7 +55,7 @@ class RepositoryHttpClient {
       state.token.cancel('timeout');
     });
     final work = _follow(url, maxBytes, state);
-    return Future.any([work, abort.future]).whenComplete(timer.cancel);
+    return await Future.any([work, abort.future]).whenComplete(timer.cancel);
   }
 
   Future<RepositoryResponse> _follow(
@@ -107,7 +112,7 @@ class RepositoryHttpClient {
             status: status,
           );
         }
-        checkRepositoryUri(next);
+        checkRepositoryUri(next, allowLoopbackHttp: allowLoopbackHttp);
         uri = next;
         state.token = CancelToken();
         continue;
@@ -175,7 +180,7 @@ class RepositoryHttpClient {
 final class RepositoryResponse {
   const RepositoryResponse(this.url, this.bytes);
 
-  /// 跟随重定向后的最终地址（相对地址按它解析）。
+  /// 跟随重定向后的最终地址，仅供诊断。索引中的相对地址按订阅地址解析，不按它（source-spec §7）。
   final Uri url;
   final Uint8List bytes;
 }
@@ -185,22 +190,24 @@ class _FetchState {
   CancelToken token = CancelToken();
 }
 
-/// 回环地址：仅这些主机允许使用 `http`（测试用，source-spec §7）。
+/// 回环地址：仅这些主机、且仅在测试中允许使用 `http`（source-spec §7）。
 const _loopbackHosts = {'127.0.0.1', 'localhost', '::1'};
 
-/// [uri] 是否可用于仓库索引 / 清单：`https`，或回环地址上的 `http`；必须有主机，不允许用户信息。
-bool isAllowedRepositoryUri(Uri uri) {
+/// [uri] 是否可用于仓库索引 / 清单：`https`（[allowLoopbackHttp] 时另允许回环地址上的 `http`）；
+/// 必须有主机，不允许用户信息。
+bool isAllowedRepositoryUri(Uri uri, {bool allowLoopbackHttp = false}) {
   if (uri.host.isEmpty || uri.userInfo.isNotEmpty) return false;
   return switch (uri.scheme.toLowerCase()) {
     'https' => true,
-    'http' => _loopbackHosts.contains(uri.host.toLowerCase()),
+    'http' =>
+      allowLoopbackHttp && _loopbackHosts.contains(uri.host.toLowerCase()),
     _ => false,
   };
 }
 
 /// 不满足 [isAllowedRepositoryUri] 时抛出 [RepositoryException]。
-void checkRepositoryUri(Uri uri) {
-  if (!isAllowedRepositoryUri(uri)) {
+void checkRepositoryUri(Uri uri, {bool allowLoopbackHttp = false}) {
+  if (!isAllowedRepositoryUri(uri, allowLoopbackHttp: allowLoopbackHttp)) {
     throw RepositoryException(
       RepositoryErrorKind.insecureUrl,
       '只允许 https 地址：$uri',

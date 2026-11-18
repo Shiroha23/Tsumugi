@@ -16,7 +16,10 @@ void main() {
   tearDownAll(() => server.close());
   setUp(() {
     server.requests.clear();
-    client = RepositoryHttpClient(timeout: const Duration(seconds: 2));
+    client = RepositoryHttpClient(
+      timeout: const Duration(seconds: 2),
+      allowLoopbackHttp: true,
+    );
   });
   tearDown(() => client.close());
 
@@ -57,6 +60,22 @@ void main() {
     expect(server.requests.map((r) => r.path), ['/redirect']);
   });
 
+  test('默认配置（应用）拒绝回环 http：既不能直接请求，也不能被重定向过去', () async {
+    final strict = RepositoryHttpClient();
+    addTearDown(strict.close);
+    await expectLater(
+      strict.get(url('/echo'), maxBytes: 1024),
+      _throwsKind(RepositoryErrorKind.insecureUrl),
+    );
+    expect(server.requests, isEmpty);
+    // 重定向的检查与首跳是同一判断：开启例外的客户端在第一跳之后遇到非回环 http 同样拒绝（见上），
+    // 关闭例外时回环 http 本身就被拒绝。
+    expect(
+      isAllowedRepositoryUri(Uri.parse('http://localhost:8080/admin')),
+      isFalse,
+    );
+  });
+
   test('重定向最多 5 跳', () async {
     final ok = await client.get(url('/redirect/chain?n=5'), maxBytes: 1 << 20);
     expect(ok.url.path, '/echo');
@@ -77,6 +96,37 @@ void main() {
     );
     final ok = await client.get(url('/large?bytes=2048'), maxBytes: 2048);
     expect(ok.bytes, hasLength(2048));
+  });
+
+  test('超过上限后中止读取，服务端停止发送', () async {
+    await expectLater(
+      client.get(
+        url('/chunked?bytes=1000000&chunk=1024&ms=5&length=0&key=cap'),
+        maxBytes: 4096,
+      ),
+      _throwsKind(RepositoryErrorKind.tooLarge),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    expect(server.chunkedSent['cap'], lessThan(1000000 ~/ 2));
+  });
+
+  test('响应头迟迟不到：总时限内失败', () async {
+    final sw = Stopwatch()..start();
+    await expectLater(
+      client.get(url('/slow?ms=3000'), maxBytes: 1024),
+      _throwsKind(RepositoryErrorKind.network),
+    );
+    expect(sw.elapsed, lessThan(const Duration(milliseconds: 2800)));
+  });
+
+  test('多跳重定向累计计时：每跳都快但总时长超限也失败', () async {
+    final slowAfterRedirects = url(
+      '/redirect?to=${Uri.encodeComponent('/redirect?to=${Uri.encodeComponent('/slow-body?ms=3000')}')}',
+    );
+    await expectLater(
+      client.get(slowAfterRedirects, maxBytes: 1024),
+      _throwsKind(RepositoryErrorKind.network),
+    );
   });
 
   test('非 2xx → http 错误，带状态码', () async {

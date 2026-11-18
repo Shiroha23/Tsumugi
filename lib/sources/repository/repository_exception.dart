@@ -6,6 +6,9 @@ enum RepositoryErrorKind {
   /// 非 2xx 响应或无效的重定向。
   http,
 
+  /// 用户输入的仓库地址格式错误。
+  invalidUrl,
+
   /// 地址（含重定向的某一跳）不是 https，且不是回环地址。
   insecureUrl,
 

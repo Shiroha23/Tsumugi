@@ -199,7 +199,9 @@ docs/
   不允许 URL 中带用户信息（`user:pass@`）。
 - **取索引与清单**：使用独立的 `RepositoryHttpClient`（dio），**不**经过任何源的网络层：无 Cookie、不带源的 headers、
   固定客户端 UA（`Tsumugi-Repository/1`）、单次获取（含全部重定向与读取响应体）15 s、索引不超过 2 MiB、清单不超过 4 MiB（与本地文件导入的上限相同）；只允许 `https`（测试用的回环地址
-  `127.0.0.1` / `localhost` / `::1` 例外，可用 `http`）；重定向每一跳同样只能是 `https`（回环例外同上），最多 5 跳。
+  `127.0.0.1` / `localhost` / `::1` 例外，可用 `http`；该例外由 `RepositoryHttpClient(allowLoopbackHttp: true)` 开启，只在测试中使用，
+  应用中关闭——否则远程仓库可以用索引条目或重定向让客户端向本机端口发请求）；重定向每一跳同样只能是 `https`（回环例外同上），最多 5 跳。
+  连接阶段也受同一时限（`connectTimeout`），不会在超时后继续挂在后台。
 - **安装**：从仓库安装复用 `SourceRegistry.prepareImportBytes` → 预览 → `install`；顺序为：条目 `apiVersion` 受支持 →
   同 id 已装源来自本仓库（否则不下载）→ 下载 → sha256（不符直接拒绝）→ 清单解析与校验（含拒绝降级）→ 清单 id / version /
   apiVersion 与条目一致。`installed_sources.originKind = repository`、`originUrl` 记清单的绝对地址、`repositoryUrl` 记所属仓库。

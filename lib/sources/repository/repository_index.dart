@@ -75,23 +75,20 @@ final class RepositoryIndex {
 
 /// 规范化用户输入的仓库地址：去空白与片段、协议与主机小写、去默认端口；
 /// 路径为空或以 `/` 结尾时补上 `index.json`。地址无效或不安全时抛出 [RepositoryException]。
-Uri normalizeRepositoryUrl(String input) {
+Uri normalizeRepositoryUrl(String input, {bool allowLoopbackHttp = false}) {
   final Uri parsed;
   try {
     parsed = Uri.parse(input.trim());
   } on FormatException {
-    throw RepositoryException(
-      RepositoryErrorKind.invalidIndex,
-      '仓库地址无效：$input',
-    );
+    throw RepositoryException(RepositoryErrorKind.invalidUrl, '仓库地址无效：$input');
   }
   if (!parsed.hasScheme || parsed.host.isEmpty) {
     throw RepositoryException(
-      RepositoryErrorKind.invalidIndex,
+      RepositoryErrorKind.invalidUrl,
       '仓库地址必须是完整的 https 地址：$input',
     );
   }
-  checkRepositoryUri(parsed);
+  checkRepositoryUri(parsed, allowLoopbackHttp: allowLoopbackHttp);
   var path = parsed.path;
   if (path.isEmpty || path.endsWith('/')) {
     path = '${path.isEmpty ? '/' : path}index.json';
@@ -110,7 +107,11 @@ Uri normalizeRepositoryUrl(String input) {
 final _sha256Pattern = RegExp(r'^[0-9a-f]{64}$');
 
 /// 解析并校验索引原始字节（source-spec §7）。任何一处不合规则整个索引无效。
-RepositoryIndex parseRepositoryIndex(List<int> bytes, Uri indexUrl) {
+RepositoryIndex parseRepositoryIndex(
+  List<int> bytes,
+  Uri indexUrl, {
+  bool allowLoopbackHttp = false,
+}) {
   Never invalid(String message) =>
       throw RepositoryException(RepositoryErrorKind.invalidIndex, message);
 
@@ -170,7 +171,9 @@ RepositoryIndex parseRepositoryIndex(List<int> bytes, Uri indexUrl) {
     } on FormatException {
       invalid('$where 的 url 无效');
     }
-    if (!isAllowedRepositoryUri(url)) invalid('$where 的 url 必须是 https：$url');
+    if (!isAllowedRepositoryUri(url, allowLoopbackHttp: allowLoopbackHttp)) {
+      invalid('$where 的 url 必须是 https：$url');
+    }
     final lang = raw['lang'];
     if (lang != null && lang is! String) invalid('$where 的 lang 必须是字符串');
     final nsfw = raw['nsfw'];

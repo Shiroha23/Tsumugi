@@ -26,7 +26,10 @@ void main() {
     now = DateTime.utc(2026, 11, 19);
     db = openTestDatabase();
     registry = SourceRegistry(db);
-    http = RepositoryHttpClient(timeout: const Duration(seconds: 5));
+    http = RepositoryHttpClient(
+      timeout: const Duration(seconds: 5),
+      allowLoopbackHttp: true,
+    );
     service = RepositoryService(db, registry, http, clock: () => now);
   });
   tearDown(() async {

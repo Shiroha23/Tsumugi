@@ -115,7 +115,11 @@ class _App {
       ),
       exportSaverProvider.overrideWithValue(saver),
       repositoryHttpClientProvider.overrideWith((ref) {
-        final client = RepositoryHttpClient(adapter: server.adapter());
+        final client = RepositoryHttpClient(
+          adapter: server.adapter(),
+          // mock 服务器是回环地址上的 http（仅测试允许）。
+          allowLoopbackHttp: true,
+        );
         ref.onDispose(client.close);
         return client;
       }),
@@ -444,6 +448,10 @@ void main() {
 
     // 「全部更新」：逐个预览，新增主机高亮并需再次确认。
     await _tapAndWait(tester, find.byTooltip('规则仓库'), find.text('全部更新'));
+    // 等页面切换动画结束再点按钮。
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
     await _tapAndWait(tester, find.text('全部更新'), find.text('cdn.example.org'));
     expect(find.text('更新源（1 / 1）'), findsOneWidget);
     expect(inDialog(find.text('新增')), findsOneWidget);

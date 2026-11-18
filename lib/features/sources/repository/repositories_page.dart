@@ -35,7 +35,13 @@ class _RepositoriesPageState extends ConsumerState<RepositoriesPage> {
     if (added != null && mounted) _showSnack('已订阅「${added.name}」');
   }
 
-  Future<void> _refresh() => _service.refreshAll();
+  Future<void> _refresh() async {
+    try {
+      await _service.refreshAll();
+    } on Object catch (e) {
+      if (mounted) _showSnack('检查更新失败：$e');
+    }
+  }
 
   Future<void> _confirmUnsubscribe(SubscribedRepository repo) async {
     final ok = await showDialog<bool>(
