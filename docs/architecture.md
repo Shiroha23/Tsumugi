@@ -465,6 +465,39 @@ tsumugi.ui.openWebView ────────┘   （单飞 / 节流） └�
   （`MockServer.rewriteFictionalHosts`，单元测试不开启）。
   Windows 防火墙首次会询问是否允许 dart 接受入站连接。
 
+#### 设备与模拟器上的集成测试
+
+`integration_test/` 在真实平台上运行完整应用或原生部分，**移动端以模拟器为先**，真机只留给视频播放与 release 实测：
+
+| 文件 | 覆盖 | Windows | Android 模拟器（x86_64） | iOS 模拟器 | 真机 |
+|---|---|---|---|---|---|
+| `app_flow_test.dart` | 真实路由与引擎：加载 JS 脚本源 → 搜索 → 详情 → 漫画阅读器翻页（漫画页经源的图片客户端加载）；小说阅读器翻页模式翻到下一章；导出 TXT / EPUB | ✓ | ✓（本机 + CI） | CI | — |
+| `script_stack_depth_test.dart` | QuickJS 原生库加载与栈上限；release 下测深度（文件头注释） | ✓ | ✓（本机 + CI） | CI | Android release 实测 |
+| `video_playback_test.dart` | 真实 libmpv 经媒体代理播放（§6.4.2） | ✓ | ✗（见下） | — | Android |
+
+- **mock 服务器**（`integration_test/test_mock.dart`）：桌面上在测试进程内启动；设备 / 模拟器读不到电脑上的 `test/fixtures/`，
+  改为连接电脑上以 `--test-control` 启动的服务器（经 `/__test/*` 取测试数据、读请求记录）。所有 HTTP 连接都经自定义连接接到它，
+  虚构主机名照常可用，白名单仍按虚构主机名检查。
+- **本机运行**：
+
+  ```bash
+  flutter test integration_test/app_flow_test.dart -d windows
+
+  # Android 模拟器 / 真机（adb reverse 比局域网稳定）；iOS 模拟器与电脑共用网络，不需要 reverse
+  dart run tool/mock_server/main.dart --port 8081 --test-control
+  adb reverse tcp:8081 tcp:8081
+  flutter test integration_test/app_flow_test.dart -d <设备> --dart-define=TSUMUGI_MOCK_SERVER=127.0.0.1:8081
+  ```
+
+  `flutter test -d <设备>` 只支持 debug；profile 用 `flutter drive --profile --driver=test_driver/integration_test.dart --target=...`。
+- **导出**：系统保存界面（SAF / 文件 App）无法自动操作，测试把 `exportSaverProvider` 换成写入临时目录的实现，只校验生成的文件；
+  真正的保存 / 分享界面仍需真机确认（#31）。
+- **x86_64 模拟器**（2026-11 实测，Android 37 x86_64）：QuickJS 原生库与 libmpv 都能构建并加载。但 media_kit 检测到模拟器后强制软件渲染，
+  libmpv 的视频输出无法创建 GLES 2 EGL 上下文（`Could not create EGL context for GLES 2.x`），**视频播放只能在真机上测**。
+- **CI**（`.github/workflows/device-tests.yml`）：Android 模拟器（ubuntu runner + KVM，API 35 x86_64）与 iOS 模拟器（macos runner）
+  各一个任务，运行上表标为 CI 的测试；mock 服务器由 `tool/ci/start_mock_server.sh` 在 runner 上启动。只在推送 main 与手动触发
+  （`workflow_dispatch`）时运行，**不是必须通过的检查**，不拖慢 PR；失败时上传 mock 服务器日志。
+
 已知限制：不支持 EUC-JP / ISO-2022-JP（缺 JIS X 0212 索引与有状态解码器，遇到时按 utf-8 解码并记录日志）；
 请求方向仍只用 UTF-8 编码（模板 `{{keyword}}` 的 URL 编码、表单与请求体），只接受 GBK 编码参数的站点暂无法搜索。
 Cookie Jar 在按源的 `SourceSession` 中，按源持久化在应用支持目录（§5.3「会话持久化」）。

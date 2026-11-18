@@ -1,0 +1,110 @@
+name: Device tests
+
+# 在 Android / iOS 模拟器上运行 integration_test（#32，architecture §5.4「设备与模拟器上的集成测试」）。
+# 较慢（每个任务约 15–30 分钟），只在推送 main 与手动触发时运行，不在 PR 上运行，也不设为必须通过的检查。
+#
+# 模拟器读不到仓库里的 test/fixtures/：mock 服务器在 runner 上以 --test-control 启动，
+# 测试经 TSUMUGI_MOCK_SERVER 连接它（Android 用 adb reverse，iOS 模拟器与 runner 共用网络）。
+#
+# 第三方 Action 固定到提交（注释为对应版本）。
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: "3.47.7"
+  MOCK_PORT: "8081"
+  TESTS: integration_test/app_flow_test.dart integration_test/script_stack_depth_test.dart
+
+jobs:
+  android:
+    name: Android emulator
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get
+      - run: dart run build_runner build
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Start mock server
+        run: tool/ci/start_mock_server.sh
+      - uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          # 每行单独执行。
+          script: |
+            adb reverse tcp:${{ env.MOCK_PORT }} tcp:${{ env.MOCK_PORT }}
+            flutter test ${{ env.TESTS }} -d emulator-5554 --dart-define=TSUMUGI_MOCK_SERVER=127.0.0.1:${{ env.MOCK_PORT }} -r expanded
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-emulator-logs
+          path: mock_server.log
+          retention-days: 7
+
+  ios:
+    name: iOS simulator
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get
+      - run: dart run build_runner build
+      - name: Start mock server
+        run: tool/ci/start_mock_server.sh
+      - name: Boot simulator
+        id: sim
+        run: |
+          # 取最新 iOS 运行时中的第一台 iPhone。
+          udid=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          ios = sorted((k for k in devices if ".iOS-" in k),
+                       key=lambda k: [int(x) for x in k.rsplit(".iOS-", 1)[1].split("-")])
+          print(next(d["udid"] for d in devices[ios[-1]] if d["name"].startswith("iPhone")))
+          ')
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid" -b
+          xcrun simctl list devices booted
+      - name: Run integration tests
+        run: >-
+          flutter test ${{ env.TESTS }} -d ${{ steps.sim.outputs.udid }}
+          --dart-define=TSUMUGI_MOCK_SERVER=127.0.0.1:${{ env.MOCK_PORT }} -r expanded
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-simulator-logs
+          path: mock_server.log
+          retention-days: 7
