@@ -14,6 +14,7 @@ import 'package:tsumugi/sources/registry/providers.dart';
 import 'package:tsumugi/sources/script/script_source.dart';
 import 'package:tsumugi/sources/script/script_source_factory.dart';
 import 'package:tsumugi/sources/source.dart';
+import 'package:tsumugi/sources/source_call.dart';
 
 import '../../core/network/mock_support.dart';
 import '../../core/storage/test_database.dart';
@@ -66,6 +67,28 @@ class _SlowUi extends _FakeUi {
     await Future<void>.delayed(delay);
   }
 }
+
+/// 用户在 WebView 中操作，直到 [gate] 完成。
+class _GatedUi extends _FakeUi {
+  final gate = Completer<void>();
+
+  @override
+  Future<void> openWebView(WebViewRequest request) async {
+    requests.add(request);
+    await gate.future;
+  }
+}
+
+SourceManifest _callControlManifest() => SourceManifest(
+  apiVersion: 1,
+  id: 'com.example.script.call-control',
+  name: '调用控制测试',
+  type: MediaType.comic,
+  version: '1.0.0',
+  baseUrl: 'http://comic.example.com',
+  engine: SourceEngine.script,
+  script: File('test/fixtures/scripts/call_control.js').readAsStringSync(),
+);
 
 class _SlowStorage extends MemorySourceStorage {
   @override
@@ -820,5 +843,95 @@ void main() {
       throwsA(_sourceError(SourceErrorCode.limit)),
     );
     expect(await source.debugCall('bump'), 1);
+  });
+
+  group('call control (#65)', () {
+    test('waitingForUser reflects ui.openWebView', () async {
+      final ui = _GatedUi();
+      final source = await open(_callControlManifest(), ui: ui);
+      final changes = <bool>[];
+      source.waitingForUserChanges.listen(changes.add);
+      expect(source.waitingForUser, isFalse);
+      final result = source.search('verify', 1);
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(source.waitingForUser, isTrue);
+      ui.gate.complete();
+      expect((await result).items.single.title, 'verify');
+      expect(source.waitingForUser, isFalse);
+      expect(changes, [true, false]);
+    });
+
+    test('cancelling a running call releases the queue', () async {
+      final ui = _GatedUi();
+      final source = await open(_callControlManifest(), ui: ui);
+      final ticket = SourceCallTicket();
+      final waiting = ticket.run(() => source.search('verify', 1));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      final queued = source.search('fast', 1);
+      ticket.cancel();
+      await expectLater(waiting, throwsA(isA<SourceCallCancelledException>()));
+      // 验证页仍开着，但排队的调用已经可以执行。
+      expect((await queued).items.single.title, 'fast');
+      expect(ui.gate.isCompleted, isFalse);
+      ui.gate.complete();
+    });
+
+    test('a call cancelled while queued never runs', () async {
+      final ui = _GatedUi();
+      final source = await open(_callControlManifest(), ui: ui);
+      final first = source.search('verify', 1);
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      final ticket = SourceCallTicket();
+      final queued = ticket.run(() => source.search('verify', 1));
+      ticket.cancel();
+      ui.gate.complete();
+      expect((await first).items, hasLength(1));
+      await expectLater(queued, throwsA(isA<SourceCallCancelledException>()));
+      // 只有第一次调用打开过验证页。
+      expect(ui.requests, hasLength(1));
+    });
+
+    test('a slow request is cancelled with the call', () async {
+      final source = await open(_callControlManifest());
+      final ticket = SourceCallTicket();
+      final slow = ticket.run(() => source.search('slow:5000', 1));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      final sw = Stopwatch()..start();
+      ticket.cancel();
+      await expectLater(slow, throwsA(isA<SourceCallCancelledException>()));
+      expect((await source.search('fast', 1)).items, hasLength(1));
+      expect(sw.elapsed, lessThan(const Duration(seconds: 2)));
+    });
+
+    test(
+      'a cancelled call stops counting as waiting even if the page stays open',
+      () async {
+        final ui = _GatedUi();
+        final source = await open(_callControlManifest(), ui: ui);
+        final ticket = SourceCallTicket();
+        final waiting = ticket.run(() => source.search('verify', 1));
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        expect(source.waitingForUser, isTrue);
+        expect(ticket.awaitedUser, isTrue);
+        ticket.cancel();
+        await expectLater(
+          waiting,
+          throwsA(isA<SourceCallCancelledException>()),
+        );
+        // 验证页仍开着，但已没有调用在等待用户：其他调用的界面超时照常计时。
+        expect(ui.gate.isCompleted, isFalse);
+        expect(source.waitingForUser, isFalse);
+        final other = SourceCallTicket();
+        expect(
+          (await other.run(() => source.search('fast', 1))).items,
+          hasLength(1),
+        );
+        expect(other.awaitedUser, isFalse);
+        // 迟到的结束通知不会把计数减成负数或影响之后的调用。
+        ui.gate.complete();
+        await pumpEventQueue();
+        expect(source.waitingForUser, isFalse);
+      },
+    );
   });
 }

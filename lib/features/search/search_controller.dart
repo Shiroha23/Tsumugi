@@ -6,10 +6,12 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../../sources/model/common.dart';
 import '../../sources/registry/providers.dart';
 import '../../sources/runtime/source_runtime.dart';
+import '../../sources/source_call.dart';
 
 part 'search_controller.g.dart';
 
-/// 单个源一次搜索（含首次创建源实例）的最长等待时间。
+/// 单个源一次搜索（含首次创建源实例）的最长等待时间。源等待用户操作（验证页）期间暂停计时，
+/// 超时后取消底层调用（[runSourceCall]，#65）。
 @Riverpod(keepAlive: true)
 Duration searchTimeout(Ref ref) => const Duration(seconds: 30);
 
@@ -94,8 +96,21 @@ class SourceSearchController extends _$SourceSearchController {
   /// 此时两者不相等，旧分组不能再发起分页请求。
   int _shownGeneration = 0;
 
+  /// 当前一代搜索进行中的调用；新搜索开始或控制器销毁时取消（释放各源的串行队列）。
+  final _tickets = <SourceCallTicket>{};
+
   @override
-  SearchState build() => const SearchState();
+  SearchState build() {
+    ref.onDispose(_cancelAll);
+    return const SearchState();
+  }
+
+  void _cancelAll() {
+    for (final t in _tickets.toList()) {
+      t.cancel();
+    }
+    _tickets.clear();
+  }
 
   /// 切换媒体类型；已有关键词时按新类型重新搜索。
   Future<void> setType(MediaType type) async {
@@ -108,6 +123,7 @@ class SourceSearchController extends _$SourceSearchController {
     final kw = keyword.trim();
     if (kw.isEmpty) return;
     final gen = ++_generation;
+    _cancelAll();
     final type = state.type;
     final sources = await ref.read(sourceRegistryProvider).enabled(type: type);
     if (!ref.mounted || gen != _generation) return;
@@ -137,11 +153,15 @@ class SourceSearchController extends _$SourceSearchController {
 
   Future<void> _load(int gen, String sourceId, String keyword, int page) async {
     final timeout = ref.read(searchTimeoutProvider);
+    final ticket = SourceCallTicket();
+    _tickets.add(ticket);
     try {
-      final result = await () async {
-        final source = await ref.read(sourceRuntimeProvider).get(sourceId);
-        return source.search(keyword, page);
-      }().timeout(timeout);
+      final result = await runSourceCall(
+        acquire: () => ref.read(sourceRuntimeProvider).get(sourceId),
+        run: (source) => source.search(keyword, page),
+        timeout: timeout,
+        ticket: ticket,
+      ).whenComplete(() => _tickets.remove(ticket));
       if (!ref.mounted || gen != _generation) return;
       _update(
         sourceId,

@@ -50,6 +50,8 @@ Matcher _limit(String message) => throwsA(
       .having((e) => e.message, 'message', contains(message)),
 );
 
+var keys = 0;
+
 void main() {
   group('QuickJsScriptRuntime', () {
     late QuickJsScriptRuntime rt;
@@ -160,6 +162,12 @@ void main() {
       workerHost: _spinHost,
       limits: _limits,
       hangGrace: const Duration(milliseconds: 200),
+      // 这些测试只关心看门狗计时，不测暂时停用（见 isolate_script_runtime_test.dart）。
+      hangCooldown: Duration.zero,
+      maxStuckWorkers: 100,
+      maxStuckWorkersGlobal: 100,
+      // 无响应记录是进程级的：每个实例用独立的 key，不影响下面用默认 key 的用例。
+      hangKey: 'interactive-${++keys}',
     );
 
     Matcher unresponsive = _limit('unresponsive');

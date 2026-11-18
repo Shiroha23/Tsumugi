@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:tsumugi/shared/webview/providers.dart';
 import 'package:tsumugi/shared/widgets/source_error_view.dart';
 import 'package:tsumugi/sources/source.dart';
+import 'package:tsumugi/sources/source_call.dart';
 
 import '../webview/webview_fakes.dart';
 
@@ -120,6 +121,35 @@ void main() {
       sourceId: null,
     );
     expect(find.text('需要验证'), findsOneWidget);
+    expect(find.text('打开验证页'), findsNothing);
+  });
+
+  testWidgets('timeout after a verification wait offers verification (#65)', (
+    tester,
+  ) async {
+    await pump(
+      tester,
+      SourceCallTimeoutException(
+        const Duration(seconds: 30),
+        awaitedUser: true,
+      ),
+      compact: true,
+    );
+    expect(find.text('验证后仍然超时'), findsOneWidget);
+    await tester.tap(find.text('打开验证页'));
+    await tester.pumpAndSettle();
+    expect(verification.calls, ['com.example.a']);
+    expect(retries, 1);
+
+    await pump(tester, SourceCallTimeoutException(const Duration(seconds: 30)));
+    expect(find.text('请求超时'), findsOneWidget);
+    expect(find.text('打开验证页'), findsNothing);
+    expect(find.text('重试'), findsOneWidget);
+  });
+
+  testWidgets('suspended source shows a clear message (#29)', (tester) async {
+    await pump(tester, const SourceSuspendedException('示例源'));
+    expect(find.text('「示例源」暂时不可用'), findsOneWidget);
     expect(find.text('打开验证页'), findsNothing);
   });
 }

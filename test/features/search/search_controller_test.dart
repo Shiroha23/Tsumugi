@@ -6,7 +6,10 @@ import 'package:tsumugi/core/storage/app_database.dart';
 import 'package:tsumugi/features/search/search_controller.dart';
 import 'package:tsumugi/sources/model/common.dart';
 import 'package:tsumugi/sources/registry/providers.dart';
+import 'package:tsumugi/sources/runtime/source_error_text.dart';
+import 'package:tsumugi/sources/script/script_ui.dart';
 import 'package:tsumugi/sources/source.dart';
+import 'package:tsumugi/sources/source_call.dart';
 
 import '../../core/network/mock_support.dart';
 import '../../core/storage/test_database.dart';
@@ -14,6 +17,7 @@ import '../../sources/runtime/runtime_support.dart';
 
 const _declarative = 'com.example.mock.comic.declarative';
 const _script = 'com.example.mock.comic.script';
+const _callControl = 'com.example.mock.call-control';
 
 /// 搜索请求指向 mock 服务器 [url] 的声明式源。
 String _declarativeAt(String id, String name, String url) =>
@@ -46,11 +50,13 @@ void main() {
     await server.close();
   });
 
-  ProviderContainer makeContainer({Duration? timeout}) =>
+  ProviderContainer makeContainer({Duration? timeout, ScriptUi? ui}) =>
       container = ProviderContainer(
         overrides: [
           appDatabaseProvider.overrideWithValue(db),
-          sourceFactoriesProvider.overrideWithValue(mockFactories(server)),
+          sourceFactoriesProvider.overrideWithValue(
+            mockFactories(server, ui: ui),
+          ),
           if (timeout != null) searchTimeoutProvider.overrideWithValue(timeout),
         ],
       );
@@ -237,5 +243,66 @@ void main() {
     final comic = container.read(sourceSearchControllerProvider);
     expect(comic.type, MediaType.comic);
     expect(comic.groups.single.items, hasLength(2));
+  });
+
+  test('界面超时（#65）：等待验证页期间界面超时暂停', () async {
+    await registry.importText(callControlSourceJson());
+    final ui = DelayedScriptUi(const Duration(milliseconds: 900));
+    makeContainer(timeout: const Duration(milliseconds: 400), ui: ui);
+    final (search, _) = controller();
+    await search.search('verify');
+    expect(group(_callControl).error, isNull);
+    expect(group(_callControl).items.single.title, 'verify');
+    expect(ui.opened, 1);
+  });
+
+  test('界面超时（#65）：超时后取消底层调用，该源的下一次调用无需排队', () async {
+    await registry.importText(callControlSourceJson());
+    makeContainer(timeout: const Duration(milliseconds: 400));
+    final (search, _) = controller();
+    await search.search('slow:5000');
+    final error = group(_callControl).error;
+    expect(error, isA<SourceCallTimeoutException>());
+    expect(describeSourceError(error!).needsVerification, isFalse);
+    // 被取消的调用不再占用串行队列（否则要等 5 s 的慢请求结束）。
+    final sw = Stopwatch()..start();
+    await search.search('fast');
+    expect(group(_callControl).items.single.title, 'fast');
+    expect(sw.elapsed, lessThan(const Duration(seconds: 2)));
+  });
+
+  test('界面超时（#65）：等待过验证页后仍超时：提示打开验证页', () async {
+    await registry.importText(callControlSourceJson());
+    final ui = DelayedScriptUi(const Duration(milliseconds: 600));
+    makeContainer(timeout: const Duration(milliseconds: 400), ui: ui);
+    final (search, _) = controller();
+    await search.search('verify,slow:5000');
+    final error = group(_callControl).error;
+    expect(
+      error,
+      isA<SourceCallTimeoutException>().having(
+        (e) => e.awaitedUser,
+        'awaitedUser',
+        isTrue,
+      ),
+    );
+    final info = describeSourceError(error!);
+    expect(info.needsVerification, isTrue);
+    expect(info.title, '验证后仍然超时');
+  });
+
+  test('界面超时（#65）：新搜索取消上一轮仍在进行的调用', () async {
+    await registry.importText(callControlSourceJson());
+    makeContainer();
+    final (search, _) = controller();
+    final first = search.search('slow:5000');
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    final sw = Stopwatch()..start();
+    await search.search('fast');
+    // 不必等上一轮 5 s 的慢请求结束。
+    expect(sw.elapsed, lessThan(const Duration(seconds: 2)));
+    expect(group(_callControl).items.single.title, 'fast');
+    await first;
+    expect(group(_callControl).error, isNull);
   });
 }

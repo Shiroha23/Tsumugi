@@ -60,6 +60,14 @@ class ScriptException implements Exception {
   static const limit = 'E_LIMIT';
   static const unsupported = 'E_UNSUPPORTED';
 
+  /// 调用被宿主取消（如界面层超时，#65）。只在客户端内部使用，不属于 source-spec §6，
+  /// 脚本也看不到（取消后不再执行该调用的任何 JS）。
+  static const cancelled = 'E_CANCELLED';
+
+  /// 运行时暂时停用：worker 曾长时间无响应（#29），冷却期内或仍有卡住的 worker 时
+  /// 不再新建 worker。只在客户端内部使用，不属于 source-spec §6。
+  static const suspended = 'E_SUSPENDED';
+
   final String? code;
   final String message;
 

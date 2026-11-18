@@ -427,9 +427,19 @@ tsumugi.ui.openWebView ────────┘   （单飞 / 节流） └�
   （`ScriptLimits.interactiveTime`）计时，见 source-spec §4.4；只在没有其他宿主请求未完成时暂停，与之重叠的请求照常计时。worker 内的 `QuickJsScriptRuntime` 与主 isolate 的看门狗
   各自计时（交互式路径为 `interactiveHostPaths`），看门狗是否暂停只由主 isolate 自己执行该宿主函数决定。
   超过上限时验证页仍保持打开，用户完成后 Cookie 照常写回，但这次调用以 `E_LIMIT` 失败。
-  已知限制：搜索 / 发现页另有界面层超时（`searchTimeoutProvider` / `exploreTimeoutProvider`，30 s），
-  在这些入口里打开的验证页仍可能来不及完成；界面超时不取消底层调用，而同一源的调用串行执行，
-  验证页关闭前该源的后续调用（含重试）都要排队，最长约 10 min（[#65](https://github.com/Shiroha23/Tsumugi/issues/65)）。
+- **界面层超时**（[#65](https://github.com/Shiroha23/Tsumugi/issues/65)）：搜索 / 发现页的超时（`searchTimeoutProvider` /
+  `exploreTimeoutProvider`，30 s）经 `runSourceCall`（`sources/source_call.dart`）执行：
+  - `ScriptSource` 实现 `UserWaitReporting`，`ui.openWebView` 进行中时 `waitingForUser` 为 true；此期间界面超时暂停
+    （排在这次等待之后的同源调用同样暂停），等待用户本身仍受 `interactiveTime` 限制。
+  - 等待状态按调用归属：只统计当前进行中的入口调用发起的 `openWebView`；调用结束（含取消、超限）后即使验证页仍开着也不再算等待。
+    等待结束后界面超时重新给出完整的 30 s（用户刚完成验证，后续带新 Cookie 的请求不应因此前用掉的时间而被取消）。
+  - 超时后取消这次调用：`SourceCallTicket` 经 zone 传给源，`ScriptSource` 在入口调用开始时读取；排队中被取消的调用不再执行，
+    执行中的调用经 `IsolateScriptRuntime.cancelCurrent` 中止（worker 内 JS 运行时重建，进行中的请求随调用作用域取消），
+    该源的串行队列随即释放。worker 正在同步执行 JS 时取消在这段 JS 结束（最长 `cpuTime`）后生效；worker 无响应时
+    取消不会生效，队列要等看门狗放弃 worker（`wallTime + hangGrace`）才释放。声明式源忽略票据（其调用没有串行队列，结果被丢弃）。
+  - 新一轮搜索、换源 / 换分类或页面销毁时，上一轮仍在进行的调用同样被取消。
+  - 错误：`SourceCallTimeoutException`；本次调用自己打开过验证页时（`awaitedUser`，排在别的调用之后等待不算）
+    显示「验证后仍然超时」并提供「打开验证页」。
 - 测试中用假的 `WebViewLauncher` / `WebCookieStore`，不启动真实 WebView；手动验证用
   `tool/mock_server` 的 `/challenge/page`、`/login` 与 `test/fixtures/sources/mock_comic_gated*.json`。
 
@@ -528,6 +538,15 @@ ScriptHost：http / storage / cookies ◀═ host 请求（脚本侧 Promise）�
   `tsumugi`；`HtmlNode` 由此用句柄实现（source-spec §4.2.1），原始句柄函数对脚本不可见。`tsumugi.source` 作为常量嵌入 prelude。
 - **看门狗与重建**：每次加载 / 调用在 `wallTime + hangGrace`（默认 5 s）内无回应即判定 worker 卡死，调用以 `E_LIMIT`
   失败，worker 被丢弃，下一次调用新建 worker 并重新加载脚本；worker 意外退出（未捕获异常等）同样以 `E_LIMIT` 失败并在下次重建。
+- **暂时停用**（[#29](https://github.com/Shiroha23/Tsumugi/issues/29)）：被放弃的 worker 可能仍占着线程（见 §6.1），因此看门狗放弃 worker 后，
+  该源在 `hangCooldown`（默认 2 min）内不新建 worker；被放弃、尚未退出的 worker 在一个源达到 `maxStuckWorkers`（2）个
+  或全进程达到 `maxStuckWorkersGlobal`（4）个时也不再新建，直到其中有 worker 退出（经独立的 onExit 端口得知）。
+  - 记录按 `hangKey`（脚本源为 `script:<sourceId>`，声明式 `js:` 为片段模块源码）保存在**进程级**的表里，不随实例释放清零；
+    首次加载与重建都检查，所以加载阶段卡住后反复新建实例（失败的创建不缓存）、换设置重建实例同样受限。
+  - 停用期间 `ScriptSource` / 声明式源的调用以 `SourceSuspendedException`（`SourceException` 的子类，`E_LIMIT`）立即失败：
+    本源原因显示「某源暂时不可用」并建议禁用或删除；全进程原因（可能来自其他源）显示「暂时无法启动脚本源」，不归咎于本源。
+    后者意味着多个卡死的源可以暂时阻止其他脚本源**新建** worker（已在运行的 worker 不受影响），这是为限制线程占用做的取舍。
+  - 条件解除后下一次调用自动重建；重建时重新加载超限 / 再次卡住不会作废实例，冷却后可再试。
   JS 层面的超限（CPU、总时长、内存）仍由 worker 内的 `QuickJsScriptRuntime` 自行中断与重建，worker 本身保留。
 - **每次调用的作用域**：`ScriptHost.begin()` 为每次入口调用建立 `ScriptCallScope`，`tsumugi.http.*` 据此计数（上限 50）
   并共享一个 `NetCancellation`；调用结束即取消未完成的请求。
@@ -625,6 +644,8 @@ CPU 预算跨 await 累计、总时长上限、内存上限、栈上限、超限
   （未实测，依据引擎源码判断）。放进 worker isolate 也不够：isolate 卡在原生代码中时 Dart 无法终止它。
   根治需要给引擎打补丁（在这些循环中加入中断检查）或把脚本放进可被强制结束的独立进程；
   在此之前，恶意源最坏能卡死其所在的 worker（[#29](https://github.com/Shiroha23/Tsumugi/issues/29)）。
+  缓解：看门狗放弃卡死的 worker 后该源暂时停用，并按源、按进程限制被放弃 worker 的数量（§5.5），恶意源不能借此反复占用线程；
+  其他源的数据隔离不受影响，但全进程上限触发时它们暂时不能新建 worker。
   验证页打开期间看门狗按交互等待的上限计时，这种卡死要到验证页关闭或该上限到期后才会被发现。
 - 同一运行时上的调用**串行执行**（宿主 Promise 需要归属到具体调用）。如需单源并发，可按调用开多个运行时。
 - HTML 句柄的 DOM 不在 JS 堆内，只能靠句柄数与解析文本量的上限间接约束（source-spec §4.2.1）。

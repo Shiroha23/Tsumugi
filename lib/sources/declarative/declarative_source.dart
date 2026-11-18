@@ -5,6 +5,7 @@ import '../../core/engine/declarative/fetcher.dart';
 import '../../core/engine/declarative/rules.dart';
 import '../../core/engine/expression/expression_engine.dart';
 import '../../core/engine/expression/js_evaluator.dart';
+import '../../core/engine/script/isolate_script_runtime.dart';
 import '../../core/engine/script/script_runtime.dart';
 import '../../core/network/host_policy.dart';
 import '../model/common.dart';
@@ -127,9 +128,19 @@ class DeclarativeSource implements Source {
   /// 释放 `js:` 使用的脚本运行时。
   void dispose() => _js?.dispose();
 
-  static Future<T> _guard<T>(Future<T> Function() body) async {
+  Future<T> _guard<T>(Future<T> Function() body) async {
     try {
       return await body();
+    } on ScriptException catch (e) {
+      // `js:` 片段的 worker 曾长时间无响应（#29，architecture §5.5）。
+      if (e.code == ScriptException.suspended) {
+        throw SourceSuspendedException(
+          manifest.name,
+          processWide:
+              e.message == IsolateScriptRuntime.processWideSuspensionMessage,
+        );
+      }
+      throw SourceException(SourceErrorCode.parse, '$e');
     } on DeclarativeException catch (e) {
       throw SourceException(
         SourceErrorCode.fromWire(e.code) ?? SourceErrorCode.network,

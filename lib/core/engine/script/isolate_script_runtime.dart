@@ -39,6 +39,14 @@ typedef WorkerHostFactory = WorkerHost Function(Object? config);
 ///   调用以 `E_LIMIT` 失败，worker 被丢弃（`Isolate.kill(beforeNextEvent)`，回到事件循环时退出），
 ///   下一次调用时新建 worker 并重新加载脚本。一直卡住（原生代码或 Dart 死循环）的 isolate
 ///   无法被终止，只能放弃，其线程可能一直占用，见 architecture §6.1 已知限制。
+/// - **暂时停用**（#29）：无响应记录按 [hangKey]（缺省为脚本源码）保存在**进程级**的表里，
+///   不随实例释放而清零，因此反复新建实例（加载失败后重试、换设置重建）同样受限。
+///   看门狗放弃 worker 后，同一 key 在 [hangCooldown] 内不新建 worker（加载与重建都检查）；
+///   同一 key 被放弃、尚未真正退出的 worker 达到 [maxStuckWorkers] 个、或全进程达到
+///   [maxStuckWorkersGlobal] 个时，也不再新建，直到其中有 worker 退出。此期间的加载 / 调用以
+///   `code == E_SUSPENDED` 的 [ScriptException] 立即失败（见 [suspension]），
+///   这样卡死的源不能反复占用新的线程。
+/// - **取消**（#65）：[cancelCurrent] 取消进行中的入口调用。
 /// - **崩溃**：worker 意外退出时，进行中的操作以 `E_LIMIT` 失败，下一次调用时重建。
 /// - 重建等同于 `E_LIMIT` 后的运行时重建：模块级状态被重置（source-spec §4.4）。
 /// - 调用串行执行。
@@ -52,6 +60,10 @@ class IsolateScriptRuntime implements ScriptRuntime {
     this.prelude,
     this.limits = const ScriptLimits(),
     this.hangGrace = const Duration(seconds: 5),
+    this.hangCooldown = const Duration(minutes: 2),
+    this.maxStuckWorkers = 2,
+    this.maxStuckWorkersGlobal = 4,
+    this.hangKey,
     void Function(String message)? log,
   }) : _host = Map.unmodifiable(host),
        _notifications = Set.unmodifiable(notifications),
@@ -94,6 +106,25 @@ class IsolateScriptRuntime implements ScriptRuntime {
   /// 看门狗在 [ScriptLimits.wallTime] 之外额外等待的时间。
   final Duration hangGrace;
 
+  /// worker 被看门狗放弃后，多久之内不新建 worker（暂时停用）。
+  final Duration hangCooldown;
+
+  /// 本实例被放弃、尚未退出的 worker 达到此数量时不再新建 worker。
+  final int maxStuckWorkers;
+
+  /// 全进程（所有实例）被放弃、尚未退出的 worker 达到此数量时不再新建 worker。
+  final int maxStuckWorkersGlobal;
+
+  /// 无响应记录的 key（如 `script:<sourceId>`）；为 null 时用加载的脚本源码。
+  final String? hangKey;
+
+  /// 全进程被放弃、尚未退出的 worker 数（诊断与测试用）。
+  static int get stuckWorkersGlobal => _stuckGlobal;
+  static int _stuckGlobal = 0;
+
+  /// 进程级的无响应记录，按 key。没有卡住的 worker 且冷却结束后移除。
+  static final _hangs = <String, _HangRecord>{};
+
   final Map<String, HostFunction> _host;
   final Set<String> _notifications;
   final Set<String> _interactive;
@@ -113,6 +144,88 @@ class IsolateScriptRuntime implements ScriptRuntime {
   int get restarts => _restarts;
   int _restarts = 0;
 
+  /// 本实例 key 下被放弃、尚未退出的 worker 数（同一 key 的实例共享）。
+  int get stuckWorkers => _record?.stuck ?? 0;
+
+  String? _key;
+  _HangRecord? get _record => _key == null ? null : _hangs[_key];
+
+  bool _cancelRequested = false;
+
+  /// 下一次加载 / 调用需要新建 worker 时会不会被拒绝，以及原因（[ScriptSuspension.source]：
+  /// 本 key 自己的 worker 无响应；[ScriptSuspension.process]：全进程卡住的 worker 过多）。
+  /// worker 仍可用时为 [ScriptSuspension.none]。
+  ScriptSuspension get suspension {
+    if (_disposed) return ScriptSuspension.none;
+    if (_worker?.alive ?? false) return ScriptSuspension.none;
+    return _suspension();
+  }
+
+  /// `suspension != ScriptSuspension.none`。
+  bool get suspended => suspension != ScriptSuspension.none;
+
+  ScriptSuspension _suspension() {
+    final key = _key;
+    final record = key == null ? null : _hangs[key];
+    if (record != null) {
+      if (record.coolingDown) return ScriptSuspension.source;
+      if (record.stuck >= maxStuckWorkers) return ScriptSuspension.source;
+      if (record.stuck == 0) _hangs.remove(key);
+    }
+    if (_stuckGlobal >= maxStuckWorkersGlobal) return ScriptSuspension.process;
+    return ScriptSuspension.none;
+  }
+
+  /// 全进程原因导致停用时 `E_SUSPENDED` 的 message（其他原因的 message 不同）。
+  static const processWideSuspensionMessage =
+      'Script runtime suspended: too many unresponsive script workers '
+      'in this process.';
+
+  /// 新建 worker 之前调用：被停用时抛出 `E_SUSPENDED`。
+  void _checkSuspension() {
+    final message = switch (_suspension()) {
+      ScriptSuspension.none => null,
+      ScriptSuspension.source =>
+        'Script runtime suspended: this script recently became unresponsive.',
+      ScriptSuspension.process => processWideSuspensionMessage,
+    };
+    if (message == null) return;
+    throw ScriptException(message, code: ScriptException.suspended);
+  }
+
+  /// worker 被看门狗放弃。[counted]：计入卡住的 worker（返回其记录，退出时交给 [_onStuckExited]）。
+  _HangRecord? _onHang({required bool counted}) {
+    final key = _key;
+    if (key == null) return null;
+    final record = _hangs.putIfAbsent(key, _HangRecord.new)
+      ..markHang(hangCooldown);
+    if (!counted) return null;
+    record.stuck++;
+    _stuckGlobal++;
+    return record;
+  }
+
+  static void _onStuckExited(_HangRecord record) {
+    if (record.stuck > 0) record.stuck--;
+    if (_stuckGlobal > 0) _stuckGlobal--;
+  }
+
+  /// 取消进行中的入口调用（#65）：调用以 `code == E_CANCELLED` 的 [ScriptException] 失败，
+  /// worker 内的 JS 运行时随后重建（模块级状态重置，同超限）。在 [call] 真正发给 worker
+  /// 之前请求的取消同样生效（调用不再发出）。请求在当前调用结束时清除；没有进行中的调用时，
+  /// 下一次 [call] 会被取消，因此调用方应只在自己的调用期间调用它（`ScriptSource` 串行执行入口调用）。
+  /// worker 正在同步执行 JS 时，取消在这段 JS 结束（最长 `cpuTime`）后生效。
+  void cancelCurrent() {
+    if (_disposed) return;
+    _cancelRequested = true;
+    _worker?.cancel();
+  }
+
+  static const _cancelledError = ScriptException(
+    'Call cancelled.',
+    code: ScriptException.cancelled,
+  );
+
   @override
   Future<void> load(String source, {String name = 'source.js'}) =>
       _serialized(() async {
@@ -127,6 +240,8 @@ class IsolateScriptRuntime implements ScriptRuntime {
           case _LoadState.empty:
         }
         try {
+          _key = hangKey ?? source;
+          _checkSuspension();
           final worker = await _ensureWorker();
           await worker.run(['load', ++_nextCallId, source, name]);
           _source = source;
@@ -142,33 +257,48 @@ class IsolateScriptRuntime implements ScriptRuntime {
   @override
   Future<Object?> call(String export, [List<Object?> args = const []]) =>
       _serialized(() async {
-        _checkAlive();
-        switch (_state) {
-          case _LoadState.loaded:
-            break;
-          case _LoadState.failed:
-            throw StateError(
-              'The script failed to load; create a new runtime.',
-            );
-          case _LoadState.empty:
-            throw StateError('No script loaded.');
+        try {
+          return await _callBody(export, args);
+        } finally {
+          _cancelRequested = false;
         }
-        var worker = _worker;
-        if (worker == null || !worker.alive) {
-          // 上一次调用后 worker 卡死或崩溃：重建并重新加载同一份脚本。
-          _discardWorker();
-          _restarts++;
-          try {
-            worker = await _ensureWorker();
-            await worker.run(['load', ++_nextCallId, _source!, _sourceName!]);
-          } on Object {
-            _state = _LoadState.failed;
-            _discardWorker();
-            rethrow;
-          }
-        }
-        return worker.run(['call', ++_nextCallId, export, args]);
       });
+
+  Future<Object?> _callBody(String export, List<Object?> args) async {
+    _checkAlive();
+    if (_cancelRequested) throw _cancelledError;
+    switch (_state) {
+      case _LoadState.loaded:
+        break;
+      case _LoadState.failed:
+        throw StateError('The script failed to load; create a new runtime.');
+      case _LoadState.empty:
+        throw StateError('No script loaded.');
+    }
+    var worker = _worker;
+    if (worker == null || !worker.alive) {
+      _checkSuspension();
+      // 上一次调用后 worker 卡死或崩溃：重建并重新加载同一份脚本。
+      _discardWorker();
+      _restarts++;
+      try {
+        worker = await _ensureWorker();
+        await worker.run(['load', ++_nextCallId, _source!, _sourceName!]);
+      } on ScriptException catch (e) {
+        _discardWorker();
+        // 同一份脚本此前加载成功过：超限 / worker 无响应属于运行环境问题，保留已加载状态，
+        // 冷却结束后下一次调用再重建；其他错误（如初始化依赖运行时状态）才作废实例。
+        if (e.code != ScriptException.limit) _state = _LoadState.failed;
+        rethrow;
+      } on Object {
+        _state = _LoadState.failed;
+        _discardWorker();
+        rethrow;
+      }
+    }
+    if (_cancelRequested) throw _cancelledError;
+    return worker.run(['call', ++_nextCallId, export, args]);
+  }
 
   @override
   void dispose() {
@@ -206,12 +336,50 @@ class IsolateScriptRuntime implements ScriptRuntime {
 
 enum _LoadState { empty, loaded, failed }
 
+/// [IsolateScriptRuntime.suspension] 的原因。
+enum ScriptSuspension {
+  none,
+
+  /// 本 key（同一个源 / 同一份脚本）的 worker 无响应：冷却中或卡住的 worker 过多。
+  source,
+
+  /// 全进程卡住的 worker 过多（可能来自其他源）。
+  process,
+}
+
+/// 一个 key 的无响应记录（进程级）。
+class _HangRecord {
+  int stuck = 0;
+  final _since = Stopwatch();
+  Duration _cooldown = Duration.zero;
+
+  bool get coolingDown => _since.isRunning && _since.elapsed < _cooldown;
+
+  void markHang(Duration cooldown) {
+    _cooldown = cooldown;
+    _since
+      ..reset()
+      ..start();
+  }
+}
+
 /// 主 isolate 一侧对单个 worker 的管理。
 class _Worker {
   _Worker(this.owner);
 
   final IsolateScriptRuntime owner;
   final _inbox = ReceivePort('tsumugi-script-main');
+
+  /// 只接收 onExit。与 [_inbox] 分开：worker 被放弃后 [_inbox] 关闭，但仍需知道
+  /// 被放弃的 worker 何时真正退出（之后才不再计入卡住的 worker）。
+  final _exitPort = RawReceivePort(null, 'tsumugi-script-exit');
+  bool _exited = false;
+
+  /// 被看门狗放弃、计入了卡住的 worker 数（退出时减回）。
+  _HangRecord? _stuckRecord;
+
+  /// 进行中的是否为入口调用（只有入口调用可以取消）。
+  bool _activeIsCall = false;
   Isolate? _isolate;
   SendPort? _send;
   bool _dead = false;
@@ -239,6 +407,7 @@ class _Worker {
   Future<void> start() async {
     final ready = _ready = Completer<void>();
     _inbox.listen(_onMessage);
+    _exitPort.handler = (Object? _) => _onExit();
     // 握手 Future 可能在等待 spawn 时就因 shutdown 失败：先挂上处理，避免未处理的异步错误。
     ready.future.ignore();
     try {
@@ -258,7 +427,7 @@ class _Worker {
           limits: owner.limits,
         ),
         debugName: 'tsumugi-script-worker',
-        onExit: _inbox.sendPort,
+        onExit: _exitPort.sendPort,
         onError: _inbox.sendPort,
       );
       if (_dead) {
@@ -270,6 +439,9 @@ class _Worker {
     } on ScriptException {
       rethrow;
     } on Object catch (e) {
+      // 没有 isolate，也就不会有 onExit。
+      _exited = true;
+      _exitPort.close();
       shutdown(ScriptException('Failed to start script worker: $e'));
       rethrow;
     }
@@ -282,7 +454,10 @@ class _Worker {
             code: ScriptException.limit,
           ),
         );
-        shutdown(const ScriptException('Script worker did not start.'));
+        shutdown(
+          const ScriptException('Script worker did not start.'),
+          hung: true,
+        );
       }
     });
     try {
@@ -305,6 +480,7 @@ class _Worker {
     final id = message[1]! as int;
     final pending = Completer<Object?>();
     _activeId = id;
+    _activeIsCall = message[0] == 'call';
     _pending = pending;
     _wallClock
       ..reset()
@@ -342,8 +518,37 @@ class _Worker {
           'Script worker became unresponsive.',
           code: ScriptException.limit,
         ),
+        hung: true,
       );
     });
+  }
+
+  /// 请求 worker 取消进行中的入口调用。结果仍经 `done` 消息送回（看门狗照常生效）。
+  void cancel() {
+    final id = _activeId;
+    if (_dead || id == null || !_activeIsCall) return;
+    _send?.send(['cancel', id]);
+  }
+
+  void _onExit() {
+    if (_exited) return;
+    _exited = true;
+    _exitPort.close();
+    final record = _stuckRecord;
+    if (record != null) {
+      _stuckRecord = null;
+      owner._log('此前无响应的脚本 worker 已退出');
+      IsolateScriptRuntime._onStuckExited(record);
+    }
+    if (!_dead) {
+      owner._log('脚本 worker 意外退出');
+      shutdown(
+        const ScriptException(
+          'Script worker exited unexpectedly.',
+          code: ScriptException.limit,
+        ),
+      );
+    }
   }
 
   void _beginWait(int id, {required bool interactive}) {
@@ -381,9 +586,14 @@ class _Worker {
     _armWatchdog(id);
   }
 
-  void shutdown(ScriptException reason) {
+  /// [hung]：worker 被判定为无响应而放弃。运行时进入冷却；isolate 已 spawn 且未退出时
+  /// 计入卡住的 worker，直到它真正退出。
+  void shutdown(ScriptException reason, {bool hung = false}) {
     if (_dead) return;
     _dead = true;
+    if (hung) {
+      _stuckRecord = owner._onHang(counted: _isolate != null && !_exited);
+    }
     _finish(error: reason);
     if (!(_ready?.isCompleted ?? true)) _ready!.completeError(reason);
     _send?.send(const ['dispose']);
@@ -398,6 +608,7 @@ class _Worker {
     _watchdog?.cancel();
     _watchdog = null;
     _activeId = null;
+    _activeIsCall = false;
     final pending = _pending;
     _pending = null;
     if (pending == null || pending.isCompleted) return;
@@ -411,15 +622,6 @@ class _Worker {
   void _onMessage(Object? message) {
     if (_dead) return;
     switch (message) {
-      case null:
-        // onExit
-        owner._log('脚本 worker 意外退出');
-        shutdown(
-          const ScriptException(
-            'Script worker exited unexpectedly.',
-            code: ScriptException.limit,
-          ),
-        );
       case ['ready', final SendPort port]:
         _send = port;
         _ready?.complete();
@@ -607,6 +809,8 @@ void _workerMain(_WorkerBoot boot) {
         } else {
           c.completeError(_decodeError(payload));
         }
+      case ['cancel', final int id]:
+        if (currentId == id) rt.cancelCurrent();
       case ['dispose']:
         rt.dispose();
         inbox.close();

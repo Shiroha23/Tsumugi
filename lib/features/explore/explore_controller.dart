@@ -8,11 +8,13 @@ import '../../sources/model/manifest.dart';
 import '../../sources/registry/providers.dart';
 import '../../sources/runtime/source_runtime.dart';
 import '../../sources/source.dart';
+import '../../sources/source_call.dart';
 import 'explore_preferences.dart';
 
 part 'explore_controller.g.dart';
 
-/// 一次 `explore()` / `exploreList()`（含首次创建源实例）的最长等待时间。
+/// 一次 `explore()` / `exploreList()`（含首次创建源实例）的最长等待时间。源等待用户操作
+/// （验证页）期间暂停计时，超时后取消底层调用（[runSourceCall]，#65）。
 @Riverpod(keepAlive: true)
 Duration exploreTimeout(Ref ref) => const Duration(seconds: 30);
 
@@ -127,11 +129,29 @@ class ExploreController extends _$ExploreController {
   /// 每次换源 / 换分类递增；过时的结果按它丢弃。
   int _generation = 0;
 
+  /// 当前一代进行中的调用；换源 / 换分类或控制器销毁时取消（释放该源的串行队列）。
+  final _tickets = <SourceCallTicket>{};
+
+  /// 进入新的一代：之前的结果作废，进行中的调用取消。
+  int _nextGeneration() {
+    for (final t in _tickets.toList()) {
+      t.cancel();
+    }
+    _tickets.clear();
+    return ++_generation;
+  }
+
   List<InstalledSource>? _sources;
   ExploreSelection? _saved;
 
   @override
   ExploreState build() {
+    ref.onDispose(() {
+      for (final t in _tickets.toList()) {
+        t.cancel();
+      }
+      _tickets.clear();
+    });
     ref.listen(exploreSourcesProvider, (_, next) {
       if (next case AsyncData(:final value)) {
         _sources = value;
@@ -176,7 +196,7 @@ class ExploreController extends _$ExploreController {
         sources.where((s) => s.id == saved.sourceId).firstOrNull ??
         sources.firstOrNull;
     if (next == null) {
-      _generation++;
+      _nextGeneration();
       state = const ExploreState(ready: true);
       return;
     }
@@ -217,7 +237,7 @@ class ExploreController extends _$ExploreController {
         !categories.any((c) => c.id == categoryId)) {
       return;
     }
-    final gen = ++_generation;
+    final gen = _nextGeneration();
     state = state.copyWith(
       categoryId: () => categoryId,
       feed: const ExploreFeed(loading: true),
@@ -240,7 +260,7 @@ class ExploreController extends _$ExploreController {
   }
 
   Future<void> _open(InstalledSource source, String? preferredCategory) async {
-    final gen = ++_generation;
+    final gen = _nextGeneration();
     state = ExploreState(
       ready: true,
       source: source,
@@ -300,11 +320,16 @@ class ExploreController extends _$ExploreController {
     }
   }
 
-  Future<T> _call<T>(String sourceId, Future<T> Function(Source) run) =>
-      () async {
-        final source = await ref.read(sourceRuntimeProvider).get(sourceId);
-        return run(source);
-      }().timeout(ref.read(exploreTimeoutProvider));
+  Future<T> _call<T>(String sourceId, Future<T> Function(Source) run) {
+    final ticket = SourceCallTicket();
+    _tickets.add(ticket);
+    return runSourceCall(
+      acquire: () => ref.read(sourceRuntimeProvider).get(sourceId),
+      run: run,
+      timeout: ref.read(exploreTimeoutProvider),
+      ticket: ticket,
+    ).whenComplete(() => _tickets.remove(ticket));
+  }
 
   bool _stale(int gen) => !ref.mounted || gen != _generation;
 
