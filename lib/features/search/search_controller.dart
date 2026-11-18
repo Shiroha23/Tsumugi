@@ -6,10 +6,12 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../../sources/model/common.dart';
 import '../../sources/registry/providers.dart';
 import '../../sources/runtime/source_runtime.dart';
+import '../../sources/source_call.dart';
 
 part 'search_controller.g.dart';
 
-/// 单个源一次搜索（含首次创建源实例）的最长等待时间。
+/// 单个源一次搜索（含首次创建源实例）的最长等待时间。源等待用户操作（验证页）期间暂停计时，
+/// 超时后取消底层调用（[runSourceCall]，#65）。
 @Riverpod(keepAlive: true)
 Duration searchTimeout(Ref ref) => const Duration(seconds: 30);
 
@@ -138,10 +140,11 @@ class SourceSearchController extends _$SourceSearchController {
   Future<void> _load(int gen, String sourceId, String keyword, int page) async {
     final timeout = ref.read(searchTimeoutProvider);
     try {
-      final result = await () async {
-        final source = await ref.read(sourceRuntimeProvider).get(sourceId);
-        return source.search(keyword, page);
-      }().timeout(timeout);
+      final result = await runSourceCall(
+        acquire: () => ref.read(sourceRuntimeProvider).get(sourceId),
+        run: (source) => source.search(keyword, page),
+        timeout: timeout,
+      );
       if (!ref.mounted || gen != _generation) return;
       _update(
         sourceId,

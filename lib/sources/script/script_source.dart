@@ -10,6 +10,7 @@ import '../model/common.dart';
 import '../model/content.dart';
 import '../model/manifest.dart';
 import '../source.dart';
+import '../source_call.dart';
 import 'script_host.dart';
 import 'script_ui.dart';
 
@@ -26,8 +27,12 @@ export 'script_ui.dart';
 /// 结果中的相对地址（封面、图片、流、字幕）基于 `baseUrl` 解析为绝对地址，
 /// 清单 `headers` 合并到 `coverHeaders` 与图片 / 流的 `headers`（结果中的同名项优先）。
 /// 不再使用时调用 [dispose]（同时关闭 [http]）。
-class ScriptSource implements Source {
-  ScriptSource._(this.manifest, this._host, this._runtime);
+///
+/// 界面层调用控制（#65，[SourceCallTicket]）：在票据 zone 中发起的入口调用可被取消；
+/// `ui.openWebView` 进行中时 [waitingForUser] 为 true。
+/// worker 长时间无响应后该源暂时停用（#29），期间的调用以 [SourceSuspendedException] 失败。
+class ScriptSource implements Source, UserWaitReporting {
+  ScriptSource._(this.manifest, this._host, this._runtime, this._waits);
 
   /// 创建并加载脚本源。清单不合法、脚本缺失或加载失败时抛出
   /// [SourceErrorCode.parse] 的 [SourceException]。
@@ -71,8 +76,13 @@ class ScriptSource implements Source {
       log: logger,
       limits: hostLimits,
     );
+    final waits = _UserWaits();
+    final functions = <String, HostFunction>{
+      for (final MapEntry(key: path, value: fn) in host.functions.entries)
+        path: interactiveHostPaths.contains(path) ? waits.track(fn) : fn,
+    };
     final runtime = IsolateScriptRuntime(
-      host: host.functions,
+      host: functions,
       notifications: notificationPaths,
       interactive: interactiveHostPaths,
       workerHost: tsumugiWorkerHost,
@@ -89,7 +99,7 @@ class ScriptSource implements Source {
       hangGrace: hangGrace,
       log: (m) => logger('[${manifest.id}] $m'),
     );
-    final source = ScriptSource._(manifest, host, runtime);
+    final source = ScriptSource._(manifest, host, runtime, waits);
     try {
       await runtime.load(script, name: '${manifest.id}.js');
     } on ScriptException catch (e) {
@@ -112,6 +122,7 @@ class ScriptSource implements Source {
   final SourceManifest manifest;
   final ScriptHost _host;
   final IsolateScriptRuntime _runtime;
+  final _UserWaits _waits;
   Future<void> _tail = Future.value();
   bool _disposed = false;
 
@@ -119,6 +130,15 @@ class ScriptSource implements Source {
 
   /// worker 被重建的次数（诊断与测试用）。
   int get workerRestarts => _runtime.restarts;
+
+  /// 是否因 worker 长时间无响应而暂时停用（#29）。
+  bool get suspended => _runtime.suspended;
+
+  @override
+  bool get waitingForUser => _waits.waiting;
+
+  @override
+  Stream<bool> get waitingForUserChanges => _waits.changes;
 
   Uri get _base => http.config.baseUrl;
 
@@ -167,6 +187,7 @@ class ScriptSource implements Source {
     if (_disposed) return;
     _disposed = true;
     _runtime.dispose();
+    _waits.close();
     http.close();
   }
 
@@ -178,19 +199,29 @@ class ScriptSource implements Source {
     List<Object?> args,
     T Function(Object? value) convert,
   ) {
+    // 票据取自发起调用时的 zone（排队期间 zone 不变，但在这里读取最明确）。
+    final ticket = SourceCallTicket.current;
     final result = _tail.then((_) async {
       if (_disposed) {
         throw const SourceException(SourceErrorCode.unsupported, '源已释放');
       }
+      // 排队期间已被取消（如界面超时）：不再执行，队列继续往下走。
+      if (ticket != null && ticket.cancelled) {
+        throw const SourceCallCancelledException();
+      }
+      if (_runtime.suspended) throw SourceSuspendedException(manifest.name);
       final scope = _host.begin();
+      // 入口调用串行执行：注册期间运行时进行中的调用就是这一次。
+      final unregister = ticket?.onCancel(_runtime.cancelCurrent);
       final Object? value;
       try {
         value = await _runtime.call(export, args);
       } on ScriptException catch (e) {
-        throw _toSourceException(e);
+        throw _mapScriptException(e);
       } on StateError catch (e) {
         throw SourceException(SourceErrorCode.parse, e.message);
       } finally {
+        unregister?.call();
         scope.close();
       }
       try {
@@ -203,6 +234,19 @@ class ScriptSource implements Source {
     });
     _tail = result.then<void>((_) {}, onError: (_) {});
     return result;
+  }
+
+  Exception _mapScriptException(ScriptException e) {
+    switch (e.code) {
+      case ScriptException.cancelled:
+        return const SourceCallCancelledException();
+      case ScriptException.suspended:
+        return SourceSuspendedException(manifest.name);
+      // 看门狗判定 worker 无响应（此后运行时进入停用）：同样提示暂时停用。
+      case ScriptException.limit when _runtime.suspended:
+        return SourceSuspendedException(manifest.name);
+    }
+    return _toSourceException(e);
   }
 
   static SourceException _toSourceException(ScriptException e) {
@@ -302,4 +346,30 @@ class ScriptSource implements Source {
     final Map m => {for (final e in m.entries) '${e.key}': _jsonSafe(e.value)},
     _ => '$v',
   };
+}
+
+/// 交互式宿主调用（`ui.openWebView`）的进行中计数。
+class _UserWaits {
+  final _controller = StreamController<bool>.broadcast(sync: true);
+  int _depth = 0;
+
+  bool get waiting => _depth > 0;
+  Stream<bool> get changes => _controller.stream;
+
+  HostFunction track(HostFunction fn) => (args) async {
+    _set(_depth + 1);
+    try {
+      return await fn(args);
+    } finally {
+      _set(_depth - 1);
+    }
+  };
+
+  void _set(int depth) {
+    final was = waiting;
+    _depth = depth;
+    if (waiting != was && !_controller.isClosed) _controller.add(waiting);
+  }
+
+  void close() => unawaited(_controller.close());
 }

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../source.dart';
+import '../source_call.dart';
 import 'source_runtime.dart';
 
 /// 面向用户的错误说明（docs/source-spec.md §6 错误码 → 中文提示）。
@@ -44,6 +45,23 @@ SourceErrorInfo describeSourceError(Object error) => switch (error) {
           code == SourceErrorCode.challenge ||
           code == SourceErrorCode.loginRequired,
     ),
+  SourceCallTimeoutException(awaitedUser: true) => const SourceErrorInfo(
+    title: '等待验证超时',
+    detail: '验证或登录没有在限定时间内完成，请打开验证页完成后重试',
+    code: SourceErrorCode.challenge,
+    needsVerification: true,
+  ),
+  SourceCallTimeoutException() => const SourceErrorInfo(
+    title: '请求超时',
+    detail: '源长时间没有返回结果，已取消本次请求，可稍后重试',
+    code: SourceErrorCode.network,
+  ),
+  SourceCallCancelledException() => const SourceErrorInfo(title: '请求已取消'),
+  SourceSuspendedException(:final sourceName) => SourceErrorInfo(
+    title: '「$sourceName」暂时不可用',
+    detail: '该源的脚本长时间没有响应，已暂时停用。请稍后重试；若反复出现，建议禁用或删除该源',
+    code: SourceErrorCode.limit,
+  ),
   TimeoutException() => const SourceErrorInfo(
     title: '请求超时',
     code: SourceErrorCode.network,

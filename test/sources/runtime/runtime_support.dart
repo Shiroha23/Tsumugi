@@ -12,6 +12,7 @@ import 'package:tsumugi/sources/model/manifest.dart';
 import 'package:tsumugi/sources/network_error_mapping.dart';
 import 'package:tsumugi/sources/registry/source_factory.dart';
 import 'package:tsumugi/sources/runtime/source_runtime.dart';
+import 'package:tsumugi/sources/script/script_source.dart';
 import 'package:tsumugi/sources/script/script_source_factory.dart';
 import 'package:tsumugi/sources/source.dart';
 
@@ -26,15 +27,16 @@ String mockSourceJson(String name, [Map<String, Object?> changes = const {}]) =>
       ...changes,
     });
 
-/// 声明式与脚本引擎的真实工厂，HTTP 连接都接到本地 [server]。
-SourceFactories mockFactories(MockServer server) =>
-    adapterFactories(() => mockAdapter(server));
+/// 声明式与脚本引擎的真实工厂，HTTP 连接都接到本地 [server]。[ui] 为脚本源的 `tsumugi.ui`。
+SourceFactories mockFactories(MockServer server, {ScriptUi? ui}) =>
+    adapterFactories(() => mockAdapter(server), ui: ui);
 
 /// 同上，HTTP 连接经 [adapter] 建立（集成测试在设备上连接电脑上的 mock 服务器）；
 /// 给出 [session] 时各源使用它返回的会话（与应用一样，源实例与媒体代理共用 Cookie）。
 SourceFactories adapterFactories(
   IOHttpClientAdapter Function() adapter, {
   SourceSession Function(String sourceId)? session,
+  ScriptUi? ui,
 }) {
   DioSourceHttpClient http(SourceManifest m) => DioSourceHttpClient(
     networkConfigFromManifest(m),
@@ -46,6 +48,7 @@ SourceFactories adapterFactories(
     ScriptSourceFactory(
       storage: MemorySourceStorage(),
       httpClientFor: http,
+      ui: ui ?? const UnavailableScriptUi(),
       log: (_) {},
     ),
   ]);
@@ -172,4 +175,28 @@ class FakeFactory implements SourceFactory {
     this.settings.add(settings);
     return s;
   }
+}
+
+/// 界面层调用控制（#65）测试用的脚本源清单（`test/fixtures/scripts/call_control.js`）。
+String callControlSourceJson() => mockSourceJson('script', {
+  'id': 'com.example.mock.call-control',
+  'name': '调用控制',
+  'script': File('test/fixtures/scripts/call_control.js').readAsStringSync(),
+});
+
+/// 用户在 WebView 中操作 [delay] 后完成的 [ScriptUi]。
+class DelayedScriptUi implements ScriptUi {
+  DelayedScriptUi(this.delay);
+
+  Duration delay;
+  int opened = 0;
+
+  @override
+  Future<void> openWebView(WebViewRequest request) async {
+    opened++;
+    await Future<void>.delayed(delay);
+  }
+
+  @override
+  void toast(String sourceId, String message) {}
 }

@@ -8,11 +8,13 @@ import '../../sources/model/manifest.dart';
 import '../../sources/registry/providers.dart';
 import '../../sources/runtime/source_runtime.dart';
 import '../../sources/source.dart';
+import '../../sources/source_call.dart';
 import 'explore_preferences.dart';
 
 part 'explore_controller.g.dart';
 
-/// 一次 `explore()` / `exploreList()`（含首次创建源实例）的最长等待时间。
+/// 一次 `explore()` / `exploreList()`（含首次创建源实例）的最长等待时间。源等待用户操作
+/// （验证页）期间暂停计时，超时后取消底层调用（[runSourceCall]，#65）。
 @Riverpod(keepAlive: true)
 Duration exploreTimeout(Ref ref) => const Duration(seconds: 30);
 
@@ -301,10 +303,11 @@ class ExploreController extends _$ExploreController {
   }
 
   Future<T> _call<T>(String sourceId, Future<T> Function(Source) run) =>
-      () async {
-        final source = await ref.read(sourceRuntimeProvider).get(sourceId);
-        return run(source);
-      }().timeout(ref.read(exploreTimeoutProvider));
+      runSourceCall(
+        acquire: () => ref.read(sourceRuntimeProvider).get(sourceId),
+        run: run,
+        timeout: ref.read(exploreTimeoutProvider),
+      );
 
   bool _stale(int gen) => !ref.mounted || gen != _generation;
 

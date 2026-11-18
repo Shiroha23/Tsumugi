@@ -43,6 +43,10 @@ export async function crash() {
   return await tsumugi.echo.slow();
 }
 export async function slowRemote() { return await tsumugi.echo.slow(); }
+export async function crashLater() {
+  tsumugi.test.spin(300);
+  return await tsumugi.echo.slow();
+}
 ''';
 
 void main() {
@@ -52,6 +56,9 @@ void main() {
   IsolateScriptRuntime create({
     ScriptLimits limits = const ScriptLimits(),
     Duration hangGrace = const Duration(seconds: 2),
+    Duration hangCooldown = Duration.zero,
+    int maxStuckWorkers = 100,
+    int maxStuckWorkersGlobal = 100,
   }) => IsolateScriptRuntime(
     host: {
       'echo.async': (a) async => 'async:${a.first}',
@@ -70,6 +77,9 @@ void main() {
     workerHost: _testWorkerHost,
     limits: limits,
     hangGrace: hangGrace,
+    hangCooldown: hangCooldown,
+    maxStuckWorkers: maxStuckWorkers,
+    maxStuckWorkersGlobal: maxStuckWorkersGlobal,
     log: logs.add,
   );
 
@@ -201,5 +211,151 @@ void main() {
     rt.dispose();
     await expectLater(pending, throwsA(isA<ScriptException>()));
     await expectLater(rt.call('add', [1, 2]), throwsStateError);
+  });
+
+  // --- #29：worker 长时间无响应后暂时停用 -------------------------------------
+  // `test.spin` 在 worker 的 Dart 代码里忙等，模拟“不能被中断的执行”：
+  // 看门狗放弃 worker 后，它要到 spin 结束才真正退出。
+
+  Matcher suspended = throwsA(
+    isA<ScriptException>().having((e) => e.code, 'code', 'E_SUSPENDED'),
+  );
+
+  Future<void> waitUntil(bool Function() condition) async {
+    final sw = Stopwatch()..start();
+    while (!condition()) {
+      if (sw.elapsed > const Duration(seconds: 10)) fail('timed out');
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+  }
+
+  test(
+    'unresponsive worker suspends the runtime during the cooldown',
+    () async {
+      final rt = create(
+        limits: const ScriptLimits(wallTime: Duration(milliseconds: 300)),
+        hangGrace: const Duration(milliseconds: 200),
+        hangCooldown: const Duration(milliseconds: 800),
+      );
+      addTearDown(rt.dispose);
+      await rt.load(_script);
+      expect(rt.suspended, isFalse);
+      await expectLater(
+        rt.call('spin', [1500]),
+        throwsA(
+          isA<ScriptException>().having((e) => e.code, 'code', 'E_LIMIT'),
+        ),
+      );
+      expect(rt.suspended, isTrue);
+      expect(rt.stuckWorkers, 1);
+      // 冷却期内：立即失败，不新建 worker。
+      final sw = Stopwatch()..start();
+      await expectLater(rt.call('add', [1, 1]), suspended);
+      expect(sw.elapsed, lessThan(const Duration(milliseconds: 200)));
+      expect(rt.restarts, 0);
+      // 冷却结束后恢复：新 worker 重新加载脚本。
+      await waitUntil(() => !rt.suspended);
+      expect(await rt.call('add', [1, 1]), 2);
+      expect(rt.restarts, 1);
+      // 被放弃的 worker 最终退出，不再计入。
+      await waitUntil(() => rt.stuckWorkers == 0);
+    },
+  );
+
+  test(
+    'too many stuck workers keep the runtime suspended until one exits',
+    () async {
+      final rt = create(
+        limits: const ScriptLimits(wallTime: Duration(milliseconds: 200)),
+        hangGrace: const Duration(milliseconds: 100),
+        maxStuckWorkers: 2,
+      );
+      addTearDown(rt.dispose);
+      await rt.load(_script);
+      // 之前的测试留下的 worker 先退出，全进程计数才可预期。
+      await waitUntil(() => IsolateScriptRuntime.stuckWorkersGlobal == 0);
+      await expectLater(
+        rt.call('spin', [1500]),
+        throwsA(isA<ScriptException>()),
+      );
+      expect(rt.stuckWorkers, 1);
+      expect(rt.suspended, isFalse);
+      await expectLater(
+        rt.call('spin', [1500]),
+        throwsA(isA<ScriptException>()),
+      );
+      expect(rt.stuckWorkers, 2);
+      expect(IsolateScriptRuntime.stuckWorkersGlobal, 2);
+      expect(rt.suspended, isTrue);
+      await expectLater(rt.call('add', [1, 1]), suspended);
+      expect(rt.restarts, 1);
+      expect(logs.join('\n'), contains('没有回应'));
+      // 卡住的 worker 退出后可以重建。
+      await waitUntil(() => !rt.suspended);
+      expect(await rt.call('add', [2, 2]), 4);
+      await waitUntil(() => rt.stuckWorkers == 0);
+      expect(logs.join('\n'), contains('已退出'));
+    },
+  );
+
+  test('stuck workers are also capped across runtimes', () async {
+    await waitUntil(() => IsolateScriptRuntime.stuckWorkersGlobal == 0);
+    const base = 0;
+    IsolateScriptRuntime make() => create(
+      limits: const ScriptLimits(wallTime: Duration(milliseconds: 200)),
+      hangGrace: const Duration(milliseconds: 100),
+      maxStuckWorkersGlobal: base + 1,
+    );
+    final a = make();
+    final b = make();
+    addTearDown(a.dispose);
+    addTearDown(b.dispose);
+    await a.load(_script);
+    await b.load(_script);
+    await expectLater(a.call('spin', [1500]), throwsA(isA<ScriptException>()));
+    // b 的 worker 还活着：照常工作。
+    expect(await b.call('add', [1, 2]), 3);
+    await expectLater(b.call('spin', [1500]), throwsA(isA<ScriptException>()));
+    // 全进程已有 2 个卡住的 worker：两者都不再新建 worker。
+    expect(a.suspended, isTrue);
+    expect(b.suspended, isTrue);
+    await expectLater(b.call('add', [1, 1]), suspended);
+    await waitUntil(() => IsolateScriptRuntime.stuckWorkersGlobal <= base);
+    expect(await a.call('add', [1, 1]), 2);
+  });
+
+  // --- #65：取消 ---------------------------------------------------------------
+
+  Matcher cancelled = throwsA(
+    isA<ScriptException>().having((e) => e.code, 'code', 'E_CANCELLED'),
+  );
+
+  test('cancelCurrent aborts a call waiting on the host', () async {
+    final rt = create();
+    addTearDown(rt.dispose);
+    await rt.load(_script);
+    expect(await rt.call('bump'), 1);
+    final pending = rt.call('slowRemote');
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    rt.cancelCurrent();
+    await expectLater(pending, cancelled);
+    // 迟到的宿主结果被丢弃；JS 运行时已重建（模块状态重置），worker 保留。
+    slow.complete();
+    await pumpEventQueue();
+    expect(await rt.call('bump'), 1);
+    expect(rt.restarts, 0);
+    // 取消请求只作用于那一次调用。
+    expect(await rt.call('add', [1, 2]), 3);
+  });
+
+  test('cancelCurrent takes effect after synchronous JS finishes', () async {
+    final rt = create();
+    addTearDown(rt.dispose);
+    await rt.load(_script);
+    final pending = rt.call('crashLater');
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    rt.cancelCurrent();
+    await expectLater(pending, cancelled);
+    expect(await rt.call('add', [2, 3]), 5);
   });
 }

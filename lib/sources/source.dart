@@ -51,3 +51,14 @@ class SourceException implements Exception {
   String toString() =>
       'SourceException(${code.wire}${status != null ? ' $status' : ''}${message != null ? ': $message' : ''})';
 }
+
+/// 源暂时停用：脚本源的 worker 曾长时间无响应（docs/architecture.md §5.5，#29）。
+/// 冷却期过后、且卡住的 worker 已退出时自动恢复；用户也可以禁用该源。
+class SourceSuspendedException implements Exception {
+  const SourceSuspendedException(this.sourceName);
+
+  final String sourceName;
+
+  @override
+  String toString() => 'SourceSuspendedException($sourceName)';
+}

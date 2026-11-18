@@ -194,6 +194,18 @@ class QuickJsScriptRuntime implements ScriptRuntime {
     }
   }
 
+  /// 取消进行中的入口调用（若有）：调用立即以 `code == E_CANCELLED` 的 [ScriptException] 失败，
+  /// 之后到达的宿主结果被丢弃。该调用的 Promise 链可能仍挂在引擎里，因此与超限一样
+  /// 在调用结束后重建引擎（模块级状态重置）。没有进行中的调用时什么也不做。
+  void cancelCurrent() {
+    final call = _current;
+    if (call == null || call.isDone) return;
+    _poisoned = true;
+    call.fail(
+      const ScriptException('Call cancelled.', code: ScriptException.cancelled),
+    );
+  }
+
   @override
   void dispose() {
     if (_disposed) return;

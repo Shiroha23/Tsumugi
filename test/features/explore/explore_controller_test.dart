@@ -8,6 +8,7 @@ import 'package:tsumugi/features/explore/explore_controller.dart';
 import 'package:tsumugi/features/explore/explore_preferences.dart';
 import 'package:tsumugi/sources/model/manifest.dart';
 import 'package:tsumugi/sources/registry/providers.dart';
+import 'package:tsumugi/sources/source_call.dart';
 
 import '../../core/network/mock_support.dart';
 import '../../core/storage/test_database.dart';
@@ -161,5 +162,44 @@ void main() {
     expect(s.categoryId, 'missing');
     expect(s.feed.items, isEmpty);
     expect(s.feed.error, isNotNull);
+  });
+
+  test('界面超时（#65）：验证页等待不计时；超时取消底层调用', () async {
+    container.dispose();
+    final ui = DelayedScriptUi(const Duration(milliseconds: 900));
+    container = ProviderContainer(
+      overrides: [
+        appDatabaseProvider.overrideWithValue(db),
+        sourceFactoriesProvider.overrideWithValue(
+          mockFactories(server, ui: ui),
+        ),
+        explorePreferencesStoreProvider.overrideWithValue(prefs),
+        exploreTimeoutProvider.overrideWithValue(
+          const Duration(milliseconds: 400),
+        ),
+      ],
+    );
+    container.listen(exploreControllerProvider, (_, _) {});
+    await registry.importText(callControlSourceJson());
+
+    // 第一个分类需要打开验证页（900 ms > 界面超时 400 ms）。
+    var s = await until(
+      (s) =>
+          s.categories?.hasValue == true &&
+          !s.feed.loading &&
+          (s.feed.page > 0 || s.feed.error != null),
+    );
+    expect(s.feed.error, isNull);
+    expect(s.feed.items.single.title, 'verify');
+
+    await notifier().selectCategory('slow:3000');
+    s = container.read(exploreControllerProvider);
+    expect(s.feed.error, isA<SourceCallTimeoutException>());
+
+    final sw = Stopwatch()..start();
+    await notifier().selectCategory('fast');
+    s = container.read(exploreControllerProvider);
+    expect(s.feed.items.single.title, 'fast');
+    expect(sw.elapsed, lessThan(const Duration(seconds: 2)));
   });
 }

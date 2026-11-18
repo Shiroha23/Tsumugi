@@ -160,6 +160,10 @@ void main() {
       workerHost: _spinHost,
       limits: _limits,
       hangGrace: const Duration(milliseconds: 200),
+      // 这些测试只关心看门狗计时，不测暂时停用（见 isolate_script_runtime_test.dart）。
+      hangCooldown: Duration.zero,
+      maxStuckWorkers: 100,
+      maxStuckWorkersGlobal: 100,
     );
 
     Matcher unresponsive = _limit('unresponsive');
