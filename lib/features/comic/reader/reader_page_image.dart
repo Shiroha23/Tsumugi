@@ -123,23 +123,13 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
         ),
       );
     }
-    final total = _chunk?.expectedTotalBytes;
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           Text('${widget.pageNumber}', style: TextStyle(color: color)),
           const SizedBox(height: 8),
-          SizedBox.square(
-            dimension: 28,
-            child: CircularProgressIndicator(
-              strokeWidth: 2.5,
-              color: color,
-              value: total != null && total > 0
-                  ? _chunk!.cumulativeBytesLoaded / total
-                  : null,
-            ),
-          ),
+          ImageLoadingIndicator(progress: _chunk, color: color),
         ],
       ),
     );

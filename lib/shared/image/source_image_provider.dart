@@ -11,7 +11,8 @@ import 'source_image_loader.dart';
 /// `DecorationImage`、`precacheImage` 等。
 ///
 /// 相等性只看 `sourceId` + `url` + `loader`（与磁盘缓存键一致），因此同一张图在 Flutter
-/// 的解码缓存里只有一份。下载过程中会发出 [ImageChunkEvent]（总字节数未知时 `expectedTotalBytes` 为 null）。
+/// 的解码缓存里只有一份。下载过程中随网络层的接收进度发出 [ImageChunkEvent]
+/// （`Content-Length` 未知时 `expectedTotalBytes` 为 null，界面应显示不确定进度）。
 @immutable
 class SourceImageProvider extends ImageProvider<SourceImageProvider> {
   const SourceImageProvider({

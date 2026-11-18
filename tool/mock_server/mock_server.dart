@@ -42,6 +42,7 @@
 /// | `* /flaky?key=&fail=N&status=503` | 同一 key 的前 N 次返回 status（默认 503），之后 200 |
 /// | `GET /drop` | 不发送响应直接断开连接 |
 /// | `GET /large?bytes=N&status=200` | N 字节响应体（可指定状态码） |
+/// | `GET /chunked?bytes=N&chunk=K&ms=D&length=1&key=` | N 字节响应体，每 K 字节 flush 一次、间隔 D 毫秒（慢速分块）；`length=0` 时不带 `Content-Length`。连接被客户端中止时停止发送，已发送字节数记入 `chunkedSent` |
 /// | `* /redirect?to=<url>&status=302` | 重定向到任意地址（相对或绝对） |
 /// | `GET /redirect/chain?n=N` | 连续重定向 N 次后到 `/echo` |
 /// | `GET /redirect/outside` | 302 到虚构的白名单外主机 `outside.example.net` |
@@ -58,6 +59,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 class MockServer {
   MockServer._(
@@ -94,6 +96,9 @@ class MockServer {
   final List<RecordedRequest> requests = [];
 
   final Map<String, int> _flakyCounters = {};
+
+  /// `/chunked?key=` 每个 key 已 flush 出去的字节数（测试用来确认超限后服务端停止发送）。
+  final Map<String, int> chunkedSent = {};
 
   int get port => _server.port;
 
@@ -485,6 +490,27 @@ class MockServer {
           res.add(List.filled(chunk < n - sent ? chunk : n - sent, 0x61));
         }
         return res.close();
+      case '/chunked':
+        final n = int.tryParse(q['bytes'] ?? '') ?? 4096;
+        final k = math.max(1, int.tryParse(q['chunk'] ?? '') ?? 1024);
+        final delay = _ms(q['ms'], 20);
+        res.headers.contentType = ContentType.binary;
+        if (q['length'] != '0') res.contentLength = n;
+        var sent = 0;
+        try {
+          while (sent < n) {
+            final size = math.min(k, n - sent);
+            res.add(List.filled(size, 0x62));
+            await res.flush();
+            sent += size;
+            chunkedSent[q['key'] ?? ''] = sent;
+            if (sent < n) await Future<void>.delayed(delay);
+          }
+          await res.close();
+        } on Object {
+          // 客户端中止（超限 / 取消）：停止发送。
+        }
+        return;
       case '/redirect':
         res.statusCode = int.tryParse(q['status'] ?? '') ?? 302;
         res.headers.set(HttpHeaders.locationHeader, q['to'] ?? '/echo');

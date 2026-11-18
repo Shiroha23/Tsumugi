@@ -269,7 +269,12 @@ detail(id) → 章节/剧集/曲目列表 → content(itemId)
 键 = sha256(sourceId + url)）→ 该源的 `SourceHttpClient`（因此遵守白名单、限速、默认 headers；
 `ImageRef.headers` 随请求发送）。同一图片的并发请求合并，全局并发上限 6；超时 / 连接错误额外重试 1 次，
 字节无法解码时清除缓存条目。界面使用 `SourceImageProvider`（`ImageProvider`）或 `SourceImage` / `CoverImage` 组件，
-不直接使用 `Image.network`。图片客户端与源实例共用该源的 `SourceSession`（Cookie 与 UA，§5.3）。已知限制：网络层只在响应读完后返回，下载进度目前为不确定进度（[#26](https://github.com/Shiroha23/Tsumugi/issues/26)）。
+不直接使用 `Image.network`。图片客户端与源实例共用该源的 `SourceSession`（Cookie 与 UA，§5.3）。
+**下载进度**（#26）：网络层边读边检查 `maxResponseBytes`（声明的 `Content-Length` 超限时不读响应体，未声明时读到超出的那一块即中止），
+并经 `NetRequest.onReceiveProgress` 上报已收字节与 `Content-Length`（只对 2xx 的最终响应；重定向中间响应、错误页不上报）。
+加载器把它转为 `ImageChunkEvent`，阅读器页面与 `SourceImage` / 封面的占位用 `ImageLoadingIndicator` 显示确定进度。
+已知限制：没有 `Content-Length`、或响应经过内容编码（gzip 等，收到的是解压后的字节）时总长度未知，退回不确定进度；
+网络层或加载器重试时进度从 0 重新开始；排队（并发名额 / 限速）期间封面不显示进度，阅读器显示不确定进度。
 
 **漫画阅读器（M2，`features/comic/reader/`）**：路由 `/comic/:sourceId/:itemId/read/:unitId?page=N`
 （详情路由的子路由；各段 URL 编码，用 `ComicRoutes.reader` / `comicReaderLocation` 生成，`page` 从 0 开始）；纵向滚动 / 左→右 / 右→左三种模式（偏好存于应用支持目录
