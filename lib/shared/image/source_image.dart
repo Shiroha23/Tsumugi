@@ -27,6 +27,7 @@ class SourceImage extends ConsumerStatefulWidget {
     this.fit,
     this.alignment = Alignment.center,
     this.placeholder,
+    this.compactProgress = false,
     this.errorWidget,
     this.semanticLabel,
   });
@@ -38,8 +39,11 @@ class SourceImage extends ConsumerStatefulWidget {
   final BoxFit? fit;
   final AlignmentGeometry alignment;
 
-  /// 加载中显示；默认为居中的进度指示器。
+  /// 加载中显示；默认为居中的 [ImageLoadingIndicator]（有总长度时为确定进度）。
   final Widget? placeholder;
+
+  /// 默认进度指示器使用小尺寸（封面等小图）。给出 [placeholder] 时无效。
+  final bool compactProgress;
 
   /// 失败时显示；为 null 时显示默认的“点击重试”占位。
   final Widget Function(BuildContext context, Object error, VoidCallback retry)?
@@ -75,11 +79,9 @@ class _SourceImageState extends ConsumerState<SourceImage> {
         return _sized(
           widget.placeholder ??
               Center(
-                child: CircularProgressIndicator(
-                  value: switch (progress.expectedTotalBytes) {
-                    final t? when t > 0 => progress.cumulativeBytesLoaded / t,
-                    _ => null,
-                  },
+                child: ImageLoadingIndicator(
+                  progress: progress,
+                  compact: widget.compactProgress,
                 ),
               ),
         );
@@ -96,6 +98,42 @@ class _SourceImageState extends ConsumerState<SourceImage> {
 
   Widget _sized(Widget child) =>
       SizedBox(width: widget.width, height: widget.height, child: child);
+}
+
+/// 图片下载进度：[progress] 有总长度时为确定进度（0..1），否则（或尚无进度）为不确定进度。
+class ImageLoadingIndicator extends StatelessWidget {
+  const ImageLoadingIndicator({
+    super.key,
+    this.progress,
+    this.compact = false,
+    this.color,
+  });
+
+  final ImageChunkEvent? progress;
+
+  /// 小尺寸（18 px，用于封面等小图）；否则为 28 px。
+  final bool compact;
+  final Color? color;
+
+  /// [progress] 对应的进度值；总长度未知时为 null。
+  static double? fractionOf(ImageChunkEvent? progress) =>
+      switch (progress?.expectedTotalBytes) {
+        final t? when t > 0 => (progress!.cumulativeBytesLoaded / t).clamp(
+          0.0,
+          1.0,
+        ),
+        _ => null,
+      };
+
+  @override
+  Widget build(BuildContext context) => SizedBox.square(
+    dimension: compact ? 18 : 28,
+    child: CircularProgressIndicator(
+      strokeWidth: compact ? 2 : 2.5,
+      color: color,
+      value: fractionOf(progress),
+    ),
+  );
 }
 
 /// 默认的图片失败占位：图标 + “点击重试”。
@@ -170,7 +208,7 @@ class CoverImage extends StatelessWidget {
                 fit: BoxFit.cover,
                 width: double.infinity,
                 height: double.infinity,
-                placeholder: const SizedBox.shrink(),
+                compactProgress: true,
                 errorWidget: (_, _, retry) =>
                     ImageErrorPlaceholder(onRetry: retry, compact: true),
               ),

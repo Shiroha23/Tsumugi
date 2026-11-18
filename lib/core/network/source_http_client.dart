@@ -208,6 +208,7 @@ class NetRequest {
     this.throwOnHttpError = false,
     this.timeout,
     this.cancellation,
+    this.onReceiveProgress,
   });
 
   /// 绝对地址，或基于 `baseUrl` 的相对地址。
@@ -225,6 +226,14 @@ class NetRequest {
   /// 覆盖 [SourceNetworkConfig.timeout]。
   final Duration? timeout;
   final NetCancellation? cancellation;
+
+  /// 接收响应体时的进度回调（仅 [SourceHttpClient.request] 使用，[SourceHttpClient.openStream] 忽略）。
+  ///
+  /// 只对 2xx 响应调用：响应头到达时以 `received == 0` 调用一次，之后每收到一块数据调用一次。
+  /// `total` 为 `Content-Length` 声明的长度；没有该头、无法解析，或响应经过内容编码（如 gzip，
+  /// 此时收到的是解压后的字节）时为 null。重定向的中间响应不上报；网络层重试时 `received` 从 0 重新开始。
+  /// 超过 `maxResponseBytes` 时在超出的那一块之后立即中止，不再回调。
+  final void Function(int received, int? total)? onReceiveProgress;
 }
 
 class NetResponse {

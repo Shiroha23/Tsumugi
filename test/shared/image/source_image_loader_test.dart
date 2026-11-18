@@ -239,6 +239,93 @@ void main() {
       ]);
       expect(peak, 2);
     });
+
+    group('下载进度（慢速分块）', () {
+      SourceImageLoader loaderWithLimit(int maxResponseBytes) =>
+          SourceImageLoader(
+            httpClientFor: (id) {
+              final c = mockClient(
+                server,
+                sourceId: id,
+                maxResponseBytes: maxResponseBytes,
+              );
+              clients.add(c);
+              return c;
+            },
+            retries: 0,
+          );
+
+      Future<List<ImageLoadProgress>> download(
+        SourceImageLoader loader,
+        String query,
+      ) async {
+        final events = <ImageLoadProgress>[];
+        await loader.load(
+          'com.example.comic',
+          ImageRef(url: 'http://img.example.com/chunked?$query'),
+          onProgress: events.add,
+        );
+        return events;
+      }
+
+      List<ImageLoadProgress> downloading(List<ImageLoadProgress> e) =>
+          e.where((p) => p.stage == ImageLoadStage.downloading).toList();
+
+      test('有 Content-Length：确定进度单调递增，最终等于总长度', () async {
+        final events = await download(
+          loaderWithLimit(20 * 1024 * 1024),
+          'bytes=160000&chunk=16000&ms=30',
+        );
+        final d = downloading(events).where((p) => p.receivedBytes != null);
+        expect(d.length, greaterThanOrEqualTo(6));
+        expect(d.every((p) => p.totalBytes == 160000), isTrue);
+        final received = [for (final p in d) p.receivedBytes!];
+        for (var i = 1; i < received.length; i++) {
+          expect(received[i], greaterThanOrEqualTo(received[i - 1]));
+        }
+        expect(received.first, 0);
+        expect(received.last, 160000);
+        expect(d.last.fraction, 1.0);
+        expect(events.last.stage, ImageLoadStage.done);
+        expect(events.last.receivedBytes, 160000);
+      });
+
+      test('没有 Content-Length：下载中 fraction 为 null（不确定进度）', () async {
+        final events = await download(
+          loaderWithLimit(20 * 1024 * 1024),
+          'bytes=64000&chunk=16000&ms=10&length=0',
+        );
+        final d = downloading(events);
+        expect(d, isNotEmpty);
+        expect(d.every((p) => p.fraction == null), isTrue);
+        expect(d.last.receivedBytes, 64000);
+        expect(events.last.stage, ImageLoadStage.done);
+      });
+
+      test('超过响应体上限时提前中止 → E_LIMIT', () async {
+        final events = <ImageLoadProgress>[];
+        final watch = Stopwatch()..start();
+        await expectLater(
+          loaderWithLimit(50000).load(
+            'com.example.comic',
+            const ImageRef(
+              url: 'http://img.example.com/chunked?bytes=1600000&chunk=16000&ms=30&length=0',
+            ),
+            onProgress: events.add,
+          ),
+          throwsA(
+            isA<SourceException>().having(
+              (e) => e.code,
+              'code',
+              SourceErrorCode.limit,
+            ),
+          ),
+        );
+        expect(watch.elapsed, lessThan(const Duration(milliseconds: 1500)));
+        expect(events.every((p) => (p.receivedBytes ?? 0) <= 50000), isTrue);
+        expect(events.any((p) => p.stage == ImageLoadStage.done), isFalse);
+      });
+    });
   });
 
   group('MemoryImageCache', () {

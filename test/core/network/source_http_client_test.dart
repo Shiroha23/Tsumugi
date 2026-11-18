@@ -491,6 +491,107 @@ void main() {
       );
     });
 
+    group('接收进度（onReceiveProgress）', () {
+      Future<(NetResponse, List<(int, int?)>)> fetch(
+        SourceHttpClient c,
+        String url,
+      ) async {
+        final events = <(int, int?)>[];
+        final res = await c.request(
+          NetRequest(url, onReceiveProgress: (r, t) => events.add((r, t))),
+        );
+        return (res, events);
+      }
+
+      void expectMonotonic(List<(int, int?)> events) {
+        for (var i = 1; i < events.length; i++) {
+          expect(
+            events[i].$1,
+            greaterThanOrEqualTo(events[i - 1].$1),
+            reason: 'event $i',
+          );
+        }
+      }
+
+      test('慢速分块：从 0 开始单调递增，最终等于 Content-Length', () async {
+        final (res, events) = await fetch(
+          client,
+          '/chunked?bytes=160000&chunk=16000&ms=30',
+        );
+        expect(res.bytes.length, 160000);
+        expect(events.first, (0, 160000));
+        expect(events.last, (160000, 160000));
+        expect(events.every((e) => e.$2 == 160000), isTrue);
+        // 边读边上报，而不是读完才报（10 块；允许传输层合并少量相邻块）。
+        expect(events.length, greaterThanOrEqualTo(6));
+        expectMonotonic(events);
+      });
+
+      test('没有 Content-Length 时 total 为 null', () async {
+        final (res, events) = await fetch(
+          client,
+          '/chunked?bytes=5000&chunk=1000&ms=5&length=0',
+        );
+        expect(res.bytes.length, 5000);
+        expect(events.every((e) => e.$2 == null), isTrue);
+        expect(events.last.$1, 5000);
+        expectMonotonic(events);
+      });
+
+      test('超过上限时读到超出的那一块就中止，服务端不再发送', () async {
+        final small = mockClient(server, maxResponseBytes: 50000);
+        addTearDown(small.close);
+        final events = <(int, int?)>[];
+        final watch = Stopwatch()..start();
+        await expectLater(
+          small.request(
+            NetRequest(
+              '/chunked?bytes=1600000&chunk=16000&ms=30&length=0&key=limit',
+              onReceiveProgress: (r, t) => events.add((r, t)),
+            ),
+          ),
+          throwsNet(NetworkErrorKind.responseTooLarge),
+        );
+        watch.stop();
+        // 完整发送需要约 100 × 30 ms = 3 s。
+        expect(watch.elapsed, lessThan(const Duration(milliseconds: 1500)));
+        expect(events.last.$1, lessThanOrEqualTo(50000));
+        expectMonotonic(events);
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        expect(server.chunkedSent['limit'], lessThan(400000));
+      });
+
+      test('声明的长度超过上限时不读响应体、不回调', () async {
+        final small = mockClient(server, maxResponseBytes: 1000);
+        addTearDown(small.close);
+        final events = <(int, int?)>[];
+        await expectLater(
+          small.request(
+            NetRequest(
+              '/large?bytes=200000',
+              onReceiveProgress: (r, t) => events.add((r, t)),
+            ),
+          ),
+          throwsNet(NetworkErrorKind.responseTooLarge),
+        );
+        expect(events, isEmpty);
+      });
+
+      test('重定向的中间响应与非 2xx 响应不上报', () async {
+        final (res, events) = await fetch(
+          client,
+          '/redirect?to=${Uri.encodeQueryComponent('/chunked?bytes=2000&chunk=1000&ms=1')}',
+        );
+        expect(res.status, 200);
+        expect(events.first, (0, 2000));
+        expect(events.last, (2000, 2000));
+
+        final (notFound, none) = await fetch(client, '/status/404');
+        expect(notFound.status, 404);
+        expect(none, isEmpty);
+      });
+    });
+
     test('HEAD 声明的大小超过上限时不报错（没有响应体）', () async {
       final small = mockClient(server, maxResponseBytes: 1000);
       addTearDown(small.close);
