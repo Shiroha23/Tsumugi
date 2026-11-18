@@ -4,6 +4,7 @@
 set -euo pipefail
 port="${MOCK_PORT:-8081}"
 # 先编译，避免首次 `dart run` 的构建时间被计入等待。
+mkdir -p build
 dart compile exe tool/mock_server/main.dart -o build/mock_server
 nohup build/mock_server --port "$port" --test-control > mock_server.log 2>&1 &
 for _ in $(seq 1 60); do
