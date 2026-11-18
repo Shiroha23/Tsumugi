@@ -10,8 +10,7 @@ name: Device tests
 
 on:
   push:
-    # TEMP（合并前删除）：workflow_dispatch 要求 workflow 已在默认分支上，PR 分支的首次运行用推送触发。
-    branches: [main, claude/i32-31-emulator-tests-88b95f]
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
