@@ -37,6 +37,21 @@ flutter run -d windows
 - 提交前必须通过 `flutter analyze` 和 `flutter test`。
 - 代码注释与提交信息用中文或英文均可，标识符一律英文。
 
+## 提交方式：直接推 main 还是走 PR
+
+按改动的**文件类型**判断，不按改动大小。拿不准时走 PR。
+
+**直接推 main**（提交信息写清楚即可）：
+- 文档的小修：错别字、补链接、状态更新（如“Android 已验证”）、README 措辞。
+- 不影响构建、测试和应用行为的配置：`.mcp.json`、`.gitignore`、编辑器 / AI 工具设置。
+- 本文件（`CLAUDE.md`）中的流程约定。
+
+**走 PR**（CI 4 项通过、Codex 审查结束、讨论线程全部关闭后 squash 合并）：
+- 所有代码：`lib/`、`test/`、`integration_test/`、`tool/`（含 mock 服务器与发版脚本）。
+- 构建与依赖：`pubspec.yaml`、`analysis_options.yaml`、`android/`、`ios/`、`windows/`。
+- CI 与发版：`.github/workflows/`，**无论改动多小**。
+- 规范与设计决定：`docs/source-spec.md` 的规则、`docs/architecture.md` 中的选型或方案决定。
+
 ## 红线
 
 - **不在仓库中内置、引用或测试任何真实站点的源。** 测试和示例只使用虚构域名
