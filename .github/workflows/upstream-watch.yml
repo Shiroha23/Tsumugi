@@ -1,0 +1,37 @@
+name: Upstream watch
+
+# 每周检查卡在上游的依赖（media_kit 原生库、better_player Windows 渲染、qjs、flutter_inappwebview），
+# 有新进展时在本仓库对应的 issue（#56、#49、#28、#27、#30）下评论一次。脚本见 tool/ci/upstream_watch.py。
+# 只读上游，不在上游仓库留言；评论里不放上游链接。
+
+on:
+  schedule:
+    - cron: "17 2 * * 1" # 每周一 02:17 UTC（北京时间 10:17）
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "只在运行摘要中显示将要发的评论，不实际评论"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: upstream-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    name: Check upstream
+    if: github.repository == 'Shiroha23/Tsumugi'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check upstream and comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+        run: python3 tool/ci/upstream_watch.py
