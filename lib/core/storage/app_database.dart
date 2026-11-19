@@ -28,13 +28,16 @@ part 'app_database.g.dart';
     SourceRepositories,
     DownloadItems,
     DownloadUnits,
+    SyncState,
+    SyncTombstones,
   ],
+  include: {'sync_triggers.drift'},
 )
 class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 7;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -74,6 +77,50 @@ class AppDatabase extends _$AppDatabase {
         from5To6: (m, schema) async {
           await m.createTable(schema.downloadItems);
           await m.createTable(schema.downloadUnits);
+        },
+        // v7：WebDAV 同步（architecture §4.6）——参与同步的表加 modified_at，同步状态与墓碑表，改动跟踪触发器。
+        from6To7: (m, schema) async {
+          await m.addColumn(
+            schema.installedSources,
+            schema.installedSources.modifiedAt,
+          );
+          await m.addColumn(
+            schema.libraryEntries,
+            schema.libraryEntries.modifiedAt,
+          );
+          await m.addColumn(
+            schema.itemProgressEntries,
+            schema.itemProgressEntries.modifiedAt,
+          );
+          await m.addColumn(
+            schema.unitProgressEntries,
+            schema.unitProgressEntries.modifiedAt,
+          );
+          await m.addColumn(
+            schema.sourceRepositories,
+            schema.sourceRepositories.modifiedAt,
+          );
+          await m.createTable(schema.syncState);
+          await m.createTable(schema.syncTombstones);
+          for (final trigger in [
+            schema.libraryEntriesSyncInsert,
+            schema.libraryEntriesSyncUpdate,
+            schema.libraryEntriesSyncDelete,
+            schema.itemProgressEntriesSyncInsert,
+            schema.itemProgressEntriesSyncUpdate,
+            schema.itemProgressEntriesSyncDelete,
+            schema.unitProgressEntriesSyncInsert,
+            schema.unitProgressEntriesSyncUpdate,
+            schema.unitProgressEntriesSyncDelete,
+            schema.installedSourcesSyncInsert,
+            schema.installedSourcesSyncUpdate,
+            schema.installedSourcesSyncDelete,
+            schema.sourceRepositoriesSyncInsert,
+            schema.sourceRepositoriesSyncUpdate,
+            schema.sourceRepositoriesSyncDelete,
+          ]) {
+            await m.create(trigger);
+          }
         },
       )(m, from, to);
     },

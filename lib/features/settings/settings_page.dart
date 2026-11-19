@@ -17,6 +17,12 @@ class SettingsPage extends StatelessWidget {
         children: [
           const _DownloadsTile(),
           ListTile(
+            leading: const Icon(Icons.sync),
+            title: const Text('WebDAV 同步'),
+            subtitle: const Text('在多台设备间同步书架、进度与源'),
+            onTap: () => context.push(SettingsRoutes.sync),
+          ),
+          ListTile(
             leading: const Icon(Icons.info_outline),
             title: const Text('关于 Tsumugi'),
             subtitle: const Text('版本、许可证与源码'),

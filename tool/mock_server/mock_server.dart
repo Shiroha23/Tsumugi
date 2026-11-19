@@ -55,6 +55,7 @@
 /// | `GET\|HEAD /video/protected/<文件>` | 同上，但要求 `Referer` 的路径以 `/video/` 开头（否则 403）；`hls/key.bin` 另需 `vtoken` Cookie |
 /// | `GET /video/api/search?q=` | 视频 JSON 接口（脚本源）：搜索，一部多线路的虚构剧集 |
 /// | `GET /video/api/show/2` | JSON 详情：两条线路（A：需要 Referer / Cookie；B：无保护）各 3 集；种下 `vtoken=1` Cookie |
+/// | `PROPFIND\|MKCOL\|GET\|PUT /dav/<路径>` | 内存中的最小 WebDAV（Basic 认证 `alice` / `secret`，ETag、`If-Match` / `If-None-Match`、412），见 [MockWebDav] |
 /// | `GET /video/api/play/<a\|b>/<1..3>` | JSON 剧集：两个清晰度（`720p` 为带 HLS 字幕轨的 AES-128 HLS，`360p` 为 MP4）与 5 条外挂字幕（含 GBK 编码的 srt 与伪装成 srt 的 HTML） |
 library;
 
@@ -62,6 +63,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 class MockServer {
   MockServer._(
@@ -109,6 +111,9 @@ class MockServer {
   /// 也不记入 [requests]。`POST /__test/reset` 时恢复。
   bool offline = false;
 
+  /// `/dav/` 下的最小 WebDAV 服务器（M6 同步测试用，见 [MockWebDav]）。
+  final dav = MockWebDav();
+
   /// `/chunked?key=` 每个 key 已 flush 出去的字节数（测试用来确认超限后服务端停止发送）。
   final Map<String, int> chunkedSent = {};
 
@@ -144,7 +149,16 @@ class MockServer {
   int hits(String path) => requests.where((r) => r.path == path).length;
 
   Future<void> _handle(HttpRequest req) async {
-    final body = await utf8.decoder.bind(req).join();
+    final rawBody = await req.fold<BytesBuilder>(
+      BytesBuilder(copy: false),
+      (b, chunk) => b..add(chunk),
+    );
+    final bytes = rawBody.takeBytes();
+    final isDav = req.uri.path == '/dav' || req.uri.path.startsWith('/dav/');
+    // WebDAV 的请求体是二进制（gzip），不按文本解码。
+    final body = isDav
+        ? '<${bytes.length} bytes>'
+        : utf8.decode(bytes, allowMalformed: true);
     if (testControl && req.uri.path.startsWith('/__test/')) {
       return _testControl(req);
     }
@@ -166,6 +180,7 @@ class MockServer {
       ),
     );
     try {
+      if (isDav) return await dav.handle(req, bytes);
       await _route(req, body);
     } catch (e, st) {
       stderr.writeln('mock_server: ${req.method} ${req.uri} failed: $e\n$st');
@@ -196,6 +211,7 @@ class MockServer {
         _flakyCounters.clear();
         liveRepository = defaultLiveRepository;
         offline = false;
+        dav.reset();
         return res.close();
       case ('POST', '/__test/repo-live'):
         final dir = req.uri.queryParameters['dir'] ?? '';
@@ -818,4 +834,164 @@ class RecordedRequest {
 
   @override
   String toString() => '$method $host$path';
+}
+
+/// 内存中的最小 WebDAV 服务器（architecture §4.6 的同步测试用），挂在 `/dav/` 下。
+///
+/// - Basic 认证，用户名 [username]、密码 [password]（虚构），不符时 401；
+/// - `PROPFIND`（只回答存在与否：207 / 404）、`MKCOL`（父目录不存在 409，已存在 405）；
+/// - `GET` 带 `ETag`，`If-None-Match` 相同时 304；
+/// - `PUT`：父目录不存在 409；`If-Match` 不符、`If-None-Match: *` 而文件已存在时 412；
+/// - `/dav/stall/<路径>` 发出响应头后极慢地发送响应体；[weakEtags] 为 true 时返回弱 ETag；
+/// - `/dav/moved/<路径>` 301 到 `/dav/<路径>`；
+/// - [etags] 为 false 时模拟不支持 ETag 的服务器；[force412] 大于 0 时接下来的若干次 `PUT` 直接 412。
+class MockWebDav {
+  static const username = 'alice';
+  static const password = 'secret';
+
+  /// 文件：路径（不含 `/dav` 前缀，如 `/Tsumugi/sync-v1.json`）→ 内容与 ETag。
+  final Map<String, ({List<int> bytes, String etag})> files = {};
+
+  /// 已存在的目录（以 `/` 结尾，根目录为 `/`）。
+  final Set<String> collections = {'/'};
+
+  bool etags = true;
+
+  /// 返回弱 ETag（`W/"…"`），模拟经压缩代理改写后的 ETag；此时不处理条件请求。
+  bool weakEtags = false;
+  int force412 = 0;
+  var _version = 0;
+
+  void reset() {
+    files.clear();
+    collections
+      ..clear()
+      ..add('/');
+    etags = true;
+    weakEtags = false;
+    force412 = 0;
+  }
+
+  static String _parent(String path) {
+    final trimmed = path.endsWith('/')
+        ? path.substring(0, path.length - 1)
+        : path;
+    return trimmed.substring(0, trimmed.lastIndexOf('/') + 1);
+  }
+
+  Future<void> handle(HttpRequest req, List<int> body) async {
+    final res = req.response;
+    final expected =
+        'Basic ${base64Encode(utf8.encode('$username:$password'))}';
+    if (req.headers.value('authorization') != expected) {
+      res.statusCode = HttpStatus.unauthorized;
+      res.headers.set('WWW-Authenticate', 'Basic realm="mock"');
+      return res.close();
+    }
+    var path = Uri.decodeComponent(req.uri.path.substring('/dav'.length));
+    if (path.isEmpty) path = '/';
+    final dirPath = path.endsWith('/') ? path : '$path/';
+    // `/dav/stall/...`：发出响应头后每 50 ms 发 1 字节，持续 10 s（测试请求总时限）。
+    if (path.startsWith('/stall/')) {
+      res.statusCode = HttpStatus.notFound;
+      res.bufferOutput = false;
+      try {
+        for (var i = 0; i < 200; i++) {
+          res.add(const [0x20]);
+          await res.flush();
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
+        await res.close();
+      } catch (_) {
+        // 客户端已断开。
+      }
+      return;
+    }
+    // `/dav/moved/<路径>`：301 到 `/dav/<路径>`（测试客户端不跟随重定向）。
+    if (path.startsWith('/moved/')) {
+      res.statusCode = HttpStatus.movedPermanently;
+      res.headers.set(
+        HttpHeaders.locationHeader,
+        '/dav${path.substring('/moved'.length)}',
+      );
+      return res.close();
+    }
+    switch (req.method) {
+      case 'PROPFIND':
+        final exists = collections.contains(dirPath) || files.containsKey(path);
+        res.statusCode = exists ? 207 : HttpStatus.notFound;
+        if (exists) {
+          res.headers.contentType = ContentType(
+            'application',
+            'xml',
+            charset: 'utf-8',
+          );
+          res.write(
+            '<?xml version="1.0" encoding="utf-8"?>'
+            '<d:multistatus xmlns:d="DAV:"><d:response><d:href>${req.uri.path}</d:href>'
+            '<d:propstat><d:status>HTTP/1.1 200 OK</d:status></d:propstat>'
+            '</d:response></d:multistatus>',
+          );
+        }
+        return res.close();
+      case 'MKCOL':
+        if (collections.contains(dirPath)) {
+          res.statusCode = HttpStatus.methodNotAllowed;
+        } else if (!collections.contains(_parent(dirPath))) {
+          res.statusCode = HttpStatus.conflict;
+        } else {
+          collections.add(dirPath);
+          res.statusCode = HttpStatus.created;
+        }
+        return res.close();
+      case 'GET':
+        final file = files[path];
+        if (file == null) {
+          res.statusCode = HttpStatus.notFound;
+          return res.close();
+        }
+        if (weakEtags) {
+          res.headers.set('ETag', 'W/${file.etag}');
+        } else if (etags) {
+          res.headers.set('ETag', file.etag);
+          if (req.headers.value('if-none-match') == file.etag) {
+            res.statusCode = HttpStatus.notModified;
+            return res.close();
+          }
+        }
+        res.headers.contentType = ContentType.binary;
+        res.add(file.bytes);
+        return res.close();
+      case 'PUT':
+        final existing = files[path];
+        final ifMatch = req.headers.value('if-match');
+        final ifNoneMatch = req.headers.value('if-none-match');
+        if (!collections.contains(_parent(path))) {
+          res.statusCode = HttpStatus.conflict;
+          return res.close();
+        }
+        if (force412 > 0 ||
+            (etags &&
+                !weakEtags &&
+                ((ifMatch != null && existing?.etag != ifMatch) ||
+                    (ifNoneMatch == '*' && existing != null)))) {
+          if (force412 > 0) force412--;
+          res.statusCode = HttpStatus.preconditionFailed;
+          return res.close();
+        }
+        final etag = '"v${++_version}"';
+        files[path] = (bytes: body, etag: etag);
+        res.statusCode = existing == null
+            ? HttpStatus.created
+            : HttpStatus.noContent;
+        if (weakEtags) {
+          res.headers.set('ETag', 'W/$etag');
+        } else if (etags) {
+          res.headers.set('ETag', etag);
+        }
+        return res.close();
+    }
+    res.statusCode = HttpStatus.methodNotAllowed;
+    return res.close();
+  }
 }

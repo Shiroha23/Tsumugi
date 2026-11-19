@@ -29,6 +29,9 @@ abstract class TestMock {
   /// 把任意主机名的连接都接到 mock 服务器的 HTTP 适配器（每个客户端各用一个）。
   IOHttpClientAdapter adapter();
 
+  /// mock 服务器的地址（如 `http://127.0.0.1:8081`），用于需要真实地址的配置（WebDAV 同步）。
+  Uri get origin;
+
   /// 本测试开始以来服务器收到的请求。
   Future<List<RecordedRequest>> requests();
 
@@ -51,6 +54,9 @@ class _LocalMock implements TestMock {
 
   @override
   IOHttpClientAdapter adapter() => mockAdapter(server);
+
+  @override
+  Uri get origin => server.origin;
 
   @override
   Future<List<RecordedRequest>> requests() async => List.of(server.requests);
@@ -76,6 +82,9 @@ class _RemoteMock implements TestMock {
   final InternetAddress address;
   final int port;
   final _http = HttpClient();
+
+  @override
+  Uri get origin => Uri(scheme: 'http', host: address.address, port: port);
 
   @override
   IOHttpClientAdapter adapter() => IOHttpClientAdapter(

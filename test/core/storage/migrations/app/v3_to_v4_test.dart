@@ -5,6 +5,7 @@ import 'package:tsumugi/core/storage/app_database.dart';
 
 import 'generated/schema.dart';
 import 'generated/schema_v3.dart' as v3;
+import 'generated/schema_v4.dart' as v4;
 
 /// v3 → v4：已安装源保留，新增的 `settings_json` 为 null（全部取默认）。
 void main() {
@@ -38,17 +39,21 @@ void main() {
 
     final db = AppDatabase(schema.newConnection());
     await verifier.migrateAndValidate(db, 4);
+    await db.close();
 
-    final row = await db.select(db.installedSources).getSingle();
+    // 用 v4 的表定义读写（当前的 AppDatabase 已有更高版本才加的列）。
+    final migrated = v4.DatabaseAtV4(schema.newConnection());
+    final row = await migrated.select(migrated.installedSources).getSingle();
     expect(row.id, 'com.example.comic');
     expect(row.settingsJson, isNull);
-    await (db.update(db.installedSources)).write(
-      const InstalledSourcesCompanion(settingsJson: Value('{"q":"low"}')),
+    await (migrated.update(migrated.installedSources)).write(
+      const v4.InstalledSourcesCompanion(settingsJson: Value('{"q":"low"}')),
     );
     expect(
-      (await db.select(db.installedSources).getSingle()).settingsJson,
+      (await migrated.select(migrated.installedSources).getSingle())
+          .settingsJson,
       '{"q":"low"}',
     );
-    await db.close();
+    await migrated.close();
   });
 }

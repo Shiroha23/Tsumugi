@@ -1,0 +1,153 @@
+-- WebDAV 同步的改动跟踪（v7，docs/architecture.md §4.6）。
+--
+-- 参与同步的表：插入、或参与同步的列变化后把 modified_at 置为当前 UTC 毫秒；删除后记墓碑
+-- （仅在已配置服务器时）；重新插入同一主键时删除墓碑。同步写回合并结果时 sync_state.applying = 1，
+-- 触发器什么也不做。新增参与同步的表或列时，在这里补上对应的触发器与列。
+import 'tables.dart';
+
+CREATE TRIGGER library_entries_sync_insert AFTER INSERT ON library_entries
+  WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1
+BEGIN
+  UPDATE library_entries SET modified_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+    WHERE source_id = NEW.source_id AND item_id = NEW.item_id;
+  DELETE FROM sync_tombstones
+    WHERE collection = 'library' AND key1 = NEW.source_id AND key2 = NEW.item_id AND key3 = '';
+END;
+
+CREATE TRIGGER library_entries_sync_update AFTER UPDATE ON library_entries
+  WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 AND (
+    NEW.title IS NOT OLD.title
+    OR NEW.cover IS NOT OLD.cover
+    OR NEW.cover_headers IS NOT OLD.cover_headers
+    OR NEW.media_type IS NOT OLD.media_type
+    OR NEW.category IS NOT OLD.category
+    OR NEW.sort_order IS NOT OLD.sort_order
+    OR NEW.added_at IS NOT OLD.added_at
+  )
+BEGIN
+  UPDATE library_entries SET modified_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+    WHERE source_id = NEW.source_id AND item_id = NEW.item_id;
+END;
+
+CREATE TRIGGER library_entries_sync_delete AFTER DELETE ON library_entries
+  WHEN EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND applying = 0 AND server_url IS NOT NULL)
+BEGIN
+  INSERT OR REPLACE INTO sync_tombstones (collection, key1, key2, key3, deleted_at)
+    VALUES ('library', OLD.source_id, OLD.item_id, '', CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER));
+END;
+
+CREATE TRIGGER item_progress_entries_sync_insert AFTER INSERT ON item_progress_entries
+  WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1
+BEGIN
+  UPDATE item_progress_entries SET modified_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+    WHERE source_id = NEW.source_id AND item_id = NEW.item_id;
+  DELETE FROM sync_tombstones
+    WHERE collection = 'itemProgress' AND key1 = NEW.source_id AND key2 = NEW.item_id AND key3 = '';
+END;
+
+CREATE TRIGGER item_progress_entries_sync_update AFTER UPDATE ON item_progress_entries
+  WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 AND (
+    NEW.title IS NOT OLD.title
+    OR NEW.cover IS NOT OLD.cover
+    OR NEW.cover_headers IS NOT OLD.cover_headers
+    OR NEW.media_type IS NOT OLD.media_type
+    OR NEW.unit_id IS NOT OLD.unit_id
+    OR NEW.unit_title IS NOT OLD.unit_title
+    OR NEW.page IS NOT OLD.page
+    OR NEW.page_count IS NOT OLD.page_count
+    OR NEW.position IS NOT OLD.position
+    OR NEW.updated_at IS NOT OLD.updated_at
+  )
+BEGIN
+  UPDATE item_progress_entries SET modified_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+    WHERE source_id = NEW.source_id AND item_id = NEW.item_id;
+END;
+
+CREATE TRIGGER item_progress_entries_sync_delete AFTER DELETE ON item_progress_entries
+  WHEN EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND applying = 0 AND server_url IS NOT NULL)
+BEGIN
+  INSERT OR REPLACE INTO sync_tombstones (collection, key1, key2, key3, deleted_at)
+    VALUES ('itemProgress', OLD.source_id, OLD.item_id, '', CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER));
+END;
+
+CREATE TRIGGER unit_progress_entries_sync_insert AFTER INSERT ON unit_progress_entries
+  WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1
+BEGIN
+  UPDATE unit_progress_entries SET modified_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+    WHERE source_id = NEW.source_id AND item_id = NEW.item_id AND unit_id = NEW.unit_id;
+  DELETE FROM sync_tombstones
+    WHERE collection = 'unitProgress' AND key1 = NEW.source_id AND key2 = NEW.item_id AND key3 = NEW.unit_id;
+END;
+
+CREATE TRIGGER unit_progress_entries_sync_update AFTER UPDATE ON unit_progress_entries
+  WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 AND (
+    NEW.page IS NOT OLD.page
+    OR NEW.page_count IS NOT OLD.page_count
+    OR NEW.position IS NOT OLD.position
+    OR NEW.read IS NOT OLD.read
+    OR NEW.updated_at IS NOT OLD.updated_at
+  )
+BEGIN
+  UPDATE unit_progress_entries SET modified_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+    WHERE source_id = NEW.source_id AND item_id = NEW.item_id AND unit_id = NEW.unit_id;
+END;
+
+CREATE TRIGGER unit_progress_entries_sync_delete AFTER DELETE ON unit_progress_entries
+  WHEN EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND applying = 0 AND server_url IS NOT NULL)
+BEGIN
+  INSERT OR REPLACE INTO sync_tombstones (collection, key1, key2, key3, deleted_at)
+    VALUES ('unitProgress', OLD.source_id, OLD.item_id, OLD.unit_id, CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER));
+END;
+
+CREATE TRIGGER installed_sources_sync_insert AFTER INSERT ON installed_sources
+  WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1
+BEGIN
+  UPDATE installed_sources SET modified_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+    WHERE id = NEW.id;
+  DELETE FROM sync_tombstones
+    WHERE collection = 'sources' AND key1 = NEW.id AND key2 = '' AND key3 = '';
+END;
+
+CREATE TRIGGER installed_sources_sync_update AFTER UPDATE ON installed_sources
+  WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 AND (
+    NEW.manifest_json IS NOT OLD.manifest_json
+    OR NEW.enabled IS NOT OLD.enabled
+    OR NEW.sort_order IS NOT OLD.sort_order
+    OR NEW.settings_json IS NOT OLD.settings_json
+  )
+BEGIN
+  UPDATE installed_sources SET modified_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+    WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER installed_sources_sync_delete AFTER DELETE ON installed_sources
+  WHEN EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND applying = 0 AND server_url IS NOT NULL)
+BEGIN
+  INSERT OR REPLACE INTO sync_tombstones (collection, key1, key2, key3, deleted_at)
+    VALUES ('sources', OLD.id, '', '', CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER));
+END;
+
+CREATE TRIGGER source_repositories_sync_insert AFTER INSERT ON source_repositories
+  WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1
+BEGIN
+  UPDATE source_repositories SET modified_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+    WHERE url = NEW.url;
+  DELETE FROM sync_tombstones
+    WHERE collection = 'repositories' AND key1 = NEW.url AND key2 = '' AND key3 = '';
+END;
+
+CREATE TRIGGER source_repositories_sync_update AFTER UPDATE ON source_repositories
+  WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 AND (
+    NEW.added_at IS NOT OLD.added_at
+  )
+BEGIN
+  UPDATE source_repositories SET modified_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+    WHERE url = NEW.url;
+END;
+
+CREATE TRIGGER source_repositories_sync_delete AFTER DELETE ON source_repositories
+  WHEN EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND applying = 0 AND server_url IS NOT NULL)
+BEGIN
+  INSERT OR REPLACE INTO sync_tombstones (collection, key1, key2, key3, deleted_at)
+    VALUES ('repositories', OLD.url, '', '', CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER));
+END;

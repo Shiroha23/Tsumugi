@@ -5,6 +5,7 @@ import 'package:tsumugi/core/storage/app_database.dart';
 
 import 'generated/schema.dart';
 import 'generated/schema_v2.dart' as v2;
+import 'generated/schema_v3.dart' as v3;
 
 /// v2 → v3：已有数据保留，新表（书架、进度）可用。
 void main() {
@@ -47,27 +48,40 @@ void main() {
 
     final db = AppDatabase(schema.newConnection());
     await verifier.migrateAndValidate(db, 3);
+    await db.close();
 
-    expect(await db.select(db.installedSources).get(), hasLength(1));
-    expect(await db.select(db.sourceStorageEntries).get(), hasLength(1));
-    await db
-        .into(db.libraryEntries)
+    // 用 v3 的表定义读写（当前的 AppDatabase 已有更高版本才加的列）。
+    final migrated = v3.DatabaseAtV3(schema.newConnection());
+    expect(
+      await migrated.select(migrated.installedSources).get(),
+      hasLength(1),
+    );
+    expect(
+      await migrated.select(migrated.sourceStorageEntries).get(),
+      hasLength(1),
+    );
+    await migrated
+        .into(migrated.libraryEntries)
         .insert(
-          LibraryEntriesCompanion.insert(
+          v3.LibraryEntriesCompanion.insert(
             sourceId: 'com.example.comic',
             itemId: 'a',
             title: 'A',
             mediaType: 'comic',
-            addedAt: DateTime.utc(2026),
-            updatedAt: DateTime.utc(2026),
-            coverHeaders: const Value({
-              'Referer': 'https://comic.example.com/',
-            }),
+            addedAt: 0,
+            updatedAt: 0,
+            coverHeaders: Value(
+              const StringMapConverter().toSql({
+                'Referer': 'https://comic.example.com/',
+              }),
+            ),
           ),
         );
-    final row = await db.select(db.libraryEntries).getSingle();
-    expect(row.coverHeaders, {'Referer': 'https://comic.example.com/'});
+    final row = await migrated.select(migrated.libraryEntries).getSingle();
+    expect(const StringMapConverter().fromSql(row.coverHeaders!), {
+      'Referer': 'https://comic.example.com/',
+    });
     expect(row.sortOrder, 0);
-    await db.close();
+    await migrated.close();
   });
 }
