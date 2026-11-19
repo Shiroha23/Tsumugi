@@ -66,6 +66,14 @@ class _Device {
   String get davUrl => '${server.origin}/dav/';
 }
 
+/// 当前界面上的全部文字（超时时打印，便于在 CI 日志里看到停在哪一步）。
+String _visibleTexts() => find
+    .byType(Text)
+    .evaluate()
+    .map((e) => (e.widget as Text).data ?? '')
+    .where((t) => t.isNotEmpty)
+    .join(' | ');
+
 Future<void> _pumpUntil(
   WidgetTester tester,
   Finder finder, {
@@ -73,9 +81,62 @@ Future<void> _pumpUntil(
 }) async {
   final end = DateTime.now().add(timeout);
   while (finder.evaluate().isEmpty) {
-    if (DateTime.now().isAfter(end)) fail('超时：$finder');
+    if (DateTime.now().isAfter(end)) {
+      fail('超时：$finder\n界面上的文字：${_visibleTexts()}');
+    }
     await tester.pump(const Duration(milliseconds: 100));
   }
+}
+
+/// 设置页是可滚动的列表：收起软键盘（它会缩小视口、遮住下方的按钮），把 [finder] 滚到可见处
+/// （列表只构建可见附近的项，还没构建的项也找得到）再点击。小屏模拟器与真机上都需要。
+Future<void> _scrollAndTap(WidgetTester tester, Finder finder) async {
+  FocusManager.instance.primaryFocus?.unfocus();
+  await tester.pump(const Duration(milliseconds: 300));
+  final end = DateTime.now().add(const Duration(seconds: 30));
+  final list = find.byType(Scrollable).first;
+  while (finder.hitTestable().evaluate().isEmpty) {
+    if (DateTime.now().isAfter(end)) {
+      fail('超时：$finder 不可点击\n界面上的文字：${_visibleTexts()}');
+    }
+    if (finder.evaluate().isNotEmpty) {
+      await tester.ensureVisible(finder.first);
+    } else {
+      await tester.drag(list, const Offset(0, -200));
+    }
+    await tester.pump(const Duration(milliseconds: 100));
+  }
+  await tester.tap(finder.hitTestable().first);
+  await tester.pump();
+}
+
+/// 在设置页表单的 [key] 输入框中输入 [text]：先收起上一个输入框的键盘、回到顶部，把输入框滚到可见处再输入。
+/// iOS 模拟器上键盘弹出会缩小视口，下一个输入框可能已被滚出列表的构建范围。
+Future<void> _enter(WidgetTester tester, Key key, String text) async {
+  FocusManager.instance.primaryFocus?.unfocus();
+  await tester.pump(const Duration(milliseconds: 300));
+  await _scrollToTop(tester);
+  final field = find.byKey(key);
+  final end = DateTime.now().add(const Duration(seconds: 30));
+  while (field.hitTestable().evaluate().isEmpty) {
+    if (DateTime.now().isAfter(end)) {
+      fail('超时：$field 不可见\n界面上的文字：${_visibleTexts()}');
+    }
+    if (field.evaluate().isNotEmpty) {
+      await tester.ensureVisible(field);
+    } else {
+      await tester.drag(find.byType(Scrollable).first, const Offset(0, -150));
+    }
+    await tester.pump(const Duration(milliseconds: 100));
+  }
+  await tester.enterText(field, text);
+  await tester.pump();
+}
+
+/// 设置页回到顶部（表单在最上方）。
+Future<void> _scrollToTop(WidgetTester tester) async {
+  await tester.drag(find.byType(Scrollable).first, const Offset(0, 3000));
+  await tester.pump(const Duration(milliseconds: 300));
 }
 
 Future<void> _pumpUntilGone(WidgetTester tester, Finder finder) async {
@@ -95,6 +156,10 @@ void main() {
   tearDown(() => server.close());
 
   testWidgets('两台设备经 WebDAV 同步书架与进度；新源需要确认', (tester) async {
+    // CI 的模拟器屏幕较小：固定为 360×640 的手机视口，在桌面上也能复现按钮不在屏幕内的情况。
+    tester.view.physicalSize = const Size(720, 1280);
+    tester.view.devicePixelRatio = 2;
+    addTearDown(tester.view.reset);
     final a = _Device(server);
     final b = _Device(server);
     final manifest = await server.fixture('sources/settings_comic.json');
@@ -148,23 +213,31 @@ void main() {
 
     container.read(routerProvider).go('/settings');
     await _pumpUntil(tester, find.text('WebDAV 同步'));
-    await tester.tap(find.text('WebDAV 同步'));
+    await _scrollAndTap(tester, find.text('WebDAV 同步'));
     await _pumpUntil(tester, find.byKey(const ValueKey('sync-url')));
-    await tester.enterText(find.byKey(const ValueKey('sync-url')), b.davUrl);
-    await tester.enterText(
-      find.byKey(const ValueKey('sync-user')),
-      MockWebDav.username,
-    );
-    await tester.enterText(
-      find.byKey(const ValueKey('sync-password')),
-      MockWebDav.password,
-    );
-    await tester.tap(find.text('保存'));
-    await _pumpUntil(tester, find.text('立即同步'));
+    await _enter(tester, const ValueKey('sync-url'), b.davUrl);
+    await _enter(tester, const ValueKey('sync-user'), MockWebDav.username);
+    await _enter(tester, const ValueKey('sync-password'), MockWebDav.password);
+    await _scrollAndTap(tester, find.text('保存'));
+    await _pumpUntil(tester, find.text('已保存'));
     expect(b.credentials.password, MockWebDav.password);
 
-    await tester.tap(find.text('立即同步'));
-    await _pumpUntil(tester, find.text('待安装的源'));
+    await _scrollAndTap(tester, find.text('立即同步'));
+    // 等同步写出待安装列表（列表项可能在屏幕外，按数据判断）。
+    final pendingEnd = DateTime.now().add(const Duration(seconds: 30));
+    while (true) {
+      final state = (await tester.runAsync(
+        () => b.service.store.ensureState(),
+      ))!;
+      if (state.pendingSourcesJson != null &&
+          !container.read(syncServiceProvider).isRunning) {
+        break;
+      }
+      if (DateTime.now().isAfter(pendingEnd)) {
+        fail('同步超时：${state.lastError}\n界面上的文字：${_visibleTexts()}');
+      }
+      await tester.pump(const Duration(milliseconds: 100));
+    }
 
     await tester.runAsync(() async {
       // 书架与进度已同步过来。
@@ -182,10 +255,11 @@ void main() {
     });
 
     // 预览确认后安装，A 上的启用状态与设置随之生效。
-    await tester.tap(find.text('预览'));
+    await _scrollAndTap(tester, find.text('预览'));
     await _pumpUntil(tester, find.text('安装同步来的源'));
-    expect(find.text('example.com'), findsOneWidget);
-    await tester.tap(find.widgetWithText(FilledButton, '安装'));
+    // 对话框标题先出现，预览（将访问的主机）随后才加载出来。
+    await _pumpUntil(tester, find.text('example.com'));
+    await _scrollAndTap(tester, find.widgetWithText(FilledButton, '安装'));
     await _pumpUntilGone(tester, find.text('安装同步来的源'));
     await _pumpUntilGone(tester, find.text('待安装的源'));
 
@@ -198,8 +272,8 @@ void main() {
     });
     final before = (await tester.runAsync(() => b.service.store.ensureState()))!
         .lastSyncAt;
-    await tester.tap(find.text('立即同步'));
-    await tester.pump();
+    await _scrollToTop(tester);
+    await _scrollAndTap(tester, find.text('立即同步'));
     // 等 B 的这次同步完成（上次同步时间更新）。
     final end = DateTime.now().add(const Duration(seconds: 30));
     while (true) {
