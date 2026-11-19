@@ -110,6 +110,29 @@ Future<void> _scrollAndTap(WidgetTester tester, Finder finder) async {
   await tester.pump();
 }
 
+/// 在设置页表单的 [key] 输入框中输入 [text]：先收起上一个输入框的键盘、回到顶部，把输入框滚到可见处再输入。
+/// iOS 模拟器上键盘弹出会缩小视口，下一个输入框可能已被滚出列表的构建范围。
+Future<void> _enter(WidgetTester tester, Key key, String text) async {
+  FocusManager.instance.primaryFocus?.unfocus();
+  await tester.pump(const Duration(milliseconds: 300));
+  await _scrollToTop(tester);
+  final field = find.byKey(key);
+  final end = DateTime.now().add(const Duration(seconds: 30));
+  while (field.hitTestable().evaluate().isEmpty) {
+    if (DateTime.now().isAfter(end)) {
+      fail('超时：$field 不可见\n界面上的文字：${_visibleTexts()}');
+    }
+    if (field.evaluate().isNotEmpty) {
+      await tester.ensureVisible(field);
+    } else {
+      await tester.drag(find.byType(Scrollable).first, const Offset(0, -150));
+    }
+    await tester.pump(const Duration(milliseconds: 100));
+  }
+  await tester.enterText(field, text);
+  await tester.pump();
+}
+
 /// 设置页回到顶部（表单在最上方）。
 Future<void> _scrollToTop(WidgetTester tester) async {
   await tester.drag(find.byType(Scrollable).first, const Offset(0, 3000));
@@ -192,15 +215,9 @@ void main() {
     await _pumpUntil(tester, find.text('WebDAV 同步'));
     await _scrollAndTap(tester, find.text('WebDAV 同步'));
     await _pumpUntil(tester, find.byKey(const ValueKey('sync-url')));
-    await tester.enterText(find.byKey(const ValueKey('sync-url')), b.davUrl);
-    await tester.enterText(
-      find.byKey(const ValueKey('sync-user')),
-      MockWebDav.username,
-    );
-    await tester.enterText(
-      find.byKey(const ValueKey('sync-password')),
-      MockWebDav.password,
-    );
+    await _enter(tester, const ValueKey('sync-url'), b.davUrl);
+    await _enter(tester, const ValueKey('sync-user'), MockWebDav.username);
+    await _enter(tester, const ValueKey('sync-password'), MockWebDav.password);
     await _scrollAndTap(tester, find.text('保存'));
     await _pumpUntil(tester, find.text('已保存'));
     expect(b.credentials.password, MockWebDav.password);
