@@ -187,6 +187,20 @@ Future<void> _tapAndWait(
   await _pumpUntil(tester, expected);
 }
 
+/// 返回上一页，等转场动画结束（iOS 的返回转场较长，动画中点击会落空）。
+Future<void> _pageBackAndSettle(WidgetTester tester, Finder leaving) async {
+  await tester.pageBack();
+  await _pumpUntilGone(tester, leaving);
+  await _settleTransition(tester);
+}
+
+/// 等页面转场动画结束再点击。
+Future<void> _settleTransition(WidgetTester tester) async {
+  for (var i = 0; i < 10; i++) {
+    await tester.pump(const Duration(milliseconds: 100));
+  }
+}
+
 /// 点击屏幕横向 [fraction] 处（阅读器的翻页区），等双击判定结束。
 Future<void> _tapZone(WidgetTester tester, double fraction) async {
   final size = tester.view.physicalSize / tester.view.devicePixelRatio;
@@ -396,6 +410,7 @@ void main() {
       find.byTooltip('规则仓库'),
       find.textContaining('还没有订阅任何仓库'),
     );
+    await _settleTransition(tester);
     await _tapAndWait(tester, find.byTooltip('添加仓库'), find.byType(TextField));
     await tester.enterText(
       find.byType(TextField),
@@ -416,6 +431,7 @@ void main() {
       find.text('流程测试仓库'),
       find.byKey(const ValueKey('repo-entry-$flowId')),
     );
+    await _settleTransition(tester);
     await _tapAndWait(
       tester,
       find.widgetWithText(FilledButton, '安装'),
@@ -438,20 +454,19 @@ void main() {
 
     // 仓库发布 1.1.0（新增主机 cdn.example.org）→ 手动检查更新。
     await tester.runAsync(() => server.setLiveRepository('flow-v2'));
-    await tester.pageBack();
-    await _pumpUntil(tester, find.byTooltip('检查更新'));
+    await _pageBackAndSettle(
+      tester,
+      find.byKey(const ValueKey('repo-entry-$flowId')),
+    );
     await _tapAndWait(tester, find.byTooltip('检查更新'), find.text('1 个源可更新'));
-    await tester.pageBack();
+    await _pageBackAndSettle(tester, find.text('1 个源可更新'));
     await _pumpUntil(tester, find.textContaining('可更新到 1.1.0'));
     installed = await tester.runAsync(() => app.registry.get(flowId));
     expect(installed!.version, '1.0.0', reason: '只提示，不自动安装');
 
     // 「全部更新」：逐个预览，新增主机高亮并需再次确认。
     await _tapAndWait(tester, find.byTooltip('规则仓库'), find.text('全部更新'));
-    // 等页面切换动画结束再点按钮。
-    for (var i = 0; i < 10; i++) {
-      await tester.pump(const Duration(milliseconds: 100));
-    }
+    await _settleTransition(tester);
     await _tapAndWait(tester, find.text('全部更新'), find.text('cdn.example.org'));
     expect(find.text('更新源（1 / 1）'), findsOneWidget);
     expect(inDialog(find.text('新增')), findsOneWidget);
