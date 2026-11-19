@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show InternetAddress, InternetAddressType;
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -193,16 +194,36 @@ class _FetchState {
 /// 回环地址：仅这些主机、且仅在测试中允许使用 `http`（source-spec §7）。
 const _loopbackHosts = {'127.0.0.1', 'localhost', '::1'};
 
-/// [uri] 是否可用于仓库索引 / 清单：`https`（[allowLoopbackHttp] 时另允许回环地址上的 `http`）；
-/// 必须有主机，不允许用户信息。
+/// 指向本机的主机名（不论协议）：`localhost` 及其子域、`127.0.0.0/8`、`0.0.0.0`、`::1`、`::`、
+/// IPv4 映射的回环（`::ffff:127.x.x.x`）。
+bool isLocalHost(String rawHost) {
+  var host = rawHost.toLowerCase();
+  if (host.startsWith('[') && host.endsWith(']')) {
+    host = host.substring(1, host.length - 1);
+  }
+  if (host.endsWith('.')) host = host.substring(0, host.length - 1);
+  if (host == 'localhost' || host.endsWith('.localhost')) return true;
+  if (host == '0.0.0.0' || host == '::' || host == '::1') return true;
+  if (host.startsWith('::ffff:')) host = host.substring('::ffff:'.length);
+  final ip = InternetAddress.tryParse(host);
+  if (ip == null) return false;
+  return ip.isLoopback ||
+      (ip.type == InternetAddressType.IPv4 && ip.rawAddress[0] == 0);
+}
+
+/// [uri] 是否可用于仓库索引 / 清单：必须有主机，不允许用户信息，不能指向本机（不论协议），且为 `https`。
+///
+/// [allowLoopbackHttp]（仅测试）放开 `127.0.0.1` / `localhost` / `::1`，此时这三个地址可用 `http` 或 `https`。
 bool isAllowedRepositoryUri(Uri uri, {bool allowLoopbackHttp = false}) {
   if (uri.host.isEmpty || uri.userInfo.isNotEmpty) return false;
-  return switch (uri.scheme.toLowerCase()) {
-    'https' => true,
-    'http' =>
-      allowLoopbackHttp && _loopbackHosts.contains(uri.host.toLowerCase()),
-    _ => false,
-  };
+  final scheme = uri.scheme.toLowerCase();
+  if (scheme != 'https' && scheme != 'http') return false;
+  if (allowLoopbackHttp && _loopbackHosts.contains(uri.host.toLowerCase())) {
+    return true;
+  }
+  // 发布版：远程仓库不能借索引条目或重定向让客户端访问本机服务（https 也不行）。
+  if (isLocalHost(uri.host)) return false;
+  return scheme == 'https';
 }
 
 /// 不满足 [isAllowedRepositoryUri] 时抛出 [RepositoryException]。
@@ -210,7 +231,7 @@ void checkRepositoryUri(Uri uri, {bool allowLoopbackHttp = false}) {
   if (!isAllowedRepositoryUri(uri, allowLoopbackHttp: allowLoopbackHttp)) {
     throw RepositoryException(
       RepositoryErrorKind.insecureUrl,
-      '只允许 https 地址：$uri',
+      '只允许 https 地址，且不能指向本机：$uri',
     );
   }
 }

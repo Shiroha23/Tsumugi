@@ -110,6 +110,35 @@ void main() {
       expect(allowed('http://localhost.example.com/'), isFalse);
     });
 
+    test('发布版拒绝指向本机的 https 地址（重定向与条目同一判断）', () {
+      for (final u in [
+        'https://localhost/x',
+        'https://LOCALHOST./x',
+        'https://a.localhost/x',
+        'https://127.0.0.1:8443/x',
+        'https://127.1.2.3/x',
+        'https://0.0.0.0/x',
+        'https://[::1]/x',
+        'https://[::]/x',
+        'https://[::ffff:127.0.0.1]/x',
+      ]) {
+        expect(isAllowedRepositoryUri(Uri.parse(u)), isFalse, reason: u);
+      }
+      expect(
+        isAllowedRepositoryUri(Uri.parse('https://127.example.com/')),
+        isTrue,
+      );
+      expect(isLocalHost('localhost.example.com'), isFalse);
+      expect(
+        () => _parse(
+          _index([
+            _entry({'url': 'https://localhost:631/a.json'}),
+          ]),
+        ),
+        _throwsKind(RepositoryErrorKind.invalidIndex),
+      );
+    });
+
     test('默认配置下索引条目不能指向回环 http', () {
       expect(
         () => _parse(
