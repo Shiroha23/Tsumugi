@@ -4,22 +4,22 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:tsumugi/core/storage/app_database.dart';
 
 import 'generated/schema.dart';
-import 'generated/schema_v5.dart' as v5;
+import 'generated/schema_v6.dart' as v6;
 
-/// v5 → v6（WebDAV 同步）：原有行保留，`modified_at` 为 0；迁移后触发器生效。
+/// v6 → v7（WebDAV 同步）：原有行保留，`modified_at` 为 0；迁移后触发器生效。
 void main() {
   driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
   late SchemaVerifier verifier;
 
   setUpAll(() => verifier = SchemaVerifier(GeneratedHelper()));
 
-  test('v5 → v6 keeps rows and installs change tracking', () async {
-    final schema = await verifier.schemaAt(5);
-    final old = v5.DatabaseAtV5(schema.newConnection());
+  test('v6 → v7 keeps rows and installs change tracking', () async {
+    final schema = await verifier.schemaAt(6);
+    final old = v6.DatabaseAtV6(schema.newConnection());
     await old
         .into(old.libraryEntries)
         .insert(
-          const v5.LibraryEntriesData(
+          const v6.LibraryEntriesData(
             sourceId: 'com.example.comic',
             itemId: '/book/1',
             title: '虚构漫画',
@@ -32,7 +32,7 @@ void main() {
     await old.close();
 
     final db = AppDatabase(schema.newConnection());
-    await verifier.migrateAndValidate(db, 6);
+    await verifier.migrateAndValidate(db, 7);
 
     final row = await db.select(db.libraryEntries).getSingle();
     expect(row.title, '虚构漫画');

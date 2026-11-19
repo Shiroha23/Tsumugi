@@ -1,0 +1,1778 @@
+{
+  "_meta": {
+    "description": "This file contains a serialized version of schema entities for drift.",
+    "version": "1.3.0"
+  },
+  "options": {
+    "store_date_time_values_as_text": false
+  },
+  "entities": [
+    {
+      "id": 0,
+      "references": [],
+      "type": "table",
+      "data": {
+        "name": "library_entries",
+        "was_declared_in_moor": false,
+        "columns": [
+          {
+            "name": "source_id",
+            "getter_name": "sourceId",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "item_id",
+            "getter_name": "itemId",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "title",
+            "getter_name": "title",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "cover",
+            "getter_name": "cover",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "cover_headers",
+            "getter_name": "coverHeaders",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": [],
+            "type_converter": {
+              "dart_expr": "const StringMapConverter()",
+              "dart_type_name": "Map<String, String>"
+            }
+          },
+          {
+            "name": "media_type",
+            "getter_name": "mediaType",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "category",
+            "getter_name": "category",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "sort_order",
+            "getter_name": "sortOrder",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "added_at",
+            "getter_name": "addedAt",
+            "moor_type": "dateTime",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "updated_at",
+            "getter_name": "updatedAt",
+            "moor_type": "dateTime",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "modified_at",
+            "getter_name": "modifiedAt",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          }
+        ],
+        "is_virtual": false,
+        "without_rowid": false,
+        "constraints": [],
+        "explicit_pk": [
+          "source_id",
+          "item_id"
+        ]
+      }
+    },
+    {
+      "id": 1,
+      "references": [],
+      "type": "table",
+      "data": {
+        "name": "sync_state",
+        "was_declared_in_moor": false,
+        "columns": [
+          {
+            "name": "id",
+            "getter_name": "id",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "device_id",
+            "getter_name": "deviceId",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "applying",
+            "getter_name": "applying",
+            "moor_type": "bool",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "CHECK (\"applying\" IN (0, 1))",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "CHECK (\"applying\" IN (0, 1))"
+            },
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "enabled",
+            "getter_name": "enabled",
+            "moor_type": "bool",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "CHECK (\"enabled\" IN (0, 1))",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "CHECK (\"enabled\" IN (0, 1))"
+            },
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "server_url",
+            "getter_name": "serverUrl",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "username",
+            "getter_name": "username",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "remote_dir",
+            "getter_name": "remoteDir",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "last_sync_at",
+            "getter_name": "lastSyncAt",
+            "moor_type": "int",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "remote_etag",
+            "getter_name": "remoteEtag",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "remote_snapshot",
+            "getter_name": "remoteSnapshot",
+            "moor_type": "blob",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "conditional_unsupported",
+            "getter_name": "conditionalUnsupported",
+            "moor_type": "bool",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "CHECK (\"conditional_unsupported\" IN (0, 1))",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "CHECK (\"conditional_unsupported\" IN (0, 1))"
+            },
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "last_attempt_at",
+            "getter_name": "lastAttemptAt",
+            "moor_type": "int",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "last_error",
+            "getter_name": "lastError",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "pending_sources_json",
+            "getter_name": "pendingSourcesJson",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          }
+        ],
+        "is_virtual": false,
+        "without_rowid": false,
+        "constraints": [],
+        "explicit_pk": [
+          "id"
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "references": [],
+      "type": "table",
+      "data": {
+        "name": "sync_tombstones",
+        "was_declared_in_moor": false,
+        "columns": [
+          {
+            "name": "collection",
+            "getter_name": "collection",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "key1",
+            "getter_name": "key1",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "key2",
+            "getter_name": "key2",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('\\'\\'')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "key3",
+            "getter_name": "key3",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('\\'\\'')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "deleted_at",
+            "getter_name": "deletedAt",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          }
+        ],
+        "is_virtual": false,
+        "without_rowid": false,
+        "constraints": [],
+        "explicit_pk": [
+          "collection",
+          "key1",
+          "key2",
+          "key3"
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "references": [
+        0,
+        1,
+        2
+      ],
+      "type": "trigger",
+      "data": {
+        "on": 0,
+        "references_in_body": [
+          0,
+          1,
+          2
+        ],
+        "name": "library_entries_sync_insert",
+        "sql": "CREATE TRIGGER library_entries_sync_insert AFTER INSERT ON library_entries\r\n  WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1\r\nBEGIN\r\n  UPDATE library_entries SET modified_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\r\n    WHERE source_id = NEW.source_id AND item_id = NEW.item_id;\r\n  DELETE FROM sync_tombstones\r\n    WHERE collection = 'library' AND key1 = NEW.source_id AND key2 = NEW.item_id AND key3 = '';\r\nEND;"
+      }
+    },
+    {
+      "id": 4,
+      "references": [
+        0,
+        1
+      ],
+      "type": "trigger",
+      "data": {
+        "on": 0,
+        "references_in_body": [
+          0,
+          1
+        ],
+        "name": "library_entries_sync_update",
+        "sql": "CREATE TRIGGER library_entries_sync_update AFTER UPDATE ON library_entries\r\n  WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 AND (\r\n    NEW.title IS NOT OLD.title\r\n    OR NEW.cover IS NOT OLD.cover\r\n    OR NEW.cover_headers IS NOT OLD.cover_headers\r\n    OR NEW.media_type IS NOT OLD.media_type\r\n    OR NEW.category IS NOT OLD.category\r\n    OR NEW.sort_order IS NOT OLD.sort_order\r\n    OR NEW.added_at IS NOT OLD.added_at\r\n  )\r\nBEGIN\r\n  UPDATE library_entries SET modified_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\r\n    WHERE source_id = NEW.source_id AND item_id = NEW.item_id;\r\nEND;"
+      }
+    },
+    {
+      "id": 5,
+      "references": [
+        0,
+        1,
+        2
+      ],
+      "type": "trigger",
+      "data": {
+        "on": 0,
+        "references_in_body": [
+          0,
+          1,
+          2
+        ],
+        "name": "library_entries_sync_delete",
+        "sql": "CREATE TRIGGER library_entries_sync_delete AFTER DELETE ON library_entries\r\n  WHEN EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND applying = 0 AND server_url IS NOT NULL)\r\nBEGIN\r\n  INSERT OR REPLACE INTO sync_tombstones (collection, key1, key2, key3, deleted_at)\r\n    VALUES ('library', OLD.source_id, OLD.item_id, '', CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER));\r\nEND;"
+      }
+    },
+    {
+      "id": 6,
+      "references": [],
+      "type": "table",
+      "data": {
+        "name": "item_progress_entries",
+        "was_declared_in_moor": false,
+        "columns": [
+          {
+            "name": "source_id",
+            "getter_name": "sourceId",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "item_id",
+            "getter_name": "itemId",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "title",
+            "getter_name": "title",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "cover",
+            "getter_name": "cover",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "cover_headers",
+            "getter_name": "coverHeaders",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": [],
+            "type_converter": {
+              "dart_expr": "const StringMapConverter()",
+              "dart_type_name": "Map<String, String>"
+            }
+          },
+          {
+            "name": "media_type",
+            "getter_name": "mediaType",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "unit_id",
+            "getter_name": "unitId",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "unit_title",
+            "getter_name": "unitTitle",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "page",
+            "getter_name": "page",
+            "moor_type": "int",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "page_count",
+            "getter_name": "pageCount",
+            "moor_type": "int",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "position",
+            "getter_name": "position",
+            "moor_type": "int",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "updated_at",
+            "getter_name": "updatedAt",
+            "moor_type": "dateTime",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "modified_at",
+            "getter_name": "modifiedAt",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          }
+        ],
+        "is_virtual": false,
+        "without_rowid": false,
+        "constraints": [],
+        "explicit_pk": [
+          "source_id",
+          "item_id"
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "references": [
+        6,
+        1,
+        2
+      ],
+      "type": "trigger",
+      "data": {
+        "on": 6,
+        "references_in_body": [
+          6,
+          1,
+          2
+        ],
+        "name": "item_progress_entries_sync_insert",
+        "sql": "CREATE TRIGGER item_progress_entries_sync_insert AFTER INSERT ON item_progress_entries\r\n  WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1\r\nBEGIN\r\n  UPDATE item_progress_entries SET modified_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\r\n    WHERE source_id = NEW.source_id AND item_id = NEW.item_id;\r\n  DELETE FROM sync_tombstones\r\n    WHERE collection = 'itemProgress' AND key1 = NEW.source_id AND key2 = NEW.item_id AND key3 = '';\r\nEND;"
+      }
+    },
+    {
+      "id": 8,
+      "references": [
+        6,
+        1
+      ],
+      "type": "trigger",
+      "data": {
+        "on": 6,
+        "references_in_body": [
+          6,
+          1
+        ],
+        "name": "item_progress_entries_sync_update",
+        "sql": "CREATE TRIGGER item_progress_entries_sync_update AFTER UPDATE ON item_progress_entries\r\n  WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 AND (\r\n    NEW.title IS NOT OLD.title\r\n    OR NEW.cover IS NOT OLD.cover\r\n    OR NEW.cover_headers IS NOT OLD.cover_headers\r\n    OR NEW.media_type IS NOT OLD.media_type\r\n    OR NEW.unit_id IS NOT OLD.unit_id\r\n    OR NEW.unit_title IS NOT OLD.unit_title\r\n    OR NEW.page IS NOT OLD.page\r\n    OR NEW.page_count IS NOT OLD.page_count\r\n    OR NEW.position IS NOT OLD.position\r\n    OR NEW.updated_at IS NOT OLD.updated_at\r\n  )\r\nBEGIN\r\n  UPDATE item_progress_entries SET modified_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\r\n    WHERE source_id = NEW.source_id AND item_id = NEW.item_id;\r\nEND;"
+      }
+    },
+    {
+      "id": 9,
+      "references": [
+        6,
+        1,
+        2
+      ],
+      "type": "trigger",
+      "data": {
+        "on": 6,
+        "references_in_body": [
+          6,
+          1,
+          2
+        ],
+        "name": "item_progress_entries_sync_delete",
+        "sql": "CREATE TRIGGER item_progress_entries_sync_delete AFTER DELETE ON item_progress_entries\r\n  WHEN EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND applying = 0 AND server_url IS NOT NULL)\r\nBEGIN\r\n  INSERT OR REPLACE INTO sync_tombstones (collection, key1, key2, key3, deleted_at)\r\n    VALUES ('itemProgress', OLD.source_id, OLD.item_id, '', CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER));\r\nEND;"
+      }
+    },
+    {
+      "id": 10,
+      "references": [],
+      "type": "table",
+      "data": {
+        "name": "unit_progress_entries",
+        "was_declared_in_moor": false,
+        "columns": [
+          {
+            "name": "source_id",
+            "getter_name": "sourceId",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "item_id",
+            "getter_name": "itemId",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "unit_id",
+            "getter_name": "unitId",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "page",
+            "getter_name": "page",
+            "moor_type": "int",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "page_count",
+            "getter_name": "pageCount",
+            "moor_type": "int",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "position",
+            "getter_name": "position",
+            "moor_type": "int",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "read",
+            "getter_name": "read",
+            "moor_type": "bool",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "CHECK (\"read\" IN (0, 1))",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "CHECK (\"read\" IN (0, 1))"
+            },
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "updated_at",
+            "getter_name": "updatedAt",
+            "moor_type": "dateTime",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "modified_at",
+            "getter_name": "modifiedAt",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          }
+        ],
+        "is_virtual": false,
+        "without_rowid": false,
+        "constraints": [],
+        "explicit_pk": [
+          "source_id",
+          "item_id",
+          "unit_id"
+        ]
+      }
+    },
+    {
+      "id": 11,
+      "references": [
+        10,
+        1,
+        2
+      ],
+      "type": "trigger",
+      "data": {
+        "on": 10,
+        "references_in_body": [
+          10,
+          1,
+          2
+        ],
+        "name": "unit_progress_entries_sync_insert",
+        "sql": "CREATE TRIGGER unit_progress_entries_sync_insert AFTER INSERT ON unit_progress_entries\r\n  WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1\r\nBEGIN\r\n  UPDATE unit_progress_entries SET modified_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\r\n    WHERE source_id = NEW.source_id AND item_id = NEW.item_id AND unit_id = NEW.unit_id;\r\n  DELETE FROM sync_tombstones\r\n    WHERE collection = 'unitProgress' AND key1 = NEW.source_id AND key2 = NEW.item_id AND key3 = NEW.unit_id;\r\nEND;"
+      }
+    },
+    {
+      "id": 12,
+      "references": [
+        10,
+        1
+      ],
+      "type": "trigger",
+      "data": {
+        "on": 10,
+        "references_in_body": [
+          10,
+          1
+        ],
+        "name": "unit_progress_entries_sync_update",
+        "sql": "CREATE TRIGGER unit_progress_entries_sync_update AFTER UPDATE ON unit_progress_entries\r\n  WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 AND (\r\n    NEW.page IS NOT OLD.page\r\n    OR NEW.page_count IS NOT OLD.page_count\r\n    OR NEW.position IS NOT OLD.position\r\n    OR NEW.read IS NOT OLD.read\r\n    OR NEW.updated_at IS NOT OLD.updated_at\r\n  )\r\nBEGIN\r\n  UPDATE unit_progress_entries SET modified_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\r\n    WHERE source_id = NEW.source_id AND item_id = NEW.item_id AND unit_id = NEW.unit_id;\r\nEND;"
+      }
+    },
+    {
+      "id": 13,
+      "references": [
+        10,
+        1,
+        2
+      ],
+      "type": "trigger",
+      "data": {
+        "on": 10,
+        "references_in_body": [
+          10,
+          1,
+          2
+        ],
+        "name": "unit_progress_entries_sync_delete",
+        "sql": "CREATE TRIGGER unit_progress_entries_sync_delete AFTER DELETE ON unit_progress_entries\r\n  WHEN EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND applying = 0 AND server_url IS NOT NULL)\r\nBEGIN\r\n  INSERT OR REPLACE INTO sync_tombstones (collection, key1, key2, key3, deleted_at)\r\n    VALUES ('unitProgress', OLD.source_id, OLD.item_id, OLD.unit_id, CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER));\r\nEND;"
+      }
+    },
+    {
+      "id": 14,
+      "references": [],
+      "type": "table",
+      "data": {
+        "name": "installed_sources",
+        "was_declared_in_moor": false,
+        "columns": [
+          {
+            "name": "id",
+            "getter_name": "id",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "name",
+            "getter_name": "name",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "type",
+            "getter_name": "type",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "version",
+            "getter_name": "version",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "api_version",
+            "getter_name": "apiVersion",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "enabled",
+            "getter_name": "enabled",
+            "moor_type": "bool",
+            "nullable": false,
+            "customConstraints": null,
+            "defaultConstraints": "CHECK (\"enabled\" IN (0, 1))",
+            "dialectAwareDefaultConstraints": {
+              "sqlite": "CHECK (\"enabled\" IN (0, 1))"
+            },
+            "default_dart": "const CustomExpression('1')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "sort_order",
+            "getter_name": "sortOrder",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "installed_at",
+            "getter_name": "installedAt",
+            "moor_type": "dateTime",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "updated_at",
+            "getter_name": "updatedAt",
+            "moor_type": "dateTime",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "origin_kind",
+            "getter_name": "originKind",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": [],
+            "type_converter": {
+              "dart_expr": "const EnumNameConverter<SourceOriginKind>(SourceOriginKind.values)",
+              "dart_type_name": "SourceOriginKind"
+            }
+          },
+          {
+            "name": "origin_url",
+            "getter_name": "originUrl",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "manifest_sha256",
+            "getter_name": "manifestSha256",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "manifest_json",
+            "getter_name": "manifestJson",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "settings_json",
+            "getter_name": "settingsJson",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "repository_url",
+            "getter_name": "repositoryUrl",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "modified_at",
+            "getter_name": "modifiedAt",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          }
+        ],
+        "is_virtual": false,
+        "without_rowid": false,
+        "constraints": [],
+        "explicit_pk": [
+          "id"
+        ]
+      }
+    },
+    {
+      "id": 15,
+      "references": [
+        14,
+        1,
+        2
+      ],
+      "type": "trigger",
+      "data": {
+        "on": 14,
+        "references_in_body": [
+          14,
+          1,
+          2
+        ],
+        "name": "installed_sources_sync_insert",
+        "sql": "CREATE TRIGGER installed_sources_sync_insert AFTER INSERT ON installed_sources\r\n  WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1\r\nBEGIN\r\n  UPDATE installed_sources SET modified_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\r\n    WHERE id = NEW.id;\r\n  DELETE FROM sync_tombstones\r\n    WHERE collection = 'sources' AND key1 = NEW.id AND key2 = '' AND key3 = '';\r\nEND;"
+      }
+    },
+    {
+      "id": 16,
+      "references": [
+        14,
+        1
+      ],
+      "type": "trigger",
+      "data": {
+        "on": 14,
+        "references_in_body": [
+          14,
+          1
+        ],
+        "name": "installed_sources_sync_update",
+        "sql": "CREATE TRIGGER installed_sources_sync_update AFTER UPDATE ON installed_sources\r\n  WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 AND (\r\n    NEW.manifest_json IS NOT OLD.manifest_json\r\n    OR NEW.enabled IS NOT OLD.enabled\r\n    OR NEW.sort_order IS NOT OLD.sort_order\r\n    OR NEW.settings_json IS NOT OLD.settings_json\r\n  )\r\nBEGIN\r\n  UPDATE installed_sources SET modified_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\r\n    WHERE id = NEW.id;\r\nEND;"
+      }
+    },
+    {
+      "id": 17,
+      "references": [
+        14,
+        1,
+        2
+      ],
+      "type": "trigger",
+      "data": {
+        "on": 14,
+        "references_in_body": [
+          14,
+          1,
+          2
+        ],
+        "name": "installed_sources_sync_delete",
+        "sql": "CREATE TRIGGER installed_sources_sync_delete AFTER DELETE ON installed_sources\r\n  WHEN EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND applying = 0 AND server_url IS NOT NULL)\r\nBEGIN\r\n  INSERT OR REPLACE INTO sync_tombstones (collection, key1, key2, key3, deleted_at)\r\n    VALUES ('sources', OLD.id, '', '', CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER));\r\nEND;"
+      }
+    },
+    {
+      "id": 18,
+      "references": [],
+      "type": "table",
+      "data": {
+        "name": "source_repositories",
+        "was_declared_in_moor": false,
+        "columns": [
+          {
+            "name": "url",
+            "getter_name": "url",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "name",
+            "getter_name": "name",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "added_at",
+            "getter_name": "addedAt",
+            "moor_type": "dateTime",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "last_checked_at",
+            "getter_name": "lastCheckedAt",
+            "moor_type": "dateTime",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "last_error_code",
+            "getter_name": "lastErrorCode",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "last_error_message",
+            "getter_name": "lastErrorMessage",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "index_json",
+            "getter_name": "indexJson",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "index_sha256",
+            "getter_name": "indexSha256",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "modified_at",
+            "getter_name": "modifiedAt",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          }
+        ],
+        "is_virtual": false,
+        "without_rowid": false,
+        "constraints": [],
+        "explicit_pk": [
+          "url"
+        ]
+      }
+    },
+    {
+      "id": 19,
+      "references": [
+        18,
+        1,
+        2
+      ],
+      "type": "trigger",
+      "data": {
+        "on": 18,
+        "references_in_body": [
+          18,
+          1,
+          2
+        ],
+        "name": "source_repositories_sync_insert",
+        "sql": "CREATE TRIGGER source_repositories_sync_insert AFTER INSERT ON source_repositories\r\n  WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1\r\nBEGIN\r\n  UPDATE source_repositories SET modified_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\r\n    WHERE url = NEW.url;\r\n  DELETE FROM sync_tombstones\r\n    WHERE collection = 'repositories' AND key1 = NEW.url AND key2 = '' AND key3 = '';\r\nEND;"
+      }
+    },
+    {
+      "id": 20,
+      "references": [
+        18,
+        1
+      ],
+      "type": "trigger",
+      "data": {
+        "on": 18,
+        "references_in_body": [
+          18,
+          1
+        ],
+        "name": "source_repositories_sync_update",
+        "sql": "CREATE TRIGGER source_repositories_sync_update AFTER UPDATE ON source_repositories\r\n  WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 AND (\r\n    NEW.added_at IS NOT OLD.added_at\r\n  )\r\nBEGIN\r\n  UPDATE source_repositories SET modified_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\r\n    WHERE url = NEW.url;\r\nEND;"
+      }
+    },
+    {
+      "id": 21,
+      "references": [
+        18,
+        1,
+        2
+      ],
+      "type": "trigger",
+      "data": {
+        "on": 18,
+        "references_in_body": [
+          18,
+          1,
+          2
+        ],
+        "name": "source_repositories_sync_delete",
+        "sql": "CREATE TRIGGER source_repositories_sync_delete AFTER DELETE ON source_repositories\r\n  WHEN EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND applying = 0 AND server_url IS NOT NULL)\r\nBEGIN\r\n  INSERT OR REPLACE INTO sync_tombstones (collection, key1, key2, key3, deleted_at)\r\n    VALUES ('repositories', OLD.url, '', '', CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER));\r\nEND;"
+      }
+    },
+    {
+      "id": 22,
+      "references": [],
+      "type": "table",
+      "data": {
+        "name": "source_storage_entries",
+        "was_declared_in_moor": false,
+        "columns": [
+          {
+            "name": "source_id",
+            "getter_name": "sourceId",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "key",
+            "getter_name": "key",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "value",
+            "getter_name": "value",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          }
+        ],
+        "is_virtual": false,
+        "without_rowid": false,
+        "constraints": [],
+        "explicit_pk": [
+          "source_id",
+          "key"
+        ]
+      }
+    },
+    {
+      "id": 23,
+      "references": [],
+      "type": "table",
+      "data": {
+        "name": "download_items",
+        "was_declared_in_moor": false,
+        "columns": [
+          {
+            "name": "source_id",
+            "getter_name": "sourceId",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "item_id",
+            "getter_name": "itemId",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "title",
+            "getter_name": "title",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "cover",
+            "getter_name": "cover",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "cover_headers",
+            "getter_name": "coverHeaders",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": [],
+            "type_converter": {
+              "dart_expr": "const StringMapConverter()",
+              "dart_type_name": "Map<String, String>"
+            }
+          },
+          {
+            "name": "media_type",
+            "getter_name": "mediaType",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "detail_json",
+            "getter_name": "detailJson",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "created_at",
+            "getter_name": "createdAt",
+            "moor_type": "dateTime",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "updated_at",
+            "getter_name": "updatedAt",
+            "moor_type": "dateTime",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          }
+        ],
+        "is_virtual": false,
+        "without_rowid": false,
+        "constraints": [],
+        "explicit_pk": [
+          "source_id",
+          "item_id"
+        ]
+      }
+    },
+    {
+      "id": 24,
+      "references": [],
+      "type": "table",
+      "data": {
+        "name": "download_units",
+        "was_declared_in_moor": false,
+        "columns": [
+          {
+            "name": "source_id",
+            "getter_name": "sourceId",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "item_id",
+            "getter_name": "itemId",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "unit_id",
+            "getter_name": "unitId",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "title",
+            "getter_name": "title",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "group_name",
+            "getter_name": "groupName",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "unit_index",
+            "getter_name": "unitIndex",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "status",
+            "getter_name": "status",
+            "moor_type": "string",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "completed_files",
+            "getter_name": "completedFiles",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "total_files",
+            "getter_name": "totalFiles",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "bytes",
+            "getter_name": "bytes",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": "const CustomExpression('0')",
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "error_code",
+            "getter_name": "errorCode",
+            "moor_type": "string",
+            "nullable": true,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "queue_order",
+            "getter_name": "queueOrder",
+            "moor_type": "int",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          },
+          {
+            "name": "updated_at",
+            "getter_name": "updatedAt",
+            "moor_type": "dateTime",
+            "nullable": false,
+            "customConstraints": null,
+            "default_dart": null,
+            "default_client_dart": null,
+            "dsl_features": []
+          }
+        ],
+        "is_virtual": false,
+        "without_rowid": false,
+        "constraints": [],
+        "explicit_pk": [
+          "source_id",
+          "item_id",
+          "unit_id"
+        ]
+      }
+    },
+    {
+      "id": 25,
+      "references": [
+        6
+      ],
+      "type": "index",
+      "data": {
+        "on": 6,
+        "name": "item_progress_updated_at",
+        "sql": null,
+        "unique": false,
+        "columns": [
+          {
+            "column": "updated_at",
+            "order_by": null
+          }
+        ]
+      }
+    }
+  ],
+  "fixed_sql": [
+    {
+      "name": "library_entries",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TABLE IF NOT EXISTS \"library_entries\" (\"source_id\" TEXT NOT NULL, \"item_id\" TEXT NOT NULL, \"title\" TEXT NOT NULL, \"cover\" TEXT NULL, \"cover_headers\" TEXT NULL, \"media_type\" TEXT NOT NULL, \"category\" TEXT NULL, \"sort_order\" INTEGER NOT NULL DEFAULT 0, \"added_at\" INTEGER NOT NULL, \"updated_at\" INTEGER NOT NULL, \"modified_at\" INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (\"source_id\", \"item_id\"));"
+        }
+      ]
+    },
+    {
+      "name": "sync_state",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TABLE IF NOT EXISTS \"sync_state\" (\"id\" INTEGER NOT NULL, \"device_id\" TEXT NOT NULL, \"applying\" INTEGER NOT NULL DEFAULT 0 CHECK (\"applying\" IN (0, 1)), \"enabled\" INTEGER NOT NULL DEFAULT 0 CHECK (\"enabled\" IN (0, 1)), \"server_url\" TEXT NULL, \"username\" TEXT NULL, \"remote_dir\" TEXT NULL, \"last_sync_at\" INTEGER NULL, \"remote_etag\" TEXT NULL, \"remote_snapshot\" BLOB NULL, \"conditional_unsupported\" INTEGER NOT NULL DEFAULT 0 CHECK (\"conditional_unsupported\" IN (0, 1)), \"last_attempt_at\" INTEGER NULL, \"last_error\" TEXT NULL, \"pending_sources_json\" TEXT NULL, PRIMARY KEY (\"id\"));"
+        }
+      ]
+    },
+    {
+      "name": "sync_tombstones",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TABLE IF NOT EXISTS \"sync_tombstones\" (\"collection\" TEXT NOT NULL, \"key1\" TEXT NOT NULL, \"key2\" TEXT NOT NULL DEFAULT '', \"key3\" TEXT NOT NULL DEFAULT '', \"deleted_at\" INTEGER NOT NULL, PRIMARY KEY (\"collection\", \"key1\", \"key2\", \"key3\"));"
+        }
+      ]
+    },
+    {
+      "name": "library_entries_sync_insert",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TRIGGER library_entries_sync_insert AFTER INSERT ON library_entries WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 BEGIN UPDATE library_entries SET modified_at = CAST((julianday('now') - 2440587.5)* 86400000 AS INTEGER) WHERE source_id = NEW.source_id AND item_id = NEW.item_id;DELETE FROM sync_tombstones WHERE collection = 'library' AND key1 = NEW.source_id AND key2 = NEW.item_id AND key3 = '';END"
+        }
+      ]
+    },
+    {
+      "name": "library_entries_sync_update",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TRIGGER library_entries_sync_update AFTER UPDATE ON library_entries WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 AND(NEW.title IS NOT OLD.title OR NEW.cover IS NOT OLD.cover OR NEW.cover_headers IS NOT OLD.cover_headers OR NEW.media_type IS NOT OLD.media_type OR NEW.category IS NOT OLD.category OR NEW.sort_order IS NOT OLD.sort_order OR NEW.added_at IS NOT OLD.added_at)BEGIN UPDATE library_entries SET modified_at = CAST((julianday('now') - 2440587.5)* 86400000 AS INTEGER) WHERE source_id = NEW.source_id AND item_id = NEW.item_id;END"
+        }
+      ]
+    },
+    {
+      "name": "library_entries_sync_delete",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TRIGGER library_entries_sync_delete AFTER DELETE ON library_entries WHEN EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND applying = 0 AND server_url IS NOT NULL) BEGIN INSERT OR REPLACE INTO sync_tombstones (collection, key1, key2, key3, deleted_at) VALUES ('library', OLD.source_id, OLD.item_id, '', CAST((julianday('now') - 2440587.5)* 86400000 AS INTEGER));END"
+        }
+      ]
+    },
+    {
+      "name": "item_progress_entries",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TABLE IF NOT EXISTS \"item_progress_entries\" (\"source_id\" TEXT NOT NULL, \"item_id\" TEXT NOT NULL, \"title\" TEXT NOT NULL, \"cover\" TEXT NULL, \"cover_headers\" TEXT NULL, \"media_type\" TEXT NOT NULL, \"unit_id\" TEXT NOT NULL, \"unit_title\" TEXT NOT NULL, \"page\" INTEGER NULL, \"page_count\" INTEGER NULL, \"position\" INTEGER NULL, \"updated_at\" INTEGER NOT NULL, \"modified_at\" INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (\"source_id\", \"item_id\"));"
+        }
+      ]
+    },
+    {
+      "name": "item_progress_entries_sync_insert",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TRIGGER item_progress_entries_sync_insert AFTER INSERT ON item_progress_entries WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 BEGIN UPDATE item_progress_entries SET modified_at = CAST((julianday('now') - 2440587.5)* 86400000 AS INTEGER) WHERE source_id = NEW.source_id AND item_id = NEW.item_id;DELETE FROM sync_tombstones WHERE collection = 'itemProgress' AND key1 = NEW.source_id AND key2 = NEW.item_id AND key3 = '';END"
+        }
+      ]
+    },
+    {
+      "name": "item_progress_entries_sync_update",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TRIGGER item_progress_entries_sync_update AFTER UPDATE ON item_progress_entries WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 AND(NEW.title IS NOT OLD.title OR NEW.cover IS NOT OLD.cover OR NEW.cover_headers IS NOT OLD.cover_headers OR NEW.media_type IS NOT OLD.media_type OR NEW.unit_id IS NOT OLD.unit_id OR NEW.unit_title IS NOT OLD.unit_title OR NEW.page IS NOT OLD.page OR NEW.page_count IS NOT OLD.page_count OR NEW.position IS NOT OLD.position OR NEW.updated_at IS NOT OLD.updated_at)BEGIN UPDATE item_progress_entries SET modified_at = CAST((julianday('now') - 2440587.5)* 86400000 AS INTEGER) WHERE source_id = NEW.source_id AND item_id = NEW.item_id;END"
+        }
+      ]
+    },
+    {
+      "name": "item_progress_entries_sync_delete",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TRIGGER item_progress_entries_sync_delete AFTER DELETE ON item_progress_entries WHEN EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND applying = 0 AND server_url IS NOT NULL) BEGIN INSERT OR REPLACE INTO sync_tombstones (collection, key1, key2, key3, deleted_at) VALUES ('itemProgress', OLD.source_id, OLD.item_id, '', CAST((julianday('now') - 2440587.5)* 86400000 AS INTEGER));END"
+        }
+      ]
+    },
+    {
+      "name": "unit_progress_entries",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TABLE IF NOT EXISTS \"unit_progress_entries\" (\"source_id\" TEXT NOT NULL, \"item_id\" TEXT NOT NULL, \"unit_id\" TEXT NOT NULL, \"page\" INTEGER NULL, \"page_count\" INTEGER NULL, \"position\" INTEGER NULL, \"read\" INTEGER NOT NULL DEFAULT 0 CHECK (\"read\" IN (0, 1)), \"updated_at\" INTEGER NOT NULL, \"modified_at\" INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (\"source_id\", \"item_id\", \"unit_id\"));"
+        }
+      ]
+    },
+    {
+      "name": "unit_progress_entries_sync_insert",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TRIGGER unit_progress_entries_sync_insert AFTER INSERT ON unit_progress_entries WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 BEGIN UPDATE unit_progress_entries SET modified_at = CAST((julianday('now') - 2440587.5)* 86400000 AS INTEGER) WHERE source_id = NEW.source_id AND item_id = NEW.item_id AND unit_id = NEW.unit_id;DELETE FROM sync_tombstones WHERE collection = 'unitProgress' AND key1 = NEW.source_id AND key2 = NEW.item_id AND key3 = NEW.unit_id;END"
+        }
+      ]
+    },
+    {
+      "name": "unit_progress_entries_sync_update",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TRIGGER unit_progress_entries_sync_update AFTER UPDATE ON unit_progress_entries WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 AND(NEW.page IS NOT OLD.page OR NEW.page_count IS NOT OLD.page_count OR NEW.position IS NOT OLD.position OR NEW.read IS NOT OLD.read OR NEW.updated_at IS NOT OLD.updated_at)BEGIN UPDATE unit_progress_entries SET modified_at = CAST((julianday('now') - 2440587.5)* 86400000 AS INTEGER) WHERE source_id = NEW.source_id AND item_id = NEW.item_id AND unit_id = NEW.unit_id;END"
+        }
+      ]
+    },
+    {
+      "name": "unit_progress_entries_sync_delete",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TRIGGER unit_progress_entries_sync_delete AFTER DELETE ON unit_progress_entries WHEN EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND applying = 0 AND server_url IS NOT NULL) BEGIN INSERT OR REPLACE INTO sync_tombstones (collection, key1, key2, key3, deleted_at) VALUES ('unitProgress', OLD.source_id, OLD.item_id, OLD.unit_id, CAST((julianday('now') - 2440587.5)* 86400000 AS INTEGER));END"
+        }
+      ]
+    },
+    {
+      "name": "installed_sources",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TABLE IF NOT EXISTS \"installed_sources\" (\"id\" TEXT NOT NULL, \"name\" TEXT NOT NULL, \"type\" TEXT NOT NULL, \"version\" TEXT NOT NULL, \"api_version\" INTEGER NOT NULL, \"enabled\" INTEGER NOT NULL DEFAULT 1 CHECK (\"enabled\" IN (0, 1)), \"sort_order\" INTEGER NOT NULL, \"installed_at\" INTEGER NOT NULL, \"updated_at\" INTEGER NOT NULL, \"origin_kind\" TEXT NOT NULL, \"origin_url\" TEXT NULL, \"manifest_sha256\" TEXT NOT NULL, \"manifest_json\" TEXT NOT NULL, \"settings_json\" TEXT NULL, \"repository_url\" TEXT NULL, \"modified_at\" INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (\"id\"));"
+        }
+      ]
+    },
+    {
+      "name": "installed_sources_sync_insert",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TRIGGER installed_sources_sync_insert AFTER INSERT ON installed_sources WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 BEGIN UPDATE installed_sources SET modified_at = CAST((julianday('now') - 2440587.5)* 86400000 AS INTEGER) WHERE id = NEW.id;DELETE FROM sync_tombstones WHERE collection = 'sources' AND key1 = NEW.id AND key2 = '' AND key3 = '';END"
+        }
+      ]
+    },
+    {
+      "name": "installed_sources_sync_update",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TRIGGER installed_sources_sync_update AFTER UPDATE ON installed_sources WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 AND(NEW.manifest_json IS NOT OLD.manifest_json OR NEW.enabled IS NOT OLD.enabled OR NEW.sort_order IS NOT OLD.sort_order OR NEW.settings_json IS NOT OLD.settings_json)BEGIN UPDATE installed_sources SET modified_at = CAST((julianday('now') - 2440587.5)* 86400000 AS INTEGER) WHERE id = NEW.id;END"
+        }
+      ]
+    },
+    {
+      "name": "installed_sources_sync_delete",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TRIGGER installed_sources_sync_delete AFTER DELETE ON installed_sources WHEN EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND applying = 0 AND server_url IS NOT NULL) BEGIN INSERT OR REPLACE INTO sync_tombstones (collection, key1, key2, key3, deleted_at) VALUES ('sources', OLD.id, '', '', CAST((julianday('now') - 2440587.5)* 86400000 AS INTEGER));END"
+        }
+      ]
+    },
+    {
+      "name": "source_repositories",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TABLE IF NOT EXISTS \"source_repositories\" (\"url\" TEXT NOT NULL, \"name\" TEXT NOT NULL, \"added_at\" INTEGER NOT NULL, \"last_checked_at\" INTEGER NULL, \"last_error_code\" TEXT NULL, \"last_error_message\" TEXT NULL, \"index_json\" TEXT NOT NULL, \"index_sha256\" TEXT NOT NULL, \"modified_at\" INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (\"url\"));"
+        }
+      ]
+    },
+    {
+      "name": "source_repositories_sync_insert",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TRIGGER source_repositories_sync_insert AFTER INSERT ON source_repositories WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 BEGIN UPDATE source_repositories SET modified_at = CAST((julianday('now') - 2440587.5)* 86400000 AS INTEGER) WHERE url = NEW.url;DELETE FROM sync_tombstones WHERE collection = 'repositories' AND key1 = NEW.url AND key2 = '' AND key3 = '';END"
+        }
+      ]
+    },
+    {
+      "name": "source_repositories_sync_update",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TRIGGER source_repositories_sync_update AFTER UPDATE ON source_repositories WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 AND(NEW.added_at IS NOT OLD.added_at)BEGIN UPDATE source_repositories SET modified_at = CAST((julianday('now') - 2440587.5)* 86400000 AS INTEGER) WHERE url = NEW.url;END"
+        }
+      ]
+    },
+    {
+      "name": "source_repositories_sync_delete",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TRIGGER source_repositories_sync_delete AFTER DELETE ON source_repositories WHEN EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND applying = 0 AND server_url IS NOT NULL) BEGIN INSERT OR REPLACE INTO sync_tombstones (collection, key1, key2, key3, deleted_at) VALUES ('repositories', OLD.url, '', '', CAST((julianday('now') - 2440587.5)* 86400000 AS INTEGER));END"
+        }
+      ]
+    },
+    {
+      "name": "source_storage_entries",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TABLE IF NOT EXISTS \"source_storage_entries\" (\"source_id\" TEXT NOT NULL, \"key\" TEXT NOT NULL, \"value\" TEXT NOT NULL, PRIMARY KEY (\"source_id\", \"key\"));"
+        }
+      ]
+    },
+    {
+      "name": "download_items",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TABLE IF NOT EXISTS \"download_items\" (\"source_id\" TEXT NOT NULL, \"item_id\" TEXT NOT NULL, \"title\" TEXT NOT NULL, \"cover\" TEXT NULL, \"cover_headers\" TEXT NULL, \"media_type\" TEXT NOT NULL, \"detail_json\" TEXT NOT NULL, \"created_at\" INTEGER NOT NULL, \"updated_at\" INTEGER NOT NULL, PRIMARY KEY (\"source_id\", \"item_id\"));"
+        }
+      ]
+    },
+    {
+      "name": "download_units",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE TABLE IF NOT EXISTS \"download_units\" (\"source_id\" TEXT NOT NULL, \"item_id\" TEXT NOT NULL, \"unit_id\" TEXT NOT NULL, \"title\" TEXT NOT NULL, \"group_name\" TEXT NOT NULL, \"unit_index\" INTEGER NOT NULL, \"status\" TEXT NOT NULL, \"completed_files\" INTEGER NOT NULL DEFAULT 0, \"total_files\" INTEGER NOT NULL DEFAULT 0, \"bytes\" INTEGER NOT NULL DEFAULT 0, \"error_code\" TEXT NULL, \"queue_order\" INTEGER NOT NULL, \"updated_at\" INTEGER NOT NULL, PRIMARY KEY (\"source_id\", \"item_id\", \"unit_id\"));"
+        }
+      ]
+    },
+    {
+      "name": "item_progress_updated_at",
+      "sql": [
+        {
+          "dialect": "sqlite",
+          "sql": "CREATE INDEX item_progress_updated_at ON item_progress_entries (updated_at)"
+        }
+      ]
+    }
+  ]
+}
