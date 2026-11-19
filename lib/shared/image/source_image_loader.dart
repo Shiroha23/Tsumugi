@@ -152,10 +152,30 @@ class SourceImageLoader {
       return cached;
     }
 
+    final bytes = await _network(key.sourceId, ref, pending.emit);
+    memoryCache.put(key, bytes);
+    // 磁盘写入不阻塞返回。
+    _trackWrite(diskCache.put(key, bytes));
+    pending.emit(_done(bytes));
+    return bytes;
+  }
+
+  /// 下载入口（docs/architecture.md §4.5）：**不读写**内存 / 磁盘缓存，也不与阅读器的同一图片请求合并，
+  /// 但同样经该源的网络客户端（白名单、限速、Cookie、默认 headers、`ImageRef.headers`、`maxResponseBytes`），
+  /// 受同一全局并发上限与重试策略约束。失败抛出 [SourceException]。
+  Future<Uint8List> download(String sourceId, ImageRef ref) =>
+      _network(sourceId, ref, (_) {});
+
+  /// 经网络层取图片字节（占用一个并发名额）。
+  Future<Uint8List> _network(
+    String sourceId,
+    ImageRef ref,
+    void Function(ImageLoadProgress) emit,
+  ) async {
     await _acquire();
     try {
-      final client = await httpClientFor(key.sourceId);
-      pending.emit(const ImageLoadProgress(ImageLoadStage.downloading));
+      final client = await httpClientFor(sourceId);
+      emit(const ImageLoadProgress(ImageLoadStage.downloading));
       for (var attempt = 0; ; attempt++) {
         try {
           final res = await client.request(
@@ -164,7 +184,7 @@ class SourceImageLoader {
               headers: ref.headers ?? const {},
               throwOnHttpError: true,
               timeout: timeout,
-              onReceiveProgress: (received, total) => pending.emit(
+              onReceiveProgress: (received, total) => emit(
                 ImageLoadProgress(
                   ImageLoadStage.downloading,
                   receivedBytes: received,
@@ -179,12 +199,7 @@ class SourceImageLoader {
               'empty image response',
             );
           }
-          final bytes = res.bytes;
-          memoryCache.put(key, bytes);
-          // 磁盘写入不阻塞返回。
-          _trackWrite(diskCache.put(key, bytes));
-          pending.emit(_done(bytes));
-          return bytes;
+          return res.bytes;
         } on NetworkException catch (e) {
           final transient =
               e.kind == NetworkErrorKind.timeout ||

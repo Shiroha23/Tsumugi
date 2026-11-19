@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../shared/download/providers.dart';
 import '../../../shared/export/export_models.dart' show unitGroupsOf;
 import '../../../shared/history/providers.dart';
 import '../../../shared/image/source_image.dart';
@@ -9,6 +10,7 @@ import '../../../shared/library/providers.dart';
 import '../../../shared/widgets/source_error_view.dart';
 import '../../../sources/model/common.dart';
 import '../../../sources/runtime/source_runtime.dart';
+import '../../downloads/download_dialog.dart';
 import '../reading_order.dart';
 import 'media_detail_provider.dart';
 
@@ -103,6 +105,14 @@ class _MediaDetailPageState extends ConsumerState<MediaDetailPage> {
     final progress = ref
         .watch(itemProgressProvider(widget.sourceId, widget.itemId))
         .value;
+    final downloaded = {
+      for (final u
+          in ref
+                  .watch(downloadUnitsProvider(widget.sourceId, widget.itemId))
+                  .value ??
+              const <DownloadUnit>[])
+        u.unitId: u.status,
+    };
     final preview = widget.preview;
     final coverHeaders =
         preview != null &&
@@ -181,17 +191,25 @@ class _MediaDetailPageState extends ConsumerState<MediaDetailPage> {
               final read = readUnits.contains(unit.id);
               final current = progress?.unitId == unit.id;
               final muted = Theme.of(context).colorScheme.onSurfaceVariant;
+              final mark = current
+                  ? const Icon(Icons.bookmark, semanticLabel: '上次读到')
+                  : read
+                  ? Icon(Icons.check, color: muted, semanticLabel: '已读')
+                  : null;
+              final download = _downloadMark(downloaded[unit.id], muted);
               return ListTile(
                 title: Text(
                   unit.title,
                   style: read && !current ? TextStyle(color: muted) : null,
                 ),
                 subtitle: unit.updatedAt == null ? null : Text(unit.updatedAt!),
-                trailing: current
-                    ? const Icon(Icons.bookmark, semanticLabel: '上次读到')
-                    : read
-                    ? Icon(Icons.check, color: muted, semanticLabel: '已读')
-                    : null,
+                trailing: download == null
+                    ? mark
+                    : Row(
+                        mainAxisSize: MainAxisSize.min,
+                        spacing: 8,
+                        children: [download, ?mark],
+                      ),
                 // 打开上次读到的章节时从记录的页码继续。
                 onTap: () => context.push(
                   widget.readerLocation(unit.id, current ? progress : null),
@@ -206,6 +224,22 @@ class _MediaDetailPageState extends ConsumerState<MediaDetailPage> {
 
   /// 有 `groups`（多线路）时按线路展示，否则把 `units` 视为唯一一组。
   static List<UnitGroup> _groupsOf(Detail detail) => unitGroupsOf(detail);
+
+  /// 章节列表上的下载状态：已下载 / 排队或下载中；其他状态不标。
+  static Widget? _downloadMark(DownloadStatus? status, Color muted) =>
+      switch (status) {
+        DownloadStatus.done => Icon(
+          Icons.download_done,
+          color: muted,
+          semanticLabel: '已下载',
+        ),
+        DownloadStatus.queued || DownloadStatus.running => Icon(
+          Icons.downloading,
+          color: muted,
+          semanticLabel: '下载中',
+        ),
+        _ => null,
+      };
 }
 
 /// 加载中 / 出错时的页面骨架。
@@ -363,6 +397,16 @@ class _Actions extends ConsumerWidget {
     coverHeaders: coverHeaders,
   );
 
+  Future<void> _download(BuildContext context) async {
+    final n = await showDownloadDialog(context, item: _item, detail: detail);
+    if (n == null || !context.mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(content: Text(n == 0 ? '所选章节都已下载或已在队列中' : '已加入下载队列（$n 章）')),
+      );
+  }
+
   Future<void> _toggleLibrary(WidgetRef ref, bool inLibrary) async {
     final repo = ref.read(libraryRepositoryProvider);
     if (inLibrary) {
@@ -418,6 +462,14 @@ class _Actions extends ConsumerWidget {
               }),
               onPressed: read,
             ),
+            if (mediaType == MediaType.comic || mediaType == MediaType.novel)
+              OutlinedButton.icon(
+                icon: const Icon(Icons.download_outlined),
+                label: const Text('下载'),
+                onPressed: unitGroupsOf(detail).every((g) => g.units.isEmpty)
+                    ? null
+                    : () => _download(context),
+              ),
             ...?extraActions?.call(context, detail, coverHeaders),
           ],
         ),

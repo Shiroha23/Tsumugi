@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:tsumugi/core/storage/app_database.dart';
 import 'package:tsumugi/features/comic/reader/comic_reader_page.dart';
 import 'package:tsumugi/features/comic/reader/reader_preferences.dart';
 import 'package:tsumugi/features/comic/reader/reader_providers.dart';
@@ -15,6 +16,7 @@ import 'package:tsumugi/sources/model/content.dart';
 import 'package:tsumugi/sources/model/manifest.dart';
 import 'package:tsumugi/sources/source.dart';
 
+import '../../../core/storage/test_database.dart';
 import '../../../shared/image/image_fakes.dart';
 
 const _sourceId = 'com.example.comic';
@@ -80,13 +82,16 @@ void main() {
   late MemoryReaderPreferencesStore prefs;
   late FakeImageClient images;
   late List<ComicReadingProgress> progress;
+  late AppDatabase db;
 
   setUp(() {
+    db = openTestDatabase();
     source = FakeComicSource();
     prefs = MemoryReaderPreferencesStore();
     images = FakeImageClient((_) => png1x1);
     progress = [];
   });
+  tearDown(() => db.close());
 
   Future<void> open(
     WidgetTester tester, {
@@ -99,6 +104,8 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          // 阅读器先查下载记录（未下载时从源读取）。
+          appDatabaseProvider.overrideWithValue(db),
           comicReaderSourceProvider(_sourceId).overrideWith((ref) => source),
           readerPreferencesStoreProvider.overrideWithValue(prefs),
           sourceImageLoaderProvider.overrideWithValue(

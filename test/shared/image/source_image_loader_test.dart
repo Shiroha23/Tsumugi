@@ -394,6 +394,48 @@ void main() {
       expect(tmp.listSync(), isEmpty);
     });
   });
+
+  group('下载入口（architecture §4.5）', () {
+    test('不读写内存 / 磁盘缓存，每次都经该源的网络客户端', () async {
+      final disk = FileDiskImageCache(() async => tmp);
+      final loader = loaderWith(disk: disk);
+      final bytes = await loader.download(
+        'com.example.comic',
+        const ImageRef(url: _page1, headers: {'X-Test': '1'}),
+      );
+      expect(isPng(bytes), isTrue);
+      await loader.flushDiskWrites();
+      const key = ImageCacheKey('com.example.comic', _page1);
+      expect(loader.memoryCache.get(key), isNull);
+      expect(await disk.get(key), isNull);
+
+      // 已在缓存中的图片也不从缓存取。
+      await loader.load('com.example.comic', const ImageRef(url: _page2));
+      await loader.flushDiskWrites();
+      server.requests.clear();
+      await loader.download('com.example.comic', const ImageRef(url: _page2));
+      expect(server.requests.map((r) => r.path), ['/pages/2.png']);
+      expect(server.requests.single.headers['x-test'], isNull);
+    });
+
+    test('白名单在下载路径上同样生效', () async {
+      final loader = loaderWith();
+      await expectLater(
+        loader.download(
+          'com.example.comic',
+          const ImageRef(url: 'http://evil.example.net/x.png'),
+        ),
+        throwsA(
+          isA<SourceException>().having(
+            (e) => e.code,
+            'code',
+            SourceErrorCode.hostNotAllowed,
+          ),
+        ),
+      );
+      expect(server.requests, isEmpty);
+    });
+  });
 }
 
 /// 只统计并发数的假客户端。

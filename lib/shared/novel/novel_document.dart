@@ -178,7 +178,7 @@ final class NovelDivider extends NovelBlock {
 
 /// 一章的正文（可能由多次 `content` 的分页拼接而成）。
 final class NovelChapter {
-  NovelChapter(this.blocks, {this.imageHeaders}) {
+  NovelChapter(this.blocks, {this.imageHeaders, this.localImages}) {
     var offset = 0;
     for (final b in blocks) {
       _starts.add(offset);
@@ -191,6 +191,11 @@ final class NovelChapter {
 
   /// 加载正文图片时携带的 headers（源清单的默认 headers）。
   final Headers? imageHeaders;
+
+  /// 从下载读取的章节（architecture §4.5）：正文图片原地址 → 本地文件的绝对路径。
+  /// 不为 null 时阅读器只从本地文件加载图片，没有映射的显示「［图片：alt］」占位，不发起网络请求。
+  final Map<String, String>? localImages;
+
   final _starts = <int>[];
 
   /// 各块以 `\n` 连接后的总长度。

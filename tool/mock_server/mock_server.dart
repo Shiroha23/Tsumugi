@@ -74,7 +74,8 @@ class MockServer {
   /// 在设备上运行集成测试用（`main.dart --test-control`）：开启 `/__test/*` 控制接口——
   /// `GET /__test/requests`（已记录的请求，JSON）、`POST /__test/reset`（清空请求记录与计数器）、
   /// `POST /__test/repo-live?dir=<目录>`（设置 [liveRepository]）、
-  /// `GET /__test/fixture?path=<test/fixtures 下的相对路径>`（原样返回测试数据，如虚构源清单）。
+  /// `GET /__test/fixture?path=<test/fixtures 下的相对路径>`（原样返回测试数据，如虚构源清单）、
+  /// `POST /__test/offline?on=1|0`（模拟断网，见 [offline]）。
   /// 控制接口的请求本身不记录。设备读不到电脑上的 `test/fixtures/`，测试经这些接口取数据与断言请求。
   final bool testControl;
 
@@ -103,6 +104,10 @@ class MockServer {
   /// `/repo/live/` 对应的 `test/fixtures/repository/` 子目录。
   String liveRepository = defaultLiveRepository;
   static const defaultLiveRepository = 'flow-v1';
+
+  /// 模拟断网（下载后离线阅读的集成测试）：除 `/__test/*` 控制接口外，所有连接不发送响应直接断开，
+  /// 也不记入 [requests]。`POST /__test/reset` 时恢复。
+  bool offline = false;
 
   /// `/chunked?key=` 每个 key 已 flush 出去的字节数（测试用来确认超限后服务端停止发送）。
   final Map<String, int> chunkedSent = {};
@@ -142,6 +147,10 @@ class MockServer {
     final body = await utf8.decoder.bind(req).join();
     if (testControl && req.uri.path.startsWith('/__test/')) {
       return _testControl(req);
+    }
+    if (offline) {
+      (await req.response.detachSocket(writeHeaders: false)).destroy();
+      return;
     }
     requests.add(
       RecordedRequest(
@@ -186,6 +195,7 @@ class MockServer {
         requests.clear();
         _flakyCounters.clear();
         liveRepository = defaultLiveRepository;
+        offline = false;
         return res.close();
       case ('POST', '/__test/repo-live'):
         final dir = req.uri.queryParameters['dir'] ?? '';
@@ -194,6 +204,9 @@ class MockServer {
           return res.close();
         }
         liveRepository = dir;
+        return res.close();
+      case ('POST', '/__test/offline'):
+        offline = req.uri.queryParameters['on'] != '0';
         return res.close();
       case ('GET', '/__test/fixture'):
         final rel = req.uri.queryParameters['path'] ?? '';

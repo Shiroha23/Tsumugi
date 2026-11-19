@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import '../../../shared/download/providers.dart';
 import '../../../shared/history/providers.dart';
 import '../../../shared/library/library_item.dart';
 import '../../../sources/model/common.dart';
@@ -181,17 +182,29 @@ Future<Source> novelReaderSource(Ref ref, String sourceId) =>
     ref.watch(sourceInstanceProvider(sourceId).future);
 
 /// 作品详情（章节列表），在阅读器打开期间缓存。
+///
+/// 取不到（离线、源被删除 / 禁用）时，若该条目有下载，改用下载时的详情快照（architecture §4.5）。
 @Riverpod(retry: _noRetry)
 Future<Detail> novelReaderDetail(
   Ref ref,
   String sourceId,
   String itemId,
 ) async {
-  final source = await ref.watch(novelReaderSourceProvider(sourceId).future);
-  return source.detail(itemId);
+  try {
+    final source = await ref.watch(novelReaderSourceProvider(sourceId).future);
+    return await source.detail(itemId);
+  } on Object catch (e) {
+    if (!useDetailSnapshotFor(e)) rethrow;
+    final snapshot = await ref
+        .read(downloadLibraryProvider)
+        .detailSnapshot(sourceId, itemId);
+    if (snapshot != null) return snapshot;
+    rethrow;
+  }
 }
 
-/// 一章的正文：取 `content(unitId)`，按 `nextPageId` 依次拉取章节内的后续分页并拼接（§2.2.1）。
+/// 一章的正文：已下载时从本地读取（`chapter.json`，正文图片按 `unit.json` 的映射从本地加载，
+/// 见 [NovelChapter.localImages]）；否则取 `content(unitId)`，按 `nextPageId` 依次拉取章节内的后续分页并拼接（§2.2.1）。
 @Riverpod(retry: _noRetry)
 Future<NovelChapter> novelReaderChapter(
   Ref ref,
@@ -199,6 +212,10 @@ Future<NovelChapter> novelReaderChapter(
   String itemId,
   String unitId,
 ) async {
+  final local = await ref
+      .read(downloadLibraryProvider)
+      .novelChapter(sourceId, itemId, unitId);
+  if (local != null) return local;
   final source = await ref.watch(novelReaderSourceProvider(sourceId).future);
   // 章节 id 集合：用来识别“下一页”其实是下一章。只订阅不依赖——详情重试时不重新拉取正文；
   // 详情失败时不做此判断。

@@ -221,3 +221,69 @@ class UnitProgressEntries extends Table {
   @override
   Set<Column<Object>> get primaryKey => {sourceId, itemId, unitId};
 }
+
+/// 下载的条目（v6，docs/architecture.md §4.5）：标题 / 封面快照与下载时 `detail()` 的 JSON 快照，
+/// 源失效或离线时仍可打开目录。
+@DataClassName('DownloadItemRow')
+class DownloadItems extends Table {
+  TextColumn get sourceId => text()();
+
+  TextColumn get itemId => text()();
+
+  TextColumn get title => text()();
+
+  TextColumn get cover => text().nullable()();
+
+  TextColumn get coverHeaders =>
+      text().map(const StringMapConverter()).nullable()();
+
+  /// `MediaType.name`。
+  TextColumn get mediaType => text()();
+
+  /// 最近一次加入下载时 `Detail` 的 JSON。
+  TextColumn get detailJson => text()();
+
+  DateTimeColumn get createdAt => dateTime()();
+
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {sourceId, itemId};
+}
+
+/// 下载的 unit 及其状态（v6）。
+@DataClassName('DownloadUnitRow')
+class DownloadUnits extends Table {
+  TextColumn get sourceId => text()();
+
+  TextColumn get itemId => text()();
+
+  TextColumn get unitId => text()();
+
+  TextColumn get title => text()();
+
+  /// 所在线路的名称（`unitGroupsOf` 的分组）与在线路中的下标。
+  TextColumn get groupName => text()();
+
+  IntColumn get unitIndex => integer()();
+
+  /// `queued / running / paused / failed / done`，见 `shared/download` 的 `DownloadStatus`。
+  TextColumn get status => text()();
+
+  IntColumn get completedFiles => integer().withDefault(const Constant(0))();
+
+  IntColumn get totalFiles => integer().withDefault(const Constant(0))();
+
+  IntColumn get bytes => integer().withDefault(const Constant(0))();
+
+  /// 最近一次失败 / 暂停的错误码（如 `E_CHALLENGE`）；用户手动暂停时为 null。
+  TextColumn get errorCode => text().nullable()();
+
+  /// 加入队列的顺序（同一时间加入的按线路下标）。
+  IntColumn get queueOrder => integer()();
+
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {sourceId, itemId, unitId};
+}

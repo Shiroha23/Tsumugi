@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../shared/download/providers.dart';
 import '../../shared/webview/providers.dart';
 import '../../shared/widgets/empty_state.dart';
 import '../../sources/model/common.dart';
@@ -35,24 +36,47 @@ class _SourcesPageState extends ConsumerState<SourcesPage> {
   }
 
   Future<void> _confirmRemove(InstalledSource source) async {
+    final downloads = ref.read(downloadManagerProvider);
+    final hasDownloads = await downloads.repository.hasSource(source.id);
+    if (!mounted) return;
+    var deleteDownloads = false;
     final ok = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('删除源'),
-        content: Text('确定删除「${source.name}」吗？此操作不可撤销。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('取消'),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Text('删除源'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('确定删除「${source.name}」吗？此操作不可撤销。'),
+              // 默认保留下载（标“源已删除”，仍可离线阅读，architecture §4.5）。
+              if (hasDownloads)
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: deleteDownloads,
+                  onChanged: (v) =>
+                      setState(() => deleteDownloads = v ?? false),
+                  title: const Text('同时删除该源的下载'),
+                  subtitle: const Text('不勾选则保留，仍可离线阅读'),
+                ),
+            ],
           ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('删除'),
-          ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('删除'),
+            ),
+          ],
+        ),
       ),
     );
     if (ok != true) return;
+    if (deleteDownloads) await downloads.deleteSource(source.id);
     // 先取会话管理器：即使它此前尚未创建，删除也会立即清理该源的 Cookie 文件，
     // 不依赖之后的 registry 推送。
     final sessions = ref.read(sourceSessionsProvider);

@@ -38,6 +38,9 @@ abstract class TestMock {
   /// `test/fixtures/` 下的文件内容（如 `sources/mock_video_script.json`）。
   Future<String> fixture(String path);
 
+  /// 模拟断网：之后的连接都被直接断开（控制接口除外）。
+  Future<void> goOffline();
+
   Future<void> close();
 }
 
@@ -59,6 +62,9 @@ class _LocalMock implements TestMock {
   @override
   Future<String> fixture(String path) =>
       File('test/fixtures/$path').readAsString();
+
+  @override
+  Future<void> goOffline() async => server.offline = true;
 
   @override
   Future<void> close() => server.close();
@@ -128,6 +134,9 @@ class _RemoteMock implements TestMock {
   @override
   Future<String> fixture(String path) =>
       _get('/__test/fixture', {'path': path});
+
+  @override
+  Future<void> goOffline() => _post('/__test/offline', {'on': '1'});
 
   @override
   Future<void> close() async => _http.close(force: true);

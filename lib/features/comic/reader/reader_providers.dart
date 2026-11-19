@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:flutter/painting.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import '../../../shared/download/providers.dart';
 import '../../../shared/history/providers.dart';
 import '../../../shared/library/library_item.dart';
 import '../../../sources/model/common.dart';
@@ -180,27 +183,60 @@ Future<Source> comicReaderSource(Ref ref, String sourceId) =>
     ref.watch(sourceInstanceProvider(sourceId).future);
 
 /// 作品详情（用于章节列表），在阅读器打开期间缓存。
+///
+/// 取不到（离线、源被删除 / 禁用）时，若该条目有下载，改用下载时的详情快照（architecture §4.5）。
 @Riverpod(retry: _noRetry)
 Future<Detail> comicReaderDetail(
   Ref ref,
   String sourceId,
   String itemId,
 ) async {
-  final source = await ref.watch(comicReaderSourceProvider(sourceId).future);
-  return source.detail(itemId);
+  try {
+    final source = await ref.watch(comicReaderSourceProvider(sourceId).future);
+    return await source.detail(itemId);
+  } on Object catch (e) {
+    if (!useDetailSnapshotFor(e)) rethrow;
+    final snapshot = await ref
+        .read(downloadLibraryProvider)
+        .detailSnapshot(sourceId, itemId);
+    if (snapshot != null) return snapshot;
+    rethrow;
+  }
 }
 
-/// 章节内容（图片列表）。
+/// 一章的图片。[localFiles] 不为 null 时来自下载（与 [images] 一一对应），阅读器从本地文件加载。
+final class ComicReaderChapter {
+  const ComicReaderChapter(this.images, {this.localFiles});
+
+  final List<ImageRef> images;
+  final List<File>? localFiles;
+}
+
+/// 章节内容（图片列表）：已下载（`done` 且完成标记存在）时从本地读取、不调用 `content()`；
+/// 文件缺失或损坏时回退到网络，并把该章标为未下载。
 @Riverpod(retry: _noRetry)
-Future<ComicContent> comicReaderChapter(
+Future<ComicReaderChapter> comicReaderChapter(
   Ref ref,
   String sourceId,
+  String itemId,
   String unitId,
 ) async {
+  final local = await ref
+      .read(downloadLibraryProvider)
+      .comicPages(sourceId, itemId, unitId);
+  if (local != null) {
+    // 文件名固定（0001.png…）：重新下载后同一路径可能是新内容，丢弃解码缓存中的旧图。
+    for (final f in local) {
+      PaintingBinding.instance.imageCache.evict(FileImage(f));
+    }
+    return ComicReaderChapter([
+      for (final f in local) ImageRef(url: Uri.file(f.path).toString()),
+    ], localFiles: local);
+  }
   final source = await ref.watch(comicReaderSourceProvider(sourceId).future);
   final content = await source.content(unitId);
   if (content is! ComicContent) {
     throw const SourceException(SourceErrorCode.parse, '不是漫画内容');
   }
-  return content;
+  return ComicReaderChapter(content.images);
 }

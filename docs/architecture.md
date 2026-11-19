@@ -98,6 +98,7 @@ lib/
     comic/  novel/  video/  music/
     common/               # 各媒体共用的页面组件（作品详情、阅读顺序、列表条目行）
     library/  sources/  settings/  search/
+    downloads/            # 下载对话框、书架「下载」标签与条目的章节状态页（§4.5）
     explore/              # 发现页：选源 → 分类 → 可翻页列表（§5.1）
 test/
   fixtures/               # mock 页面与示例源（仅虚构站点）
@@ -113,7 +114,7 @@ docs/
 - **数据库**：`core/storage/app_database.dart` 中的 `AppDatabase`（drift），文件为应用支持目录下的
   `tsumugi.sqlite`（`getApplicationSupportDirectory`，不放在用户“文档”目录），SQL 在后台 isolate 执行。
   通过 `appDatabaseProvider` 获取，测试中用内存 SQLite 覆盖。
-- **迁移策略**：当前 `schemaVersion = 5`（v2 新增 `source_storage_entries`；v3 新增书架与进度三张表，见 §4.2；v4 为 `installed_sources` 新增 `settings_json`；v5 新增 `source_repositories` 与 `installed_sources.repository_url`，见 §4.4）。每次改表结构：`schemaVersion` 加一 →
+- **迁移策略**：当前 `schemaVersion = 6`（v2 新增 `source_storage_entries`；v3 新增书架与进度三张表，见 §4.2；v4 为 `installed_sources` 新增 `settings_json`；v5 新增 `source_repositories` 与 `installed_sources.repository_url`，见 §4.4；v6 新增下载两张表，见 §4.5）。每次改表结构：`schemaVersion` 加一 →
   `dart run drift_dev make-migrations`（把新 schema 导出到 `drift_schemas/`，生成 steps 文件与
   `test/core/storage/migrations/` 下的迁移测试）→ 在 `onUpgrade` 中用 `stepByStep` 写每一步。
   已发布的 `drift_schemas/*.json` 不可修改。数据库版本高于客户端时拒绝打开（不支持降级）。
@@ -222,12 +223,17 @@ docs/
 第一期支持漫画（按章节下载全部页）与小说（按章节下载正文与正文图片）。下载用于**应用内离线阅读**，
 与“导出”（§5.2，生成用户可带走的 TXT / EPUB）是两回事；导出以后可以优先读取已下载的章节，但不在第一期范围内。
 
+> 状态：第一期（漫画 / 小说）已实现（2026-11）：`shared/download/`（`DownloadManager` 队列、`DownloadStore` 文件、
+> `DownloadRepository` 表、`DownloadLibrary` 供阅读器读取）与 `features/downloads/`（下载对话框、书架「下载」标签、条目页）。
+
 - **存储位置**：应用支持目录下的 `downloads/`（与数据库同一目录树，系统不会当作缓存清理；不放在用户文档目录）。
   路径一律由哈希与序号生成，**不使用源返回的任何字符串**（标题、id、URL）作为文件名：
-  `downloads/<sha256(sourceId)>/<sha256(itemId)>/<sha256(unitId)>/`，其中漫画页为 `0001.<ext>` 起编号，
+  `downloads/<h(sourceId)>/<h(itemId)>/<h(unitId)>/`，`h` 为 sha256 的前 32 位十六进制（128 位）——完整的 64 位会使三段目录
+  加上 Windows 的应用支持目录超过 `MAX_PATH`（260 字符，实测目录列举失败）。其中漫画页为 `0001.<ext>` 起编号，
   小说为 `chapter.json`（清洗后的 `NovelChapter` 序列化结果）与 `img-NNNN.<ext>`。扩展名按文件头识别（PNG / JPEG / GIF / WebP，
   与导出一致），识别不了的图片视为失败。
   每个 unit 目录有一份 `unit.json`：按序列出每个文件对应的**来源标识**（图片地址 + 请求头的规范化 JSON 的 sha256）与本地文件名。
+  读取时严格校验：文件名必须是上面两种由客户端生成的形式（拒绝 `..`、分隔符等），否则整份记录视为损坏。
   小说正文中的图片在 `chapter.json` 里保留原地址，`unit.json` 给出“原地址 → 本地文件”的映射；离线阅读时阅读器按映射
   从本地文件加载（没有映射或文件缺失的图片显示与导出相同的「［图片：alt］」占位，不发起网络请求）。
 - **表**：`download_items`（主键 `(sourceId, itemId)`：标题 / 封面 / 封面请求头 / `mediaType` 快照，以及下载时 `detail()` 结果的
@@ -237,17 +243,28 @@ docs/
   （同样走该源的网络客户端：白名单、限速、Cookie、默认 headers、`ImageRef.headers`、`maxResponseBytes`），
   小说正文经 `loadNovelChapter`（分页拼接与白名单清洗与阅读器一致），正文图片的单张 / 合计上限沿用导出的默认值。
   先写临时文件、校验后再改名，目录内另写一个完成标记；没有完成标记的 unit 视为未下载。
+  加载器的下载入口（`SourceImageLoader.download`）既不写也不读内存 / 磁盘缓存，也不与阅读器同一图片的请求合并；
+  小说中超过单张 / 合计上限的图片不算失败，保留占位（与导出一致），其余图片失败或格式不认识时 unit 进入 `failed`。
+  上限（下载目录不是缓存，不会被淘汰）：漫画一章最多 2000 页、合计 1 GiB，超过时 unit 以 `E_LIMIT` 失败；
+  小说一章最多 500 张正文图片，之后的以及超过单张 / 合计上限的图片保留占位，并在 `unit.json` 中记为跳过，续传时不再请求。
+  `unit.json` 每写完 10 个文件重写一次，出错、取消与结束时再写一次。
 - **并发与续传**：一个全局队列；同一源一次只下载一个 unit（避免与浏览抢限速），不同源最多同时 2 个 unit；
   图片并发受加载器的全局上限（6）约束。续传以文件为粒度，不做 HTTP 区间续传：继续或重试时重新调用 `content()`，
   把新结果的来源标识列表与 `unit.json` 比较——完全一致才跳过已写完的文件；不一致（源换了图片、顺序或数量）时
   丢弃该 unit 已下载的文件，从头下载，避免新旧内容混在一起。
+  暂停 / 删除不中断进行中的请求：当前的 `content()` 或图片请求结束后停止，结果丢弃；任务结束时只在 unit 仍为 `running`
+  时写入结果（暂停与队列认领之间的竞态不会覆盖暂停）。下载调用的脚本若调用 `tsumugi.ui.openWebView`，与浏览时一样
+  受 §5.3 的前台 / 单例 / 冷却限制，用户取消后该 unit 按 `E_CHALLENGE` 暂停整个源。
   应用退出时进行中的 unit 回到 `queued`，下次启动后继续。第一期不做后台下载（Android 前台服务 / iOS 后台任务），
-  应用被系统挂起时暂停——作为已知限制记 issue。
+  应用被系统挂起时暂停——已知限制，见 #74。
 - **错误**：单页 / 单图失败按网络层既有的重试后，unit 进入 `failed`，可单独重试；`E_CHALLENGE` / `E_LOGIN_REQUIRED`
   暂停**该源**的全部下载，下载页提供「打开验证页」，完成后自动继续；源被删除 / 禁用时该源的队列暂停。
+  “源暂停”不单独存表：出错的 unit 记为 `paused` 并带错误码（`E_CHALLENGE` / `E_LOGIN_REQUIRED` / 内部的 `E_SOURCE_UNAVAILABLE`），
+  队列不再为有这类 unit 的源开始新任务，重启后同样生效；恢复源时把这些 unit 改回 `queued`。
 - **阅读器接入**：漫画 / 小说阅读器打开 unit 时先查 `download_units`，状态为 `done` 且完成标记存在则从本地读取，不调用 `content()`；
-  文件缺失或损坏时回退到网络并把该 unit 标为未下载。离线时（详情取不到）可从「下载」页按快照打开目录与已下载章节。
-  进度照常写入 `HistoryRepository`。
+  文件缺失或损坏时回退到网络并把该 unit 标为未下载（`failed`，错误码 `E_FILES_MISSING`，删除残留文件，可在下载页重试）。
+  漫画页在阅读器中解码失败时同样处理。离线时（详情取不到）可从「下载」页按快照打开目录与已下载章节：
+  阅读器的详情取不到（任何错误）且该条目有下载时，改用下载时的 `detail()` 快照。进度照常写入 `HistoryRepository`。
 - **删除**：按 unit / 条目删除，或在设置中查看总占用并清空；删除源时询问是否一并删除其下载（默认保留，标“源已删除”，仍可阅读）。
 - **界面**：详情页「下载」（选择线路与章节范围，同导出）；书架新增「下载」页签（条目 → 章节状态、进度、暂停 / 继续 / 重试 / 删除）；
   章节列表上标出已下载。
@@ -603,9 +620,10 @@ tsumugi.ui.openWebView ────────┘   （单飞 / 节流） └�
 | `app_flow_test.dart` | 真实路由与引擎：加载 JS 脚本源 → 搜索 → 详情 → 漫画阅读器翻页（漫画页经源的图片客户端加载）；小说阅读器翻页模式翻到下一章；导出 TXT / EPUB | ✓ | ✓（本机 + CI） | CI | — |
 | `script_stack_depth_test.dart` | QuickJS 原生库加载与栈上限；release 下测深度（文件头注释） | ✓ | ✓（本机 + CI） | CI | Android release 实测 |
 | `video_playback_test.dart` | 真实 libmpv 经媒体代理播放（§6.4.2） | ✓ | ✗（见下） | — | Android |
+| `download_offline_test.dart` | 下载漫画章节与带插图的小说章节 → mock 服务器断网 → 从书架「下载」标签离线阅读（§4.5） | ✓ | ✓（本机 + CI） | CI | — |
 
 - **mock 服务器**（`integration_test/test_mock.dart`）：桌面上在测试进程内启动；设备 / 模拟器读不到电脑上的 `test/fixtures/`，
-  改为连接电脑上以 `--test-control` 启动的服务器（经 `/__test/*` 取测试数据、读请求记录）。所有 HTTP 连接都经自定义连接接到它，
+  改为连接电脑上以 `--test-control` 启动的服务器（经 `/__test/*` 取测试数据、读请求记录、`/__test/offline` 模拟断网）。所有 HTTP 连接都经自定义连接接到它，
   虚构主机名照常可用，白名单仍按虚构主机名检查。
 - **本机运行**：
 

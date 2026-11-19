@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../shared/download/providers.dart';
 import '../shared/webview/providers.dart';
 import '../sources/repository/providers.dart';
 import 'router.dart';
@@ -13,6 +14,8 @@ class TsumugiApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     // 规则仓库：启动时与每 24 h 检查更新（architecture §4.4）。
     ref.watch(repositoryUpdateSchedulerProvider);
+    // 启动下载队列：继续上次未完成的下载（architecture §4.5）。
+    ref.watch(downloadManagerProvider);
     return MaterialApp.router(
       title: 'Tsumugi',
       theme: buildTheme(Brightness.light),
