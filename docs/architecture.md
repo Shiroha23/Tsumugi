@@ -36,7 +36,7 @@
 | 文本编码 | 自实现 WHATWG Encoding 解码器（纯 Dart，无新依赖） | #22：GBK / GB18030 / Big5 / Shift_JIS / EUC-KR / 单字节编码，见 §6.3 |
 | 压缩 / ZIP | [`archive`](https://pub.dev/packages/archive)（MIT） | M3 选定：生成 EPUB（OCF ZIP 容器），纯 Dart，三平台一致，见 §5.2「小说导出」 |
 | 文件选择 / 保存 | [`file_picker`](https://pub.dev/packages/file_picker)（MIT） | M1 导入清单；M3 起 `saveFile` 用于保存导出文件 |
-| 凭据存储 | [`flutter_secure_storage`](https://pub.dev/packages/flutter_secure_storage)（BSD-3） | M6：WebDAV 密码，见 §4.6；引入时再核对当时的最新稳定版与三平台支持 |
+| 凭据存储 | [`flutter_secure_storage`](https://pub.dev/packages/flutter_secure_storage) 11.2.0（BSD-3，含各平台实现包） | M6：WebDAV 密码，见 §4.6；Android 7.0+（插件 minSdk 24；RSA OAEP + AES-GCM）、iOS 13+（Keychain）、Windows（DPAPI 加密的 JSON 文件，旧版凭据管理器数据经 C++ 插件兼容读取，构建需 VS 的 C++ ATL） |
 | WebDAV | 自实现（基于 dio） | M6：只需 `PROPFIND` / `MKCOL` / `GET` / `PUT`，见 §4.6 |
 
 依赖版本在引入时以 pub.dev 最新稳定版为准，并锁定在 `pubspec.lock`。
@@ -114,7 +114,7 @@ docs/
 - **数据库**：`core/storage/app_database.dart` 中的 `AppDatabase`（drift），文件为应用支持目录下的
   `tsumugi.sqlite`（`getApplicationSupportDirectory`，不放在用户“文档”目录），SQL 在后台 isolate 执行。
   通过 `appDatabaseProvider` 获取，测试中用内存 SQLite 覆盖。
-- **迁移策略**：当前 `schemaVersion = 6`（v2 新增 `source_storage_entries`；v3 新增书架与进度三张表，见 §4.2；v4 为 `installed_sources` 新增 `settings_json`；v5 新增 `source_repositories` 与 `installed_sources.repository_url`，见 §4.4；v6 新增下载两张表，见 §4.5）。每次改表结构：`schemaVersion` 加一 →
+- **迁移策略**：当前 `schemaVersion = 7`（v2 新增 `source_storage_entries`；v3 新增书架与进度三张表，见 §4.2；v4 为 `installed_sources` 新增 `settings_json`；v5 新增 `source_repositories` 与 `installed_sources.repository_url`，见 §4.4；v6 新增下载两张表，见 §4.5；v7 为 WebDAV 同步新增 `sync_state` / `sync_tombstones`、参与同步的表加 `modified_at` 与改动跟踪触发器，见 §4.6）。每次改表结构：`schemaVersion` 加一 →
   `dart run drift_dev make-migrations`（把新 schema 导出到 `drift_schemas/`，生成 steps 文件与
   `test/core/storage/migrations/` 下的迁移测试）→ 在 `onUpgrade` 中用 `stepByStep` 写每一步。
   已发布的 `drift_schemas/*.json` 不可修改。数据库版本高于客户端时拒绝打开（不支持降级）。
@@ -172,7 +172,7 @@ docs/
 
 ### 4.3 M6 总览：规则仓库订阅、下载管理、WebDAV 同步
 
-> 状态：设计已定（2026-11-19）。规则仓库订阅（§4.4）已实现（v5）；下载管理、WebDAV 同步尚未实现。下列三项相互独立，可并行开发；各自新增的表在合并时按合并顺序
+> 状态：设计已定（2026-11-19）。规则仓库订阅（§4.4，v5）、下载管理第一期（§4.5，v6）、WebDAV 同步（§4.6，v7）均已实现。下列三项相互独立，可并行开发；各自新增的表在合并时按合并顺序
 > 依次占用 `schemaVersion`（5、6、7…），后合并的 PR 在变基时重新生成迁移，已合并的 `drift_schemas/*.json` 不改。
 
 已定的取舍（2026-11-19）：
@@ -275,7 +275,7 @@ docs/
 
 - **服务器配置**：地址、用户名、密码，以及远端目录（默认 `Tsumugi/`）。密码存系统安全存储
   （[`flutter_secure_storage`](https://pub.dev/packages/flutter_secure_storage)，BSD-3：Android Keystore、iOS Keychain、
-  Windows 凭据存储 / DPAPI），**不写入数据库或任何 JSON 文件**。只允许 `https`（回环地址例外，用于测试）。
+  Windows DPAPI），**不写入数据库或应用自己的任何文件**（Windows 上由插件写 DPAPI 加密的文件）。只允许 `https`（回环地址例外，用于测试）。
   WebDAV 客户端用 dio 自行实现所需的 `PROPFIND` / `MKCOL` / `GET` / `PUT`，不引入额外依赖。
 - **数据文件**：远端一个 `sync-v1.json`（gzip 压缩，解压后不超过 20 MiB）。内容是按记录的集合：书架条目、条目进度、unit 进度、
   已安装源、仓库订阅；每条记录带 `modifiedAt`（UTC 毫秒）与写入设备的 `deviceId`，删除以墓碑记录（`deleted: true`）表示。
@@ -288,15 +288,51 @@ docs/
     （墓碑可能已清理），按删除处理；晚于上次同步时间的（本机之后新建或修改的）保留并上传。从未同步过的设备，本地记录全部保留。
     因此墓碑只是加速与保留删除时间的手段，保留 90 天后清理不会让长期离线设备把已删除的记录“复活”。
   - “上次成功同步时间”只在 `PUT` 成功（或远端未变、无需写入）后更新；更换服务器地址或远端目录时清空，按从未同步处理。
+  - **远端整个文件不存在**（被删除、换了目录）时也按从未同步处理，本地记录全部保留并重新上传，不会因为文件丢失而清空本地；
+    远端文件中缺少某个集合时，该集合同样按从未同步处理。
 - **写入**：先 `GET`（带上次 ETag，未变则跳过下载）→ 合并 → 写本地 → `PUT`：远端已有文件时带 `If-Match: <ETag>`，
   远端还没有文件（首次同步）时带 `If-None-Match: *`，避免两台设备同时首次同步时互相覆盖。收到 412 说明期间有别的设备写入，
-  重新下载、合并、再写，最多 3 次。服务器不返回 ETag 或不支持条件请求时退化为“读—合并—写”，并在设置中提示“服务器不支持并发保护”。
+  重新下载、合并、再写，最多 3 次。服务器不返回（强）ETag 或不支持条件请求时退化为“读—合并—写”，并在设置中提示“服务器不支持并发保护”。
 - **源的同步需要用户确认**：合并结果中**本机没有的源**或**清单有变化的源**，不直接安装，而是列出（名称、来源、将访问的主机，
   主机变化同 §4.4 高亮）等用户确认；未确认的保留在“待安装”列表里。理由：远端文件可能被他人修改，清单安装必须和本地导入一样经过预览。
   已有源的启用状态、排序与设置直接合并（设置写入前照常经 `sanitizeSettingValues` 过滤）。
 - **触发**：手动「立即同步」；启用后在应用启动、回到前台、以及本地有改动后 2 min 内自动同步；同时只有一个同步在进行。
   失败只在设置页显示最近一次的错误，不打断阅读。
 - **不同步的数据**：见 §4.3 的表。远端文件是明文 JSON（压缩），存放在用户自己的服务器上；设置页说明这一点。
+
+**实现细节（M6 实现时补充）**
+
+- **`modifiedAt` 由 SQLite 触发器维护**（`core/storage/sync_triggers.drift`），不在各仓库方法里手写：参与同步的表
+  （`library_entries`、`item_progress_entries`、`unit_progress_entries`、`installed_sources`，以及 `source_repositories`）插入后、
+  或参与同步的列变化后，把 `modified_at` 置为当前 UTC 毫秒；删除后在 `sync_tombstones` 记一条墓碑（仅在已配置服务器时记录，
+  未启用同步的用户不会积累墓碑），重新插入同一主键时删除其墓碑。这样以后新增的写入路径也自动被跟踪。
+  只改不参与同步的列不算改动：例如书架的 `updatedAt`（详情页每次刷新元数据都会写）、已安装源的冗余索引列与 `updatedAt`。
+  同步把合并结果写回本地时置 `sync_state.applying = 1`（与写入在同一事务中），触发器据此不改 `modified_at`、不记墓碑。
+- **记录格式**：`{"syncVersion": 1, "collections": {"library": [...], "itemProgress": [...], "unitProgress": [...],
+  "sources": [...], "repositories": [...]}}`，每条 `{"key": [主键…], "modifiedAt": 毫秒, "deviceId": "…", "deleted": false, "data": {…}}`
+  （墓碑没有 `data`）。不认识的集合与记录顶层的未知字段原样保留并写回（`data` 内的未知字段只在远端记录胜出时保留：本机胜出时按本机的列重建 `data`）；JSON 嵌套超过 64 层的文件按格式错误拒绝；`data` 不合法的记录不应用到本地，但仍保留在远端文件中。
+  已安装源的 `data` 为 `manifest`（清单原文）、`enabled`、`sortOrder`、`settings`、`originKind`、`originUrl`（以及 m6-repo 的所属仓库地址）。
+- **本地记录的 `deviceId` 不单独存列**：本地行与远端记录 `modifiedAt` 相同且内容相同，视为同一条（沿用远端的 `deviceId`）；
+  内容不同则本地是本机写入的，`deviceId` 取本机。合并结果中本机胜出的记录写本机 `deviceId`。
+- **“上次成功同步时间”取本地快照时刻减 1 ms**：快照在读本地数据的事务中取 SQLite 时钟 `T`，`PUT` 成功后记为 `T - 1`；
+  这样快照之后（哪怕同一毫秒）的本地改动都晚于它，不会在下次同步被误判为“已上传后被删除”。
+- **源的取舍**：本机已有、清单相同的源，远端胜出时直接合并启用状态、排序与设置（设置经 `sanitizeSettingValues` 按本机清单过滤）；
+  来源（`originKind` / `originUrl`）不直接合并，也不参与“内容是否相同”的比较。远端胜出且本机没有或清单不同时进入“待安装”：
+  本机行（若有）只合并启用 / 排序 / 设置，保持原 `modifiedAt`，下次同步远端仍胜出，结果稳定。用户在设置页逐个预览确认安装
+  （`SourceRegistry.prepareImport`；安装后的来源一律记为本地来源“WebDAV 同步”——同步文件里的来源是远端声称的、未经验证，预览中标为“未验证”，不据此把源记为来自某个仓库），装好后把远端的启用 / 排序 / 设置与 `modifiedAt` 写入本机行。
+  “待安装”列表存于 `sync_state.pending_sources_json`，每次同步按合并结果重算；用户“忽略”的项在该记录的 `modifiedAt` 变化前不再出现。
+- **仓库订阅**：记录主键为规范化后的 `index.json` 地址，`data` 只有 `addedAt`。名称与索引不同步，检查更新时刷新它们也不算改动；同步来的新订阅先以地址作名称、索引为空，等本机下次检查更新时取得（取索引照常经 `RepositoryHttpClient` 的全部限制）。地址必须通过 `normalizeRepositoryUrl` 且与规范化结果相同，否则该记录不应用。同步来的订阅只会让本机去取该仓库的索引并提示可更新，安装与更新仍须用户预览确认。退订同样同步；已装的源保留（显示“仓库已移除”）。
+- **清单按版本取高者**：同一个源两边都有时，整条记录按 `modifiedAt` 决定启用 / 排序 / 设置，但清单取版本较高的一方（`RowRecords.newerManifest`）。否则还没更新的设备改一下启用状态，就会用旧清单覆盖远端，其他设备得到一个无法安装的“降级”。
+- **时钟与篡改**：远端记录的 `modifiedAt` 比本机时钟晚 1 天以上时按“现在”处理，避免一条未来时间的记录或墓碑永远压过本机的修改。
+- **服务器不支持条件写入时**（远端文件没有 ETag，或只有弱 ETag `W/…`）：“远端没有且不晚于上次同步时间的本地记录按删除处理”这条规则不生效，删除只靠墓碑传播——没有并发保护时，远端可能被别的设备的无条件写入覆盖，不能把“远端没有”当成“已被删除”。代价是墓碑过期（90 天）后，长期离线的设备可能让已删除的记录重新出现。
+- **密码只用于同一服务器**：配置时密码留空表示沿用已保存的密码，但只限协议、主机、端口与用户名都没变；否则必须重新填写，并先删除旧密码再保存新配置（`sameCredentialScope`）。
+- **远端快照缓存**：`GET` 返回 304 时需要上次的远端内容才能合并，因此 `sync_state` 同时保存上次远端文件的压缩字节与 ETag。
+- **代码结构**：`shared/sync/` 下 `webdav_client.dart`（地址校验与四个方法）、`sync_document.dart`（文件格式、gzip 限长解压）、
+  `sync_merge.dart`（纯函数合并，单元测试覆盖合并规则）、`sync_records.dart` / `sync_store.dart`（表与记录的转换、在一个事务中
+  读快照—合并—写回）、`sync_service.dart`（下载—合并—上传、412 重试、待安装源的预览与安装）、`sync_scheduler.dart`（自动触发）、
+  `credential_store.dart`（`flutter_secure_storage`）；界面在 `features/settings/sync/`。mock 服务器的 `/dav/` 是测试用的最小 WebDAV。
+- **客户端**：独立的 dio 实例，无 Cookie、固定 UA、不跟随重定向（3xx 视为错误，凭据不会被带到别的地址）、每个请求（含读完响应体）总时长 60 s，超时取消；不接受传输压缩（`Accept-Encoding: identity`，避免代理改写 ETag）；上传带 `Content-Length`；错误响应体最多读 64 KiB；
+  只支持 Basic 认证（经 HTTPS）。地址中不允许带用户名 / 密码。下载的文件压缩后、解压后都不超过 20 MiB，单个源清单不超过 4 MiB。
 
 ## 5. 关键流程
 

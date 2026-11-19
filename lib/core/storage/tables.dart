@@ -56,6 +56,10 @@ class InstalledSources extends Table {
   /// 仓库被退订后保留原值，用于显示“仓库已移除”。
   TextColumn get repositoryUrl => text().nullable()();
 
+  /// 最后一次参与同步的改动时间（UTC 毫秒，v7，architecture §4.6）。由 `sync_triggers.drift` 中的触发器维护，
+  /// 业务代码不写；0 表示升级前已有、从未改动过的行。
+  IntColumn get modifiedAt => integer().withDefault(const Constant(0))();
+
   @override
   Set<Column<Object>> get primaryKey => {id};
 }
@@ -85,6 +89,10 @@ class SourceRepositories extends Table {
 
   /// [indexJson] 原始字节的 sha256。
   TextColumn get indexSha256 => text()();
+
+  /// 最后一次参与同步的改动时间（UTC 毫秒，v7，architecture §4.6），由触发器维护。只有订阅与退订算改动：
+  /// 检查更新时刷新的名称与索引不同步。
+  IntColumn get modifiedAt => integer().withDefault(const Constant(0))();
 
   @override
   Set<Column<Object>> get primaryKey => {url};
@@ -156,6 +164,10 @@ class LibraryEntries extends Table {
   /// 条目元数据最后一次刷新时间（加入、更新标题封面等）。
   DateTimeColumn get updatedAt => dateTime()();
 
+  /// 最后一次参与同步的改动时间（UTC 毫秒，v5，architecture §4.6）。由 `sync_triggers.drift` 中的触发器维护，
+  /// 业务代码不写；0 表示升级前已有、从未改动过的行。
+  IntColumn get modifiedAt => integer().withDefault(const Constant(0))();
+
   @override
   Set<Column<Object>> get primaryKey => {sourceId, itemId};
 }
@@ -195,6 +207,10 @@ class ItemProgressEntries extends Table {
 
   DateTimeColumn get updatedAt => dateTime()();
 
+  /// 最后一次参与同步的改动时间（UTC 毫秒，v5，architecture §4.6）。由 `sync_triggers.drift` 中的触发器维护，
+  /// 业务代码不写；0 表示升级前已有、从未改动过的行。
+  IntColumn get modifiedAt => integer().withDefault(const Constant(0))();
+
   @override
   Set<Column<Object>> get primaryKey => {sourceId, itemId};
 }
@@ -217,6 +233,10 @@ class UnitProgressEntries extends Table {
   BoolColumn get read => boolean().withDefault(const Constant(false))();
 
   DateTimeColumn get updatedAt => dateTime()();
+
+  /// 最后一次参与同步的改动时间（UTC 毫秒，v5，architecture §4.6）。由 `sync_triggers.drift` 中的触发器维护，
+  /// 业务代码不写；0 表示升级前已有、从未改动过的行。
+  IntColumn get modifiedAt => integer().withDefault(const Constant(0))();
 
   @override
   Set<Column<Object>> get primaryKey => {sourceId, itemId, unitId};
@@ -286,4 +306,72 @@ class DownloadUnits extends Table {
 
   @override
   Set<Column<Object>> get primaryKey => {sourceId, itemId, unitId};
+}
+
+/// WebDAV 同步的本机状态（v7，architecture §4.6），只有 `id = 1` 一行，首次需要时创建。
+///
+/// 密码不在这里：只存系统安全存储。
+@DataClassName('SyncStateRow')
+class SyncState extends Table {
+  IntColumn get id => integer()();
+
+  /// 本机的随机标识（合并平局时按字典序比较）。
+  TextColumn get deviceId => text()();
+
+  /// 同步正在把合并结果写回本地：触发器据此不改 `modified_at`、不记墓碑。只在同步的写入事务内为 true。
+  BoolColumn get applying => boolean().withDefault(const Constant(false))();
+
+  /// 是否启用自动同步（启动、回到前台、本地改动后）。
+  BoolColumn get enabled => boolean().withDefault(const Constant(false))();
+
+  /// 服务器地址；null 表示未配置（此时触发器不记墓碑）。
+  TextColumn get serverUrl => text().nullable()();
+
+  TextColumn get username => text().nullable()();
+
+  /// 远端目录（相对服务器地址），如 `Tsumugi/`。
+  TextColumn get remoteDir => text().nullable()();
+
+  /// 上次成功同步的本地快照时刻减 1 ms（UTC 毫秒）；null 表示从未同步。
+  IntColumn get lastSyncAt => integer().nullable()();
+
+  /// 上次读到 / 写入的远端文件 ETag。
+  TextColumn get remoteEtag => text().nullable()();
+
+  /// 与 [remoteEtag] 对应的远端文件（压缩字节），GET 返回 304 时用于合并。
+  BlobColumn get remoteSnapshot => blob().nullable()();
+
+  /// 服务器不返回 ETag：退化为“读—合并—写”，设置页提示不支持并发保护。
+  BoolColumn get conditionalUnsupported =>
+      boolean().withDefault(const Constant(false))();
+
+  /// 最近一次同步尝试的时间（UTC 毫秒）与错误（null 为成功）。
+  IntColumn get lastAttemptAt => integer().nullable()();
+
+  TextColumn get lastError => text().nullable()();
+
+  /// 待用户确认安装的源（JSON 数组），每次同步按合并结果重算。
+  TextColumn get pendingSourcesJson => text().nullable()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+}
+
+/// 被删除的同步记录（v7）：集合名 + 主键（不足三段的用空串补齐）+ 删除时间。保留 90 天。
+@DataClassName('SyncTombstoneRow')
+class SyncTombstones extends Table {
+  /// `library` / `itemProgress` / `unitProgress` / `sources` / `repositories`。
+  TextColumn get collection => text()();
+
+  TextColumn get key1 => text()();
+
+  TextColumn get key2 => text().withDefault(const Constant(''))();
+
+  TextColumn get key3 => text().withDefault(const Constant(''))();
+
+  /// 删除时间（UTC 毫秒）。
+  IntColumn get deletedAt => integer()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {collection, key1, key2, key3};
 }

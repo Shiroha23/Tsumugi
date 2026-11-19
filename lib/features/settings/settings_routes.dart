@@ -4,4 +4,9 @@ abstract final class SettingsRoutes {
 
   /// 相对 `/settings` 的子路由路径。
   static const aboutPattern = 'about';
+
+  /// 「WebDAV 同步」页（M6）。
+  static const sync = '/settings/sync';
+
+  static const syncPattern = 'sync';
 }

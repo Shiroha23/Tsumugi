@@ -13,6 +13,7 @@ import '../features/search/search_page.dart';
 import '../features/settings/about/about_page.dart';
 import '../features/settings/settings_page.dart';
 import '../features/settings/settings_routes.dart';
+import '../features/settings/sync/sync_settings_page.dart';
 import '../features/sources/sources_page.dart';
 import '../features/video/detail/video_detail_page.dart';
 import '../features/video/video_routes.dart';
@@ -86,6 +87,10 @@ GoRouter router(Ref ref) {
                   GoRoute(
                     path: SettingsRoutes.aboutPattern,
                     builder: (_, _) => const AboutPage(),
+                  ),
+                  GoRoute(
+                    path: SettingsRoutes.syncPattern,
+                    builder: (_, _) => const SyncSettingsPage(),
                   ),
                 ],
               ),

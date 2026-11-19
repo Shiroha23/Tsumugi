@@ -5,6 +5,7 @@ import 'package:tsumugi/core/storage/app_database.dart';
 
 import 'generated/schema.dart';
 import 'generated/schema_v4.dart' as v4;
+import 'generated/schema_v5.dart' as v5;
 
 /// v4 → v5：新增 `source_repositories`；已安装源保留，`repository_url` 为 null。
 void main() {
@@ -39,24 +40,30 @@ void main() {
 
     final db = AppDatabase(schema.newConnection());
     await verifier.migrateAndValidate(db, 5);
+    await db.close();
 
-    final row = await db.select(db.installedSources).getSingle();
+    // 用 v5 的表定义读写（当前的 AppDatabase 已有更高版本才加的列）。
+    final migrated = v5.DatabaseAtV5(schema.newConnection());
+    final row = await migrated.select(migrated.installedSources).getSingle();
     expect(row.id, 'com.example.comic');
     expect(row.settingsJson, '{"q":"low"}');
     expect(row.repositoryUrl, isNull);
-    expect(await db.select(db.sourceRepositories).get(), isEmpty);
-    await db
-        .into(db.sourceRepositories)
+    expect(await migrated.select(migrated.sourceRepositories).get(), isEmpty);
+    await migrated
+        .into(migrated.sourceRepositories)
         .insert(
-          SourceRepositoriesCompanion.insert(
+          v5.SourceRepositoriesCompanion.insert(
             url: 'https://example.com/index.json',
             name: 'Repo',
-            addedAt: DateTime.utc(2026, 11, 19),
+            addedAt: 0,
             indexJson: '{}',
             indexSha256: 'def',
           ),
         );
-    expect(await db.select(db.sourceRepositories).get(), hasLength(1));
-    await db.close();
+    expect(
+      await migrated.select(migrated.sourceRepositories).get(),
+      hasLength(1),
+    );
+    await migrated.close();
   });
 }
