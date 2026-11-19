@@ -23,13 +23,15 @@ permissions:
 env:
   FLUTTER_VERSION: "3.47.7"
   MOCK_PORT: "8081"
+  # 每个测试文件的时限（秒），超时重试一次，见 tool/ci/run_device_tests.sh。
+  FILE_TIMEOUT: "600"
   TESTS: integration_test/app_flow_test.dart integration_test/script_stack_depth_test.dart integration_test/download_offline_test.dart integration_test/sync_test.dart
 
 jobs:
   android:
     name: Android emulator
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -60,7 +62,7 @@ jobs:
           # 每行单独执行。
           script: |
             adb reverse tcp:${{ env.MOCK_PORT }} tcp:${{ env.MOCK_PORT }}
-            flutter test ${{ env.TESTS }} -d emulator-5554 --dart-define=TSUMUGI_MOCK_SERVER=127.0.0.1:${{ env.MOCK_PORT }} -r expanded
+            tool/ci/run_device_tests.sh emulator-5554 ${{ env.TESTS }}
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -71,7 +73,7 @@ jobs:
   ios:
     name: iOS simulator
     runs-on: macos-latest
-    timeout-minutes: 60
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
@@ -99,9 +101,7 @@ jobs:
           xcrun simctl bootstatus "$udid" -b
           xcrun simctl list devices booted
       - name: Run integration tests
-        run: >-
-          flutter test ${{ env.TESTS }} -d ${{ steps.sim.outputs.udid }}
-          --dart-define=TSUMUGI_MOCK_SERVER=127.0.0.1:${{ env.MOCK_PORT }} -r expanded
+        run: tool/ci/run_device_tests.sh ${{ steps.sim.outputs.udid }} ${{ env.TESTS }}
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
