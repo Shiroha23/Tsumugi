@@ -4,6 +4,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../features/comic/detail/comic_detail_page.dart';
 import '../features/comic/detail/comic_routes.dart';
 import '../features/comic/reader/reader_route.dart';
+import '../features/downloads/download_routes.dart';
 import '../features/explore/explore_page.dart';
 import '../features/library/library_page.dart';
 import '../features/novel/detail/novel_detail_page.dart';
@@ -91,6 +92,11 @@ GoRouter router(Ref ref) {
             ],
           ),
         ],
+      ),
+      // M6 下载：一个条目的下载章节（书架「下载」标签进入）。
+      GoRoute(
+        path: DownloadRoutes.itemPattern,
+        builder: (_, state) => downloadItemPage(state.pathParameters),
       ),
       // M2 漫画：详情（搜索 / 详情会话）。itemId、unitId 经 URL 编码，见 ComicRoutes。
       GoRoute(

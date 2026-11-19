@@ -23,7 +23,7 @@ permissions:
 env:
   FLUTTER_VERSION: "3.47.7"
   MOCK_PORT: "8081"
-  TESTS: integration_test/app_flow_test.dart integration_test/script_stack_depth_test.dart
+  TESTS: integration_test/app_flow_test.dart integration_test/script_stack_depth_test.dart integration_test/download_offline_test.dart
 
 jobs:
   android:

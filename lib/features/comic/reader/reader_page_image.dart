@@ -11,6 +11,7 @@ class ReaderPageImage extends StatefulWidget {
     required this.pageNumber,
     this.fit = BoxFit.contain,
     this.onAspectRatio,
+    this.onError,
   });
 
   final ImageProvider image;
@@ -21,6 +22,9 @@ class ReaderPageImage extends StatefulWidget {
 
   /// 解码出图片后调用（宽 / 高）。
   final ValueChanged<double>? onAspectRatio;
+
+  /// 加载失败时调用（例如已下载的页无法解码，阅读器据此回退到网络）。
+  final VoidCallback? onError;
 
   @override
   State<ReaderPageImage> createState() => _ReaderPageImageState();
@@ -37,7 +41,9 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
       if (mounted) setState(() => _chunk = e);
     },
     onError: (e, _) {
-      if (mounted) setState(() => _error = e);
+      if (!mounted) return;
+      setState(() => _error = e);
+      widget.onError?.call();
     },
   );
 

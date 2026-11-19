@@ -7,6 +7,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../shared/download/providers.dart';
 import '../../../shared/image/image_providers.dart';
 import '../../../shared/image/source_image_loader.dart';
 import '../../../shared/image/source_image_provider.dart';
@@ -129,16 +130,44 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
     return j >= 0 && j < chapters.length ? chapters[j] : null;
   }
 
-  List<ImageRef>? get _images =>
-      switch (ref.read(comicReaderChapterProvider(_sourceId, _unitId))) {
-        AsyncData(:final value) => value.images,
-        _ => null,
-      };
+  ComicReaderChapter? get _chapter => ref
+      .read(comicReaderChapterProvider(_sourceId, widget.itemId, _unitId))
+      .value;
+
+  List<ImageRef>? get _images => _chapter?.images;
 
   SourceImageLoader get _loader => ref.read(sourceImageLoaderProvider);
 
-  SourceImageProvider _provider(ImageRef image) =>
-      SourceImageProvider(sourceId: _sourceId, ref: image, loader: _loader);
+  /// 第 [i] 页的图片：已下载的章节从本地文件加载，否则经统一图片加载器。
+  ImageProvider _provider(ComicReaderChapter chapter, int i) =>
+      switch (chapter.localFiles) {
+        final files? => FileImage(files[i]),
+        null => SourceImageProvider(
+          sourceId: _sourceId,
+          ref: chapter.images[i],
+          loader: _loader,
+        ),
+      };
+
+  /// 已报告过解码失败的章节（同一章多页失败时只处理一次）。
+  final _brokenUnits = <String>{};
+
+  /// 已下载的页无法解码：标为未下载并改从网络读取本章。
+  void _onLocalPageError(String unitId) {
+    if (!_brokenUnits.add(unitId)) return;
+    final provider = comicReaderChapterProvider(
+      _sourceId,
+      widget.itemId,
+      unitId,
+    );
+    ref
+        .read(downloadLibraryProvider)
+        .markBroken(_sourceId, widget.itemId, unitId, '页面无法解码')
+        .whenComplete(() {
+          if (mounted) ref.invalidate(provider);
+        })
+        .ignore();
+  }
 
   ReaderPreferences get _prefs =>
       ref.read(readerSettingsProvider).value ?? const ReaderPreferences();
@@ -212,6 +241,7 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
     final images = _images;
     if (images == null) return;
     _reportProgress(images.length);
+    if (_chapter?.localFiles != null) return; // 本地文件不需要预取。
     final n = _prefs.preloadPages;
     for (var i = _page + 1; i <= _page + n && i < images.length; i++) {
       _loader.prefetch(_sourceId, images[i]);
@@ -548,7 +578,9 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
   @override
   Widget build(BuildContext context) {
     final settings = ref.watch(readerSettingsProvider);
-    final chapter = ref.watch(comicReaderChapterProvider(_sourceId, _unitId));
+    final chapter = ref.watch(
+      comicReaderChapterProvider(_sourceId, widget.itemId, _unitId),
+    );
     final detail = ref.watch(
       comicReaderDetailProvider(_sourceId, widget.itemId),
     );
@@ -568,12 +600,13 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
     final Widget body;
     if (settings case AsyncData(value: final prefs)) {
       body = switch (chapter) {
-        AsyncData(:final value) => _buildReader(prefs, value.images),
+        AsyncData(:final value) => _buildReader(prefs, value),
         AsyncError(:final error) => _ErrorView(
           error: error,
           sourceId: _sourceId,
-          onRetry: () =>
-              ref.invalidate(comicReaderChapterProvider(_sourceId, _unitId)),
+          onRetry: () => ref.invalidate(
+            comicReaderChapterProvider(_sourceId, widget.itemId, _unitId),
+          ),
         ),
         _ => const _Loading(),
       };
@@ -658,14 +691,15 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
     onRetryChapters: _retryChapters,
   );
 
-  Widget _buildReader(ReaderPreferences prefs, List<ImageRef> images) {
+  Widget _buildReader(ReaderPreferences prefs, ComicReaderChapter chapter) {
+    final images = chapter.images;
     _ensureControllers(prefs.mode, images.length);
     if (images.isEmpty) {
       return _endOfChapter('本章没有图片');
     }
     final reader = prefs.mode.isPaged
-        ? _buildPaged(prefs.mode, images)
-        : _buildVertical(images);
+        ? _buildPaged(prefs.mode, chapter)
+        : _buildVertical(chapter);
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTapUp: _onTapUp,
@@ -675,8 +709,9 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
     );
   }
 
-  Widget _buildPaged(ReaderMode mode, List<ImageRef> images) {
-    final count = images.length;
+  Widget _buildPaged(ReaderMode mode, ComicReaderChapter chapter) {
+    final count = chapter.images.length;
+    final unitId = _unitId;
     return PageView.builder(
       key: ValueKey('paged-$_unitId-${mode.name}'),
       controller: _pageController,
@@ -707,8 +742,11 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
             maxScale: 4,
             child: ReaderPageImage(
               key: ValueKey('page-$_unitId-$i'),
-              image: _provider(images[i]),
+              image: _provider(chapter, i),
               pageNumber: i + 1,
+              onError: chapter.localFiles == null
+                  ? null
+                  : () => _onLocalPageError(unitId),
             ),
           ),
         );
@@ -716,8 +754,8 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
     );
   }
 
-  Widget _buildVertical(List<ImageRef> images) {
-    final count = images.length;
+  Widget _buildVertical(ComicReaderChapter chapter) {
+    final count = chapter.images.length;
     final unitId = _unitId;
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -742,8 +780,11 @@ class _ComicReaderPageState extends ConsumerState<ComicReaderPage> {
                   }
                   return ReaderPageImage(
                     key: ValueKey('page-$_unitId-$i'),
-                    image: _provider(images[i]),
+                    image: _provider(chapter, i),
                     pageNumber: i + 1,
+                    onError: chapter.localFiles == null
+                        ? null
+                        : () => _onLocalPageError(unitId),
                     fit: BoxFit.fitWidth,
                     onAspectRatio: (a) => _onAspect(unitId, i, a, count),
                   );

@@ -26,13 +26,15 @@ part 'app_database.g.dart';
     ItemProgressEntries,
     UnitProgressEntries,
     SourceRepositories,
+    DownloadItems,
+    DownloadUnits,
   ],
 )
 class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -67,6 +69,11 @@ class AppDatabase extends _$AppDatabase {
             schema.installedSources,
             schema.installedSources.repositoryUrl,
           );
+        },
+        // v6：下载管理（architecture §4.5）。
+        from5To6: (m, schema) async {
+          await m.createTable(schema.downloadItems);
+          await m.createTable(schema.downloadUnits);
         },
       )(m, from, to);
     },

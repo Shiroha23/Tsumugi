@@ -5,18 +5,19 @@ import '../../shared/history/providers.dart';
 import '../../shared/library/providers.dart';
 import '../../shared/widgets/empty_state.dart';
 import '../../sources/model/common.dart';
+import '../downloads/downloads_view.dart';
 import '../sources/labels.dart';
 import '../../shared/image/source_image.dart';
 import 'open_item.dart';
 
-/// 书架页：“书架”与“历史”两个标签。
+/// 书架页：“书架”“历史”“下载”三个标签。
 class LibraryPage extends StatelessWidget {
   const LibraryPage({super.key});
 
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 2,
+      length: 3,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('书架'),
@@ -25,10 +26,13 @@ class LibraryPage extends StatelessWidget {
             tabs: [
               Tab(text: '书架'),
               Tab(text: '历史'),
+              Tab(text: '下载'),
             ],
           ),
         ),
-        body: const TabBarView(children: [_ShelfTab(), _HistoryTab()]),
+        body: const TabBarView(
+          children: [_ShelfTab(), _HistoryTab(), DownloadsTab()],
+        ),
       ),
     );
   }

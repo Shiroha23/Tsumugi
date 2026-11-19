@@ -1,0 +1,19 @@
+{
+  "apiVersion": 1,
+  "id": "com.example.mock.novel.script",
+  "name": "Mock 小说（脚本）",
+  "type": "novel",
+  "version": "1.0.0",
+  "author": "tsumugi",
+  "lang": "zh",
+  "description": "虚构源（脚本内联自 test/fixtures/script/novel/source.js），正文为带插图的受限 HTML，配合 tool/mock_server 使用。",
+  "baseUrl": "http://127.0.0.1:8080",
+  "allowedHosts": [
+    "img.example.com"
+  ],
+  "headers": {
+    "Referer": "http://127.0.0.1:8080/"
+  },
+  "engine": "script",
+  "script": "// 虚构脚本小说源：页面来自 tool/mock_server（test/fixtures/mock_site/novel），\n// 正文以受限 HTML 返回，每章末尾带一张虚构图片主机上的插图（下载与离线阅读的集成测试用）。\n// 测试中 \"script\" 字段会被替换为本文件内容。\n\nfunction escapeHtml(s) {\n  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n}\n\nexport async function search(keyword, page) {\n  const doc = tsumugi.html.parse(\n    await tsumugi.http.get(`/novel/search?q=${encodeURIComponent(keyword)}`),\n  );\n  return {\n    items: doc.select('.book').map((n) => ({\n      id: n.selectFirst('h3 a').attr('href'),\n      title: n.selectFirst('h3 a').text(),\n      subtitle: n.selectFirst('.writer')?.text(),\n    })),\n    hasMore: false,\n  };\n}\n\nexport async function detail(id) {\n  const doc = tsumugi.html.parse(await tsumugi.http.get(id));\n  return {\n    id,\n    title: doc.selectFirst('h1').text(),\n    author: doc.selectFirst('.writer')?.text(),\n    description: doc.selectFirst('#intro')?.text(),\n    units: doc\n      .select('.catalog dd a')\n      .map((a) => ({ id: a.attr('href'), title: a.text() })),\n  };\n}\n\nexport async function content(unitId) {\n  const doc = tsumugi.html.parse(await tsumugi.http.get(unitId));\n  const body = doc\n    .select('#content p')\n    .map((p) => `<p>${escapeHtml(p.text())}</p>`)\n    .join('');\n  const chapter = unitId.split('?')[0].split('/').pop();\n  const page = unitId.includes('?p=') ? 2 : 1;\n  return {\n    html: true,\n    text: `${body}<p><img src=\"http://img.example.com/static/novel/${chapter}-${page}.png\" alt=\"插图 ${chapter}-${page}\"></p>`,\n    nextPageId: doc.selectFirst('a.next')?.attr('href'),\n  };\n}\n"
+}

@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -707,11 +708,18 @@ class _NovelReaderPageState extends ConsumerState<NovelReaderPage> {
       ),
       final NovelImage img => KeyedSubtree(
         key: key,
-        child: _NovelImageView(
-          sourceId: _sourceId,
-          image: ImageRef(url: img.url, headers: chapter.imageHeaders),
-          alt: img.alt,
-        ),
+        child: switch (chapter.localImages) {
+          // 已下载的章节：只从本地文件加载，没有的显示占位，不发起网络请求（architecture §4.5）。
+          final local? => _LocalNovelImageView(
+            path: local[img.url],
+            alt: img.alt,
+          ),
+          null => _NovelImageView(
+            sourceId: _sourceId,
+            image: ImageRef(url: img.url, headers: chapter.imageHeaders),
+            alt: img.alt,
+          ),
+        },
       ),
       NovelDivider() => SizedBox(
         key: key,
@@ -936,6 +944,39 @@ class _NovelImageView extends StatelessWidget {
       ),
     ),
   );
+}
+
+/// 已下载章节中的正文图片：本地文件，缺失或无法解码时显示与导出相同的「［图片：alt］」占位。
+class _LocalNovelImageView extends StatelessWidget {
+  const _LocalNovelImageView({required this.path, required this.alt});
+
+  final String? path;
+  final String? alt;
+
+  @override
+  Widget build(BuildContext context) {
+    final placeholder = Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Text(
+        alt == null ? '［图片］' : '［图片：$alt］',
+        textAlign: TextAlign.center,
+        style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+      ),
+    );
+    final path = this.path;
+    if (path == null) return Center(child: placeholder);
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 120),
+      child: Center(
+        child: Image.file(
+          File(path),
+          fit: BoxFit.contain,
+          semanticLabel: alt,
+          errorBuilder: (_, _, _) => placeholder,
+        ),
+      ),
+    );
+  }
 }
 
 class _EndOfChapter extends StatelessWidget {
