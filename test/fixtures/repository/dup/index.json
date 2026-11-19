@@ -1,0 +1,28 @@
+{
+  "repoVersion": 1,
+  "name": "重复",
+  "sources": [
+    {
+      "id": "a",
+      "name": "A",
+      "type": "comic",
+      "version": "1",
+      "apiVersion": 1,
+      "lang": "zh",
+      "nsfw": false,
+      "url": "a.json",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "id": "a",
+      "name": "A2",
+      "type": "comic",
+      "version": "1",
+      "apiVersion": 1,
+      "lang": "zh",
+      "nsfw": false,
+      "url": "b.json",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ]
+}

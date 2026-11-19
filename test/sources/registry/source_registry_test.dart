@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tsumugi/core/network/source_http_client.dart';
 import 'package:tsumugi/core/storage/app_database.dart';
@@ -214,7 +215,7 @@ void main() {
       now = DateTime.utc(2026, 11, 2);
       final p = await registry.prepareImport(
         comicWith({'version': '1.1.0', 'name': '示例漫画 新'}),
-        origin: const SourceOrigin.repository('https://example.com/c.json'),
+        origin: const SourceOrigin.local('c.json'),
       );
       expect(p.action, ImportAction.upgrade);
       expect(p.existing!.version, '1.0.0');
@@ -227,7 +228,7 @@ void main() {
       expect(after.sortOrder, before!.sortOrder);
       expect(after.installedAt, before.installedAt);
       expect(after.updatedAt.toUtc(), DateTime.utc(2026, 11, 2));
-      expect(after.origin.kind, SourceOriginKind.repository);
+      expect(after.origin, const SourceOrigin.local('c.json'));
       expect(after.manifestSha256, isNot(before.manifestSha256));
       expect(await registry.getAll(), hasLength(2));
     });
@@ -265,6 +266,74 @@ void main() {
       expect(p.warnings.any((w) => w.contains('版本号未变')), isTrue);
       final s = await registry.install(p);
       expect(s.manifest!.author, 'other');
+    });
+
+    test('仓库来源：只能更新来自同一仓库的源；本地导入可以覆盖仓库来源', () async {
+      const repoA = 'https://a.example.com/index.json';
+      const repoB = 'https://b.example.com/index.json';
+      await registry.install(
+        await registry.prepareImport(
+          fixture('declarative_comic.json'),
+          origin: const SourceOrigin.repository(
+            'https://a.example.com/c.json',
+            repositoryUrl: repoA,
+          ),
+        ),
+      );
+      final installed = (await registry.get('com.example.comic'))!;
+      expect(installed.origin.repositoryUrl, repoA);
+
+      expect(
+        () => registry.prepareImport(
+          comicWith({'version': '1.1.0'}),
+          origin: const SourceOrigin.repository(
+            'https://b.example.com/c.json',
+            repositoryUrl: repoB,
+          ),
+        ),
+        throwsImport(SourceImportError.otherOrigin),
+      );
+
+      final fromA = await registry.prepareImport(
+        comicWith({
+          'version': '1.1.0',
+          'allowedHosts': ['*.example-cdn.com', 'new.example.com'],
+        }),
+        origin: const SourceOrigin.repository(
+          'https://a.example.com/c.json',
+          repositoryUrl: repoA,
+        ),
+      );
+      expect(fromA.newHosts, ['new.example.com']);
+      await registry.install(fromA);
+
+      // 用户显式从本地导入：来源变为本地，不再属于仓库。
+      final local = await registry.importText(comicWith({'version': '1.2.0'}));
+      expect(local.origin, const SourceOrigin.local());
+      expect(local.origin.repositoryUrl, isNull);
+      expect(
+        () => registry.prepareImport(
+          comicWith({'version': '1.3.0'}),
+          origin: const SourceOrigin.repository(
+            'https://a.example.com/c.json',
+            repositoryUrl: repoA,
+          ),
+        ),
+        throwsImport(SourceImportError.otherOrigin),
+      );
+    });
+
+    test('newHosts：新安装为空；旧清单不可用时全部视为新增', () async {
+      final fresh = await registry.prepareImport(
+        fixture('declarative_comic.json'),
+      );
+      expect(fresh.newHosts, isEmpty);
+      await registry.install(fresh);
+      await (db.update(
+        db.installedSources,
+      )).write(const InstalledSourcesCompanion(manifestJson: Value('{broken')));
+      final p = await registry.prepareImport(comicWith({'version': '2.0.0'}));
+      expect(p.newHosts, p.hosts);
     });
 
     test('预发布版升级到正式版', () async {

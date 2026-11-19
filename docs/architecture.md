@@ -113,7 +113,7 @@ docs/
 - **数据库**：`core/storage/app_database.dart` 中的 `AppDatabase`（drift），文件为应用支持目录下的
   `tsumugi.sqlite`（`getApplicationSupportDirectory`，不放在用户“文档”目录），SQL 在后台 isolate 执行。
   通过 `appDatabaseProvider` 获取，测试中用内存 SQLite 覆盖。
-- **迁移策略**：当前 `schemaVersion = 4`（v2 新增 `source_storage_entries`；v3 新增书架与进度三张表，见 §4.2；v4 为 `installed_sources` 新增 `settings_json`）。每次改表结构：`schemaVersion` 加一 →
+- **迁移策略**：当前 `schemaVersion = 5`（v2 新增 `source_storage_entries`；v3 新增书架与进度三张表，见 §4.2；v4 为 `installed_sources` 新增 `settings_json`；v5 新增 `source_repositories` 与 `installed_sources.repository_url`，见 §4.4）。每次改表结构：`schemaVersion` 加一 →
   `dart run drift_dev make-migrations`（把新 schema 导出到 `drift_schemas/`，生成 steps 文件与
   `test/core/storage/migrations/` 下的迁移测试）→ 在 `onUpgrade` 中用 `stepByStep` 写每一步。
   已发布的 `drift_schemas/*.json` 不可修改。数据库版本高于客户端时拒绝打开（不支持降级）。
@@ -171,7 +171,7 @@ docs/
 
 ### 4.3 M6 总览：规则仓库订阅、下载管理、WebDAV 同步
 
-> 状态：设计已定（2026-11-19），尚未实现。下列三项相互独立，可并行开发；各自新增的表在合并时按合并顺序
+> 状态：设计已定（2026-11-19）。规则仓库订阅（§4.4）已实现（v5）；下载管理、WebDAV 同步尚未实现。下列三项相互独立，可并行开发；各自新增的表在合并时按合并顺序
 > 依次占用 `schemaVersion`（5、6、7…），后合并的 PR 在变基时重新生成迁移，已合并的 `drift_schemas/*.json` 不改。
 
 已定的取舍（2026-11-19）：
@@ -188,18 +188,31 @@ docs/
 
 仓库格式与客户端规则见 source-spec §7，这里只写实现结构。
 
-- **表** `source_repositories`：主键为规范化后的 `index.json` 地址；名称（取自索引）、加入时间、上次检查时间与结果
-  （成功 / 错误码）、上次成功取得的索引原文与其 sha256（离线时仍可浏览仓库列表）。
+- **表** `source_repositories`（v5）：主键为规范化后的 `index.json` 地址；名称（取自索引）、加入时间、上次检查时间与结果
+  （`last_error_code` 为 null 表示成功，否则为 `RepositoryErrorKind` 名称，另存中文说明）、上次成功取得的索引原文与其 sha256
+  （离线时仍可浏览仓库列表；检查失败时保留）。`installed_sources.repository_url`（v5）记所属仓库，退订后保留原值。
+- **代码结构**：`sources/repository/` 下 `RepositoryHttpClient`（网络）、`repository_index.dart`（地址规范化、索引解析与校验）、
+  `RepositoryService`（订阅 / 退订 / 检查 / 准备安装预览，以及纯函数 `entryState`、`sourceRepositoryStatuses` 派生“可更新 / 仓库已移除”）、
+  `providers.dart`（`repositoryUpdateSchedulerProvider` 由应用根组件监听，启动后检查一次并每 24 h 一次）；
+  界面在 `features/sources/repository/`。
+- **地址规范化**：去首尾空白与片段，协议与主机小写，去默认端口；路径为空或以 `/` 结尾时补 `index.json`；
+  不允许 URL 中带用户信息（`user:pass@`）。
 - **取索引与清单**：使用独立的 `RepositoryHttpClient`（dio），**不**经过任何源的网络层：无 Cookie、不带源的 headers、
-  固定客户端 UA、单次 15 s、索引不超过 2 MiB、清单不超过 4 MiB（与本地文件导入的上限相同）；只允许 `https`（测试用的回环地址
-  `127.0.0.1` / `localhost` / `::1` 例外，可用 `http`）；重定向每一跳同样只能是 `https`（回环例外同上），最多 5 跳。
-- **安装**：从仓库安装复用 `SourceRegistry.prepareImport` → 预览 → `install`；清单字节先校验 sha256，不符直接拒绝；
-  `installed_sources.originKind = repository`、`originUrl` 记清单的绝对地址，另加一列记所属仓库地址（v5 迁移）。
+  固定客户端 UA（`Tsumugi-Repository/1`）、单次获取（含全部重定向与读取响应体）15 s、索引不超过 2 MiB、清单不超过 4 MiB（与本地文件导入的上限相同）；只允许 `https`（测试用的回环地址
+  `127.0.0.1` / `localhost` / `::1` 例外，可用 `http`；该例外由 `RepositoryHttpClient(allowLoopbackHttp: true)` 开启，只在测试中使用，
+  应用中关闭——否则远程仓库可以用索引条目或重定向让客户端向本机端口发请求）；应用中指向本机的地址（`localhost` 及其子域、`127.0.0.0/8`、`0.0.0.0`、`::1`、`::`、`::ffff:127.*`）不论 `http` 还是 `https` 一律拒绝；重定向每一跳同样只能是 `https`（回环例外同上），最多 5 跳。
+  连接阶段也受同一时限（`connectTimeout`），不会在超时后继续挂在后台。
+- **安装**：从仓库安装复用 `SourceRegistry.prepareImportBytes` → 预览 → `install`；顺序为：条目 `apiVersion` 受支持 →
+  同 id 已装源来自本仓库（否则不下载）→ 下载 → sha256（不符直接拒绝）→ 清单解析与校验（含拒绝降级）→ 清单 id / version /
+  apiVersion 与条目一致。`installed_sources.originKind = repository`、`originUrl` 记清单的绝对地址、`repositoryUrl` 记所属仓库。
+  `SourceRegistry.install` 在写入事务中再次检查：仓库来源的预览只能覆盖来自同一仓库的源（`SourceImportError.otherOrigin`）；
+  用户从本地导入同 id 源则照常覆盖，来源变为本地。
 - **更新检查**：应用启动时、运行中每 24 h、用户在仓库页下拉刷新时检查全部仓库（仓库之间串行，单个失败不影响其他）。
   只对“来自该仓库”的已装源比较版本（`version` 按语义化版本比较，见 `registry/version.dart`）；
   本地导入或来自其他仓库的同 id 源不会被这个仓库更新。结果只在源页面标“可更新”，不自动安装。
 - **更新确认**：预览中照常列出将访问的主机；若新清单的主机集合（`baseUrl` 主机 + `allowedHosts`）**不是**旧集合的子集，
-  新增的主机单独高亮列出，需要用户再确认一次。
+  新增的主机单独高亮列出，需要用户再确认一次（`ImportPreview.newHosts`，按小写后的字符串比较，不按通配符展开——
+  旧集合为 `*.example.com` 时新出现的 `img.example.com` 也算新增，宁可多问）。旧清单无法解析时全部主机视为新增。
 - **退订**：删除仓库记录，已装的源保留（变为不再检查更新的源，源页面显示“仓库已移除”）。
 - **界面**：源页面增加「仓库」入口：添加（输入地址 → 取索引 → 展示仓库名与源数量 → 确认订阅）、列表、按类型 / 语言 / nsfw 过滤的
   源浏览、安装 / 更新按钮、“全部更新”（逐个弹出预览，不批量跳过确认）。

@@ -7,9 +7,12 @@ import '../../sources/model/common.dart';
 import '../../sources/model/source_settings.dart';
 import '../../sources/runtime/source_error_text.dart';
 import '../../sources/registry/providers.dart';
+import '../../sources/repository/providers.dart';
 import '../../sources/session/source_sessions.dart';
 import 'import_source_dialog.dart';
 import 'labels.dart';
+import 'repository/repositories_page.dart';
+import 'repository/repository_install_dialog.dart';
 import 'source_settings_dialog.dart';
 
 class SourcesPage extends ConsumerStatefulWidget {
@@ -108,6 +111,20 @@ class _SourcesPageState extends ConsumerState<SourcesPage> {
     }
   }
 
+  void _openRepositories() => Navigator.of(context)
+      .push(MaterialPageRoute<void>(builder: (_) => const RepositoriesPage()));
+
+  Future<void> _update(SourceUpdateAvailable update) async {
+    final result = await showRepositoryInstallDialog(
+      context,
+      repository: update.repository,
+      entry: update.entry,
+    );
+    if (result == RepositoryInstallResult.installed && mounted) {
+      _showSnack('已更新「${update.entry.name}」到 ${update.entry.version}');
+    }
+  }
+
   void _showSnack(String message) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
@@ -138,10 +155,24 @@ class _SourcesPageState extends ConsumerState<SourcesPage> {
       }
     });
     final sources = ref.watch(installedSourcesProvider());
+    final updates = ref
+        .watch(sourceRepositoryStatusProvider)
+        .values
+        .whereType<SourceUpdateAvailable>()
+        .length;
     return Scaffold(
       appBar: AppBar(
         title: const Text('源'),
         actions: [
+          IconButton(
+            onPressed: _openRepositories,
+            tooltip: '规则仓库',
+            icon: Badge(
+              isLabelVisible: updates > 0,
+              label: Text('$updates'),
+              child: const Icon(Icons.inventory_2_outlined),
+            ),
+          ),
           IconButton(
             onPressed: _import,
             tooltip: '导入源',
@@ -199,6 +230,7 @@ class _SourcesPageState extends ConsumerState<SourcesPage> {
   }
 
   Widget _buildGroup(MediaType type, List<InstalledSource> group) {
+    final statuses = ref.watch(sourceRepositoryStatusProvider);
     return SliverReorderableList(
       itemCount: group.length,
       onReorderItem: (from, to) => _reorder(type, group, from, to),
@@ -209,6 +241,11 @@ class _SourcesPageState extends ConsumerState<SourcesPage> {
           key: ValueKey(s.id),
           index: i,
           source: s,
+          repositoryStatus: statuses[s.id],
+          onUpdate: switch (statuses[s.id]) {
+            final SourceUpdateAvailable u => () => _update(u),
+            _ => null,
+          },
           onEnabledChanged: (v) =>
               ref.read(sourceRegistryProvider).setEnabled(s.id, v),
           onRemove: () => _confirmRemove(s),
@@ -247,6 +284,8 @@ class _SourceTile extends StatelessWidget {
     super.key,
     required this.index,
     required this.source,
+    this.repositoryStatus,
+    this.onUpdate,
     required this.onEnabledChanged,
     required this.onRemove,
     required this.onClearSession,
@@ -256,6 +295,10 @@ class _SourceTile extends StatelessWidget {
 
   final int index;
   final InstalledSource source;
+
+  /// 来自仓库的源的状态（可更新 / 需要更新客户端 / 仓库已移除）。
+  final SourceRepositoryStatus? repositoryStatus;
+  final VoidCallback? onUpdate;
   final ValueChanged<bool> onEnabledChanged;
   final VoidCallback onRemove;
   final VoidCallback onClearSession;
@@ -274,6 +317,12 @@ class _SourceTile extends StatelessWidget {
           if (m != null) m.engine.label,
           if (host != null && host.isNotEmpty) host,
           if (m?.nsfw ?? false) 'NSFW',
+          ?switch (repositoryStatus) {
+            SourceUpdateAvailable(:final entry) => '可更新到 ${entry.version}',
+            SourceUpdateNeedsClient(:final entry) => '${entry.version} 需要更新客户端',
+            SourceRepositoryRemoved() => '仓库已移除',
+            null => null,
+          },
         ].join(' · ');
 
     return Material(
@@ -301,12 +350,21 @@ class _SourceTile extends StatelessWidget {
             PopupMenuButton<_SourceAction>(
               tooltip: '源菜单',
               onSelected: (action) => switch (action) {
+                _SourceAction.update => onUpdate?.call(),
                 _SourceAction.settings => onSettings(),
                 _SourceAction.login => onLogin(),
                 _SourceAction.clearSession => onClearSession(),
                 _SourceAction.remove => onRemove(),
               },
               itemBuilder: (context) => [
+                if (onUpdate != null)
+                  const PopupMenuItem(
+                    value: _SourceAction.update,
+                    child: ListTile(
+                      leading: Icon(Icons.system_update_alt),
+                      title: Text('更新'),
+                    ),
+                  ),
                 if (m != null && editableSettings(m).isNotEmpty)
                   const PopupMenuItem(
                     value: _SourceAction.settings,
@@ -353,4 +411,4 @@ class _SourceTile extends StatelessWidget {
   }
 }
 
-enum _SourceAction { settings, login, clearSession, remove }
+enum _SourceAction { update, settings, login, clearSession, remove }

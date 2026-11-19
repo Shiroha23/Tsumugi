@@ -1,0 +1,28 @@
+{
+  "apiVersion": 1,
+  "id": "com.example.repo.flow",
+  "name": "流程测试漫画",
+  "type": "comic",
+  "version": "1.0.0",
+  "author": "tsumugi",
+  "lang": "zh",
+  "nsfw": false,
+  "description": "虚构源，仅用于规则仓库测试。",
+  "baseUrl": "https://flow.example.com",
+  "allowedHosts": [
+    "img.example.com"
+  ],
+  "engine": "declarative",
+  "rules": {
+    "search": {
+      "request": {
+        "url": "/search?q={{keyword}}&page={{page}}"
+      },
+      "list": "css:.result-item",
+      "fields": {
+        "id": "css:a@href",
+        "title": "css:.title@text"
+      }
+    }
+  }
+}

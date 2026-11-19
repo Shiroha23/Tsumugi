@@ -52,8 +52,42 @@ class InstalledSources extends Table {
   /// 用户修改过的源设置（v4，docs/source-spec.md §1.1）：JSON 对象，只含改过的键；null 表示全部取默认。
   TextColumn get settingsJson => text().nullable()();
 
+  /// 所属规则仓库（v5，architecture §4.4）：`originKind == repository` 时为仓库 index.json 的规范化地址。
+  /// 仓库被退订后保留原值，用于显示“仓库已移除”。
+  TextColumn get repositoryUrl => text().nullable()();
+
   @override
   Set<Column<Object>> get primaryKey => {id};
+}
+
+/// 订阅的规则仓库（v5，architecture §4.4）。
+@DataClassName('SourceRepositoryRow')
+class SourceRepositories extends Table {
+  /// 规范化后的 index.json 地址。
+  TextColumn get url => text()();
+
+  /// 取自索引的 `name`。
+  TextColumn get name => text()();
+
+  DateTimeColumn get addedAt => dateTime()();
+
+  /// 上次检查（成功或失败）的时间。
+  DateTimeColumn get lastCheckedAt => dateTime().nullable()();
+
+  /// 上次检查的错误码（`RepositoryErrorKind.name`）；null 表示成功或尚未检查。
+  TextColumn get lastErrorCode => text().nullable()();
+
+  /// 上次检查的错误说明（中文）。
+  TextColumn get lastErrorMessage => text().nullable()();
+
+  /// 上次成功取得的索引原文，离线时仍可浏览。
+  TextColumn get indexJson => text()();
+
+  /// [indexJson] 原始字节的 sha256。
+  TextColumn get indexSha256 => text()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {url};
 }
 
 /// 脚本源的 `tsumugi.storage`（docs/source-spec.md §4.2）：按源隔离的 KV，值为 JSON 文本。

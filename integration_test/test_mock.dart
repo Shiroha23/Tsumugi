@@ -32,6 +32,9 @@ abstract class TestMock {
   /// 本测试开始以来服务器收到的请求。
   Future<List<RecordedRequest>> requests();
 
+  /// 让 `/repo/live/` 指向 `test/fixtures/repository/<dir>/`（模拟仓库发布新版本）。
+  Future<void> setLiveRepository(String dir);
+
   /// `test/fixtures/` 下的文件内容（如 `sources/mock_video_script.json`）。
   Future<String> fixture(String path);
 
@@ -48,6 +51,10 @@ class _LocalMock implements TestMock {
 
   @override
   Future<List<RecordedRequest>> requests() async => List.of(server.requests);
+
+  @override
+  Future<void> setLiveRepository(String dir) async =>
+      server.liveRepository = dir;
 
   @override
   Future<String> fixture(String path) =>
@@ -90,8 +97,8 @@ class _RemoteMock implements TestMock {
     return body;
   }
 
-  Future<void> _post(String path) async {
-    final res = await (await _http.postUrl(_uri(path))).close();
+  Future<void> _post(String path, [Map<String, String>? query]) async {
+    final res = await (await _http.postUrl(_uri(path, query))).close();
     await res.drain<void>();
     if (res.statusCode != 200) {
       throw HttpException(
@@ -113,6 +120,10 @@ class _RemoteMock implements TestMock {
         body: r['body'] as String,
       ),
   ];
+
+  @override
+  Future<void> setLiveRepository(String dir) =>
+      _post('/__test/repo-live', {'dir': dir});
 
   @override
   Future<String> fixture(String path) =>

@@ -1,0 +1,26 @@
+{
+  "apiVersion": 1,
+  "id": "com.example.repo.novel",
+  "name": "仓库小说",
+  "type": "novel",
+  "version": "2.0.0",
+  "author": "tsumugi",
+  "lang": "ja",
+  "nsfw": true,
+  "description": "虚构源，仅用于规则仓库测试。",
+  "baseUrl": "https://novel.example.com",
+  "allowedHosts": [],
+  "engine": "declarative",
+  "rules": {
+    "search": {
+      "request": {
+        "url": "/search?q={{keyword}}&page={{page}}"
+      },
+      "list": "css:.result-item",
+      "fields": {
+        "id": "css:a@href",
+        "title": "css:.title@text"
+      }
+    }
+  }
+}

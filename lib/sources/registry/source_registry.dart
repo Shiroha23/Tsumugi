@@ -47,6 +47,21 @@ final class ImportPreview {
         : ImportAction.reinstall;
   }
 
+  /// 相对已安装版本新增的主机（architecture §4.4）：新集合不是旧集合的子集时需要用户单独确认。
+  /// 新安装时为空（全部主机照常列出）；旧清单不可用时视全部主机为新增。按字符串比较，不按通配符展开。
+  List<String> get newHosts {
+    final old = existing;
+    if (old == null) return const [];
+    final previous = old.manifest;
+    final oldHosts = previous == null
+        ? const <String>{}
+        : manifestHosts(previous).toSet();
+    return [
+      for (final h in hosts)
+        if (!oldHosts.contains(h)) h,
+    ];
+  }
+
   /// 给用户看的非致命警告。
   List<String> get warnings => [
     if (parsed.unknownFields.isNotEmpty)
@@ -137,12 +152,27 @@ class SourceRegistry {
     SourceOrigin origin,
   ) async {
     final existing = await get(parsed.manifest.id);
-    _checkAgainstExisting(parsed, existing);
+    _checkAgainstExisting(parsed, existing, origin);
     return ImportPreview(parsed: parsed, origin: origin, existing: existing);
   }
 
-  void _checkAgainstExisting(ParsedManifest parsed, InstalledSource? existing) {
+  void _checkAgainstExisting(
+    ParsedManifest parsed,
+    InstalledSource? existing,
+    SourceOrigin origin,
+  ) {
     if (existing == null) return;
+    // 仓库只能安装 / 更新来自它自己的源（architecture §4.4）。
+    if (origin.kind == SourceOriginKind.repository &&
+        (existing.origin.kind != SourceOriginKind.repository ||
+            existing.origin.repositoryUrl != origin.repositoryUrl)) {
+      throw SourceImportException.single(
+        SourceImportError.otherOrigin,
+        '已安装的「${existing.name}」来自'
+        '${existing.origin.kind == SourceOriginKind.local ? '本地导入' : '其他仓库'}，'
+        '不能由这个仓库更新。如需改用这个仓库的版本，请先删除已安装的源。',
+      );
+    }
     final cmp = compareVersions(parsed.manifest.version, existing.version);
     if (cmp < 0) {
       throw SourceImportException.single(
@@ -167,7 +197,7 @@ class SourceRegistry {
     return _db.transaction(() async {
       // 预览之后数据库可能已变化，重新检查。
       final existing = await get(m.id);
-      _checkAgainstExisting(parsed, existing);
+      _checkAgainstExisting(parsed, existing, preview.origin);
       final now = _clock();
       final common = InstalledSourcesCompanion(
         name: Value(m.name),
@@ -177,6 +207,7 @@ class SourceRegistry {
         updatedAt: Value(now),
         originKind: Value(preview.origin.kind),
         originUrl: Value(preview.origin.label),
+        repositoryUrl: Value(preview.origin.repositoryUrl),
         manifestSha256: Value(parsed.sha256),
         manifestJson: Value(parsed.manifestJson),
       );

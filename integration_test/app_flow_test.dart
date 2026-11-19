@@ -3,6 +3,7 @@
 // 1. 加载 JS 脚本源（QuickJS 原生库）→ 搜索 → 详情 → 漫画阅读器翻页；
 // 2. 小说阅读器（翻页模式）翻页，读到末尾进入下一章；
 // 3. 导出 TXT 与 EPUB：系统保存界面无法自动操作，用 [_FileExportSaver] 写入临时目录，再校验文件内容。
+// 4. 规则仓库（architecture §4.4）：订阅 → 安装 → 仓库发布新版本 → 检查更新提示 → 确认新增主机 → 更新。
 //
 // 所有请求都经自定义连接接到 mock 服务器（虚构主机名，见 test_mock.dart），白名单仍按虚构主机名检查。
 // 运行方式见 docs/architecture.md §5.4「设备与模拟器上的集成测试」：
@@ -38,6 +39,7 @@ import 'package:tsumugi/shared/image/image_cache.dart';
 import 'package:tsumugi/shared/image/image_providers.dart';
 import 'package:tsumugi/sources/network_error_mapping.dart';
 import 'package:tsumugi/sources/registry/providers.dart';
+import 'package:tsumugi/sources/repository/providers.dart';
 import 'package:tsumugi/sources/session/source_sessions.dart';
 import 'package:xml/xml.dart';
 
@@ -112,6 +114,15 @@ class _App {
         MemoryExplorePreferencesStore(),
       ),
       exportSaverProvider.overrideWithValue(saver),
+      repositoryHttpClientProvider.overrideWith((ref) {
+        final client = RepositoryHttpClient(
+          adapter: server.adapter(),
+          // mock 服务器是回环地址上的 http（仅测试允许）。
+          allowLoopbackHttp: true,
+        );
+        ref.onDispose(client.close);
+        return client;
+      }),
     ],
   );
 
@@ -174,6 +185,20 @@ Future<void> _tapAndWait(
   await tester.tap(target);
   await tester.pump();
   await _pumpUntil(tester, expected);
+}
+
+/// 返回上一页，等转场动画结束（iOS 的返回转场较长，动画中点击会落空）。
+Future<void> _pageBackAndSettle(WidgetTester tester, Finder leaving) async {
+  await tester.pageBack();
+  await _pumpUntilGone(tester, leaving);
+  await _settleTransition(tester);
+}
+
+/// 等页面转场动画结束再点击。
+Future<void> _settleTransition(WidgetTester tester) async {
+  for (var i = 0; i < 10; i++) {
+    await tester.pump(const Duration(milliseconds: 100));
+  }
 }
 
 /// 点击屏幕横向 [fraction] 处（阅读器的翻页区），等双击判定结束。
@@ -367,6 +392,115 @@ void main() {
     expect(chapters, hasLength(2));
     expect(chapters.join(), contains('一位客人送来一只怀表'));
     expect(chapters.join(), contains('雨季来的时候'));
+    await app.dispose(tester);
+  });
+
+  testWidgets('规则仓库：订阅 → 安装 → 发布新版本 → 提示更新 → 确认新增主机 → 更新', (tester) async {
+    const flowId = 'com.example.repo.flow';
+    final app = _App(server, saver);
+    await app.pump(tester);
+    Finder inDialog(Finder f) =>
+        find.descendant(of: find.byType(AlertDialog), matching: f);
+
+    // 订阅：回环地址允许 http（测试用）；连接经适配器接到 mock 服务器。
+    app.container.read(routerProvider).go('/sources');
+    await _pumpUntil(tester, find.byTooltip('规则仓库'));
+    await _tapAndWait(
+      tester,
+      find.byTooltip('规则仓库'),
+      find.textContaining('还没有订阅任何仓库'),
+    );
+    await _settleTransition(tester);
+    await _tapAndWait(tester, find.byTooltip('添加仓库'), find.byType(TextField));
+    await tester.enterText(
+      find.byType(TextField),
+      'http://127.0.0.1/repo/live/index.json',
+    );
+    await _tapAndWait(tester, find.text('下一步'), find.text('共 1 个源'));
+    expect(inDialog(find.text('流程测试仓库')), findsOneWidget);
+    await _tapAndWait(
+      tester,
+      inDialog(find.widgetWithText(FilledButton, '订阅')),
+      find.text('已订阅「流程测试仓库」'),
+    );
+    await _pumpUntilGone(tester, find.byType(AlertDialog));
+
+    // 浏览并安装 1.0.0。
+    await _tapAndWait(
+      tester,
+      find.text('流程测试仓库'),
+      find.byKey(const ValueKey('repo-entry-$flowId')),
+    );
+    await _settleTransition(tester);
+    await _tapAndWait(
+      tester,
+      find.widgetWithText(FilledButton, '安装'),
+      find.text('将访问的主机'),
+    );
+    expect(inDialog(find.text('flow.example.com')), findsOneWidget);
+    expect(inDialog(find.text('新增')), findsNothing);
+    await _tapAndWait(
+      tester,
+      inDialog(find.widgetWithText(FilledButton, '安装')),
+      find.text('已安装「流程测试漫画」1.0.0'),
+    );
+    await _pumpUntil(tester, find.text('已安装'));
+    var installed = await tester.runAsync(() => app.registry.get(flowId));
+    expect(installed!.version, '1.0.0');
+    expect(
+      installed.origin.repositoryUrl,
+      'http://127.0.0.1/repo/live/index.json',
+    );
+
+    // 仓库发布 1.1.0（新增主机 cdn.example.org）→ 手动检查更新。
+    await tester.runAsync(() => server.setLiveRepository('flow-v2'));
+    await _pageBackAndSettle(
+      tester,
+      find.byKey(const ValueKey('repo-entry-$flowId')),
+    );
+    await _tapAndWait(tester, find.byTooltip('检查更新'), find.text('1 个源可更新'));
+    await _pageBackAndSettle(tester, find.text('1 个源可更新'));
+    await _pumpUntil(tester, find.textContaining('可更新到 1.1.0'));
+    installed = await tester.runAsync(() => app.registry.get(flowId));
+    expect(installed!.version, '1.0.0', reason: '只提示，不自动安装');
+
+    // 「全部更新」：逐个预览，新增主机高亮并需再次确认。
+    await _tapAndWait(tester, find.byTooltip('规则仓库'), find.text('全部更新'));
+    await _settleTransition(tester);
+    await _tapAndWait(tester, find.text('全部更新'), find.text('cdn.example.org'));
+    expect(find.text('更新源（1 / 1）'), findsOneWidget);
+    expect(inDialog(find.text('新增')), findsOneWidget);
+    await _tapAndWait(
+      tester,
+      inDialog(find.widgetWithText(FilledButton, '更新')),
+      find.text('确认新增的主机'),
+    );
+    // 第一次取消：不安装，回到预览。
+    await tester.tap(find.widgetWithText(TextButton, '取消').last);
+    await _pumpUntilGone(tester, find.text('确认新增的主机'));
+    installed = await tester.runAsync(() => app.registry.get(flowId));
+    expect(installed!.version, '1.0.0');
+    await _tapAndWait(
+      tester,
+      inDialog(find.widgetWithText(FilledButton, '更新')),
+      find.text('确认并更新'),
+    );
+    await _tapAndWait(tester, find.text('确认并更新'), find.text('已更新 1 个源'));
+    installed = await tester.runAsync(() => app.registry.get(flowId));
+    expect(installed!.version, '1.1.0');
+    expect(installed.manifest!.allowedHosts, contains('cdn.example.org'));
+    expect(find.text('全部更新'), findsNothing);
+
+    // 仓库请求不带源的 headers 与 Cookie，使用固定 UA。
+    final repoRequests = [
+      for (final r in await tester.runAsync(server.requests) ?? const [])
+        if (r.path.startsWith('/repo/')) r,
+    ];
+    expect(repoRequests, isNotEmpty);
+    for (final r in repoRequests) {
+      expect(r.headers['user-agent'], RepositoryHttpClient.userAgent);
+      expect(r.headers.containsKey('cookie'), isFalse);
+    }
     await app.dispose(tester);
   });
 }

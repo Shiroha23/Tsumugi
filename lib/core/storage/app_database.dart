@@ -25,13 +25,14 @@ part 'app_database.g.dart';
     LibraryEntries,
     ItemProgressEntries,
     UnitProgressEntries,
+    SourceRepositories,
   ],
 )
 class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -57,6 +58,14 @@ class AppDatabase extends _$AppDatabase {
           await m.addColumn(
             schema.installedSources,
             schema.installedSources.settingsJson,
+          );
+        },
+        // v5：规则仓库订阅与已安装源的所属仓库（architecture §4.4）。
+        from4To5: (m, schema) async {
+          await m.createTable(schema.sourceRepositories);
+          await m.addColumn(
+            schema.installedSources,
+            schema.installedSources.repositoryUrl,
           );
         },
       )(m, from, to);

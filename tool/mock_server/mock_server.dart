@@ -25,6 +25,8 @@
 /// | `GET /big5/book/1` | Big5 小说详情：`Content-Type: text/html; charset=Big5` |
 /// | `GET /big5/book/1/meta-only` | 同上，但不带 charset，只靠 `<meta charset="big5">` |
 /// | `GET /static/*`、`GET /covers/*`、`GET /pages/*` | 1×1 PNG |
+/// | `GET /repo/<目录>/<路径>` | `test/fixtures/repository/<目录>/` 中的规则仓库索引与清单，按字节原样返回（索引中记录了 sha256） |
+/// | `GET /repo/live/<路径>` | 同上，目录为 [MockServer.liveRepository]（默认 `flow-v1`，测试改为 `flow-v2` 模拟“发布新版本”） |
 /// | `* /echo` | 以 JSON 返回 method / host / path / query / headers / cookies / body |
 /// | `POST /login`（form：user、pass=secret） | 成功时 `Set-Cookie: session=…` 并 303 到 `/members` |
 /// | `GET /members` | 需要 `session` Cookie，否则 401 |
@@ -71,6 +73,7 @@ class MockServer {
 
   /// 在设备上运行集成测试用（`main.dart --test-control`）：开启 `/__test/*` 控制接口——
   /// `GET /__test/requests`（已记录的请求，JSON）、`POST /__test/reset`（清空请求记录与计数器）、
+  /// `POST /__test/repo-live?dir=<目录>`（设置 [liveRepository]）、
   /// `GET /__test/fixture?path=<test/fixtures 下的相对路径>`（原样返回测试数据，如虚构源清单）。
   /// 控制接口的请求本身不记录。设备读不到电脑上的 `test/fixtures/`，测试经这些接口取数据与断言请求。
   final bool testControl;
@@ -96,6 +99,10 @@ class MockServer {
   final List<RecordedRequest> requests = [];
 
   final Map<String, int> _flakyCounters = {};
+
+  /// `/repo/live/` 对应的 `test/fixtures/repository/` 子目录。
+  String liveRepository = defaultLiveRepository;
+  static const defaultLiveRepository = 'flow-v1';
 
   /// `/chunked?key=` 每个 key 已 flush 出去的字节数（测试用来确认超限后服务端停止发送）。
   final Map<String, int> chunkedSent = {};
@@ -178,6 +185,15 @@ class MockServer {
       case ('POST', '/__test/reset'):
         requests.clear();
         _flakyCounters.clear();
+        liveRepository = defaultLiveRepository;
+        return res.close();
+      case ('POST', '/__test/repo-live'):
+        final dir = req.uri.queryParameters['dir'] ?? '';
+        if (!RegExp(r'^[\w-]+$').hasMatch(dir)) {
+          res.statusCode = HttpStatus.badRequest;
+          return res.close();
+        }
+        liveRepository = dir;
         return res.close();
       case ('GET', '/__test/fixture'):
         final rel = req.uri.queryParameters['path'] ?? '';
@@ -241,6 +257,29 @@ class MockServer {
     return res.close();
   }
 
+  /// 规则仓库测试数据：`/repo/<目录>/<路径>`，按字节原样返回。
+  Future<void> _repository(HttpRequest req, String rest) async {
+    final res = req.response;
+    var rel = rest;
+    if (rel.startsWith('live/')) {
+      rel = '$liveRepository/${rel.substring('live/'.length)}';
+    }
+    // 只允许普通相对路径，防止路径穿越。
+    if (!RegExp(r'^[\w-]+(/[\w.-]+)+$').hasMatch(rel) ||
+        rel.split('/').any((s) => s == '..' || s == '.')) {
+      res.statusCode = HttpStatus.badRequest;
+      return res.close();
+    }
+    final file = File('${fixturesDir.parent.path}/repository/$rel');
+    if (!file.existsSync()) {
+      res.statusCode = HttpStatus.notFound;
+      return res.close();
+    }
+    res.headers.contentType = ContentType.json;
+    res.add(await file.readAsBytes());
+    return res.close();
+  }
+
   /// 请求实际使用的地址（Host 头），如 `http://192.168.1.5:8080`。
   String _requestOrigin(HttpRequest req) {
     final host = req.headers.host ?? '127.0.0.1';
@@ -269,6 +308,9 @@ class MockServer {
     // `http://127.0.0.1:8080` 换成本次请求所用的地址（如局域网 IP），手机上即可直接导入。
     if (path.startsWith('/sources/')) {
       return _source(req, path.substring('/sources/'.length));
+    }
+    if (path.startsWith('/repo/')) {
+      return _repository(req, path.substring('/repo/'.length));
     }
     if (path.startsWith('/gated/')) {
       if (!verified) {
