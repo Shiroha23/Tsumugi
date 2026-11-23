@@ -258,6 +258,25 @@ function semanticCases() {
   record('trace concat self', () => trace(holeyTarget(), (p) => AP.concat.call(p, [7])));
   record('trace flat', () => trace([1, [2, , 3], , 4], (p) => AP.flat.call(p)));
   record('trace flatMap', () => trace([1, , 2], (p) => AP.flatMap.call(p, (x) => [x, x])));
+  record('splice near max', () => {
+    const o = { length: 2 ** 53 - 1 };
+    try {
+      AP.splice.call(o, 2 ** 53 - 2, 1, 'a', 'b');
+    } catch (e) {
+      return [e.name, Object.keys(o)];
+    }
+    return ['no error', Object.keys(o), o.length];
+  });
+  record('splice at max', () => {
+    const o = { length: 2 ** 53 - 1 };
+    AP.splice.call(o, 2 ** 53 - 2, 1, 'a');
+    return [Object.keys(o), o.length];
+  });
+  record('unshift near max', () => AP.unshift.call({ length: 2 ** 53 - 1 }, 1));
+  record('concat near max', () => {
+    const o = { length: 2 ** 53 - 1, [Symbol.isConcatSpreadable]: true };
+    return AP.concat.call([], [1], o).length;
+  });
   record('trace frozen', () => trace(Object.freeze([1, 2]), (p) => AP.reverse.call(p)));
   record('length reads', () => {
     let reads = 0;

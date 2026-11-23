@@ -259,7 +259,8 @@ const _script = r'''
         const dc = toIntegerOrInfinity(deleteCount);
         del = dc < 0 ? 0 : dc < len - actualStart ? dc : len - actualStart;
       }
-      if (len + itemCount - del > MAX_SAFE) throw new TypeErr('array too long');
+      // 先减后比较：len + itemCount 可能超出能精确表示的范围。
+      if (len - del > MAX_SAFE - itemCount) throw new TypeErr('array too long');
       const a = arraySpeciesCreate(o, del);
       for (let k = 0; k < del; k++) {
         const from = actualStart + k;
