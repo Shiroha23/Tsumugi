@@ -93,6 +93,7 @@ final class DownloadUnit {
     required this.errorCode,
     required this.queueOrder,
     required this.updatedAt,
+    this.streamLabel,
   });
 
   final String sourceId;
@@ -108,6 +109,9 @@ final class DownloadUnit {
   final String? errorCode;
   final int queueOrder;
   final DateTime updatedAt;
+
+  /// 视频：下载对话框中选择的清晰度标签（architecture §4.5.1）。
+  final String? streamLabel;
 
   /// 因验证 / 登录或源不可用而暂停（整个源暂停）。
   bool get pausesSource =>
@@ -128,6 +132,7 @@ final class DownloadUnit {
     errorCode: r.errorCode,
     queueOrder: r.queueOrder,
     updatedAt: r.updatedAt,
+    streamLabel: r.streamLabel,
   );
 }
 
@@ -137,11 +142,15 @@ final class DownloadRequestUnit {
     this.unit, {
     required this.groupName,
     required this.index,
+    this.streamLabel,
   });
 
   final Unit unit;
   final String groupName;
   final int index;
+
+  /// 视频的清晰度标签（见 [DownloadUnit.streamLabel]）。
+  final String? streamLabel;
 }
 
 /// `download_items` / `download_units` 的访问层。
@@ -228,6 +237,7 @@ class DownloadRepository {
               errorCode: const Value(null),
               queueOrder: order++,
               updatedAt: now,
+              streamLabel: Value(u.streamLabel),
             ),
           );
     }

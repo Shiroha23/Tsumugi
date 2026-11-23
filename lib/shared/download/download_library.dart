@@ -10,6 +10,31 @@ import 'download_repository.dart';
 import 'download_store.dart';
 import 'novel_chapter_codec.dart';
 import 'unit_manifest.dart';
+import 'video_manifest.dart';
+
+/// 已下载的视频剧集（离线回放，architecture §4.5.1）。
+final class DownloadedVideo {
+  const DownloadedVideo({
+    required this.dir,
+    required this.manifest,
+    required this.layout,
+    required this.subtitles,
+  });
+
+  final Directory dir;
+  final VideoManifest manifest;
+
+  /// 本地会话的播放列表与文件（名称都由客户端生成，已确认文件存在）。
+  final LocalVideoLayout layout;
+
+  /// 文件仍在的外挂字幕。
+  final List<(VideoSubtitleEntry, File)> subtitles;
+
+  /// 已下载的清晰度。
+  String get label => manifest.label;
+
+  File fileOf(String name) => DownloadStore.fileIn(dir, name);
+}
 
 /// 阅读器的详情取不到时是否改用下载快照：验证 / 登录类错误照常抛出（界面需要显示「打开验证页」，
 /// 也不能让旧快照掩盖新章节），其余（离线、源被删除 / 禁用等）回退。
@@ -85,6 +110,52 @@ class DownloadLibrary {
         chapter.blocks,
         imageHeaders: chapter.imageHeaders,
         localImages: local,
+      );
+    } on Object catch (e) {
+      await markBroken(sourceId, itemId, unitId, e);
+      return null;
+    }
+  }
+
+  /// 已下载的视频剧集；未下载或已损坏（`video.json` 无效、分片文件缺失）时为 null（已标为未下载）。
+  Future<DownloadedVideo?> video(
+    String sourceId,
+    String itemId,
+    String unitId,
+  ) async {
+    final dir = await _doneDir(sourceId, itemId, unitId);
+    if (dir == null) return null;
+    try {
+      final f = DownloadStore.fileIn(dir, videoManifestFileName);
+      if (!await f.exists()) throw const FormatException('video.json 缺失');
+      final manifest = VideoManifest.decode(await f.readAsString());
+      if (manifest.isHls && !manifest.complete) {
+        throw const FormatException('有未下载的分片');
+      }
+      final layout = localVideoLayout(manifest);
+      for (final name in layout.files.keys) {
+        final file = DownloadStore.fileIn(dir, name);
+        if (!await file.exists() || await file.length() == 0) {
+          throw FormatException('文件缺失：$name');
+        }
+      }
+      // 单文件：记录了长度时必须一致（截断但保留文件头的文件也能通过容器识别）。
+      if (manifest.file?.length case final length?) {
+        final actual = await DownloadStore.fileIn(dir, videoFileName).length();
+        if (actual != length) {
+          throw FormatException('文件长度不符：$actual / $length');
+        }
+      }
+      final subtitles = <(VideoSubtitleEntry, File)>[];
+      for (final s in manifest.subtitles) {
+        final file = DownloadStore.fileIn(dir, s.file);
+        if (await file.exists()) subtitles.add((s, file));
+      }
+      return DownloadedVideo(
+        dir: dir,
+        manifest: manifest,
+        layout: layout,
+        subtitles: subtitles,
       );
     } on Object catch (e) {
       await markBroken(sourceId, itemId, unitId, e);

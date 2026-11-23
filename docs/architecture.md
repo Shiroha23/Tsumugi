@@ -114,7 +114,7 @@ docs/
 - **数据库**：`core/storage/app_database.dart` 中的 `AppDatabase`（drift），文件为应用支持目录下的
   `tsumugi.sqlite`（`getApplicationSupportDirectory`，不放在用户“文档”目录），SQL 在后台 isolate 执行。
   通过 `appDatabaseProvider` 获取，测试中用内存 SQLite 覆盖。
-- **迁移策略**：当前 `schemaVersion = 7`（v2 新增 `source_storage_entries`；v3 新增书架与进度三张表，见 §4.2；v4 为 `installed_sources` 新增 `settings_json`；v5 新增 `source_repositories` 与 `installed_sources.repository_url`，见 §4.4；v6 新增下载两张表，见 §4.5；v7 为 WebDAV 同步新增 `sync_state` / `sync_tombstones`、参与同步的表加 `modified_at` 与改动跟踪触发器，见 §4.6）。每次改表结构：`schemaVersion` 加一 →
+- **迁移策略**：当前 `schemaVersion = 8`（v2 新增 `source_storage_entries`；v3 新增书架与进度三张表，见 §4.2；v4 为 `installed_sources` 新增 `settings_json`；v5 新增 `source_repositories` 与 `installed_sources.repository_url`，见 §4.4；v6 新增下载两张表，见 §4.5；v7 为 WebDAV 同步新增 `sync_state` / `sync_tombstones`、参与同步的表加 `modified_at` 与改动跟踪触发器，见 §4.6；v8 为 `download_units` 新增 `stream_label`（视频下载所选的清晰度），见 §4.5.1）。每次改表结构：`schemaVersion` 加一 →
   `dart run drift_dev make-migrations`（把新 schema 导出到 `drift_schemas/`，生成 steps 文件与
   `test/core/storage/migrations/` 下的迁移测试）→ 在 `onUpgrade` 中用 `stepByStep` 写每一步。
   已发布的 `drift_schemas/*.json` 不可修改。数据库版本高于客户端时拒绝打开（不支持降级）。
@@ -273,7 +273,31 @@ docs/
 
 ### 4.5.1 视频下载与后台下载（M6 第二期）
 
-> 状态：设计已定（2026-11-23），尚未实现。沿用 §4.5 的队列、表、目录规则与阅读器接入方式，这里只写视频特有的部分与后台下载。
+> 状态：视频下载与离线回放已实现（2026-11）：`core/network/media/hls_download_plan.dart`（下载用的 HLS 解析与选择）、
+> `aes128.dart`（与代理共用的解密）、`MediaProxy.openLocal`（本地来源会话）、`shared/download/video_downloader.dart`
+> （`VideoDownloadTask`）与 `video_manifest.dart`（`video.json`、本地播放列表）；播放页对已下载剧集走本地会话。
+> 后台下载（#74）另一个 PR 实现。沿用 §4.5 的队列、表、目录规则与阅读器接入方式，这里只写视频特有的部分与后台下载。
+>
+> 实现细节（规范未写到的部分）：
+> - 所选清晰度存为 `download_units.stream_label`（v8）。下载对话框的清晰度列表取自所选线路第一集的 `content()`（取不到时下载每集的第一个流）；
+>   播放页的清晰度选择不持久化，因此默认取第一个。
+> - `video.json` 存**结构**（每个轨道的分片时长、`DISCONTINUITY`、初始化分片与本地文件名），本地会话打开时由它重新生成 HLS（主播放列表
+>   只含 `STREAM-INF`、音频 / 字幕的 `EXT-X-MEDIA`；子播放列表只含 `TARGETDURATION` / `MEDIA-SEQUENCE` / `PLAYLIST-TYPE` / `MAP` /
+>   `DISCONTINUITY` / `EXTINF` / `ENDLIST`），源给出的名称 / 语言去掉引号与控制字符后才写入属性。字节区间引用的分片各自存为一个文件，
+>   本地播放列表中不再有 `BYTERANGE`。同一子播放列表的代理地址扩展名取第一项的（FFmpeg 的扩展名检查，§6.4.3）。
+> - 单文件下载直接写 `media.bin`（不经 `*.part`，以便跨重启续传），完成与否只看完成标记；HLS 分片与其他文件仍先写 `*.part` 再改名。
+> - 外挂字幕：格式不可用（伪装成字幕的 HTML 等）与上游 4xx 的条目跳过（在线播放时它们同样只是“加载失败”），其他网络错误让剧集失败；
+>   文件名序号与 `content.subtitles` 的下标对应。续传时 `lang` / `format` / `charset` 未变且文件仍在的沿用。
+> - 暂停 / 删除视频剧集时**中止**进行中的分片请求（漫画 / 小说仍是当前请求结束后停止）。
+> - 一个分片失败时其余并发请求随之中止，已写完的分片记入 `video.json`，重试时续传。`E_LIMIT` 时删除该剧集已写的全部文件。
+> - 字节区间分片要求上游返回 206 且 `Content-Range` 起点一致，否则 `E_UNSUPPORTED`。
+> - 播放列表：每个剧集的全部播放列表（主 / 子）合计不超过 16 MB，取一个播放列表或密钥不超过 60 s（从发出请求算起，含等响应头、挑战扫描与重试，不含限速排队）；
+>   每取完一个子播放列表就累加检查 20000 个分片的上限，不先取完全部（至多 101 个）播放列表。
+>   `EXT-X-KEY` 的方式按播放列表**原文**检查（改写时会整行删掉带其他 `…URI=` 属性的标签，不能据改写结果判断没有加密）。
+> - 分片与单文件开头的识别只看前 1 KB，与代理相同。`StreamRef.headers` 中的 `Range` / `If-Range` 不发送（清单 `headers` 中的仍会由网络层加上，但没有发区间请求的单文件与分片都必须返回 200，
+>   不会存下不完整的内容）；单文件的首个请求必须返回 200。离线打开单文件时实际长度必须与记录的 `Content-Length` 一致。单文件已写满但没有完成标记时，只取最后 1 个字节确认版本未变。续传的 206 响应还要求 `Content-Range` 终点正确、响应带的 `ETag` / `Last-Modified`（若有）与记录一致，否则从头下载。
+> - 单文件的外挂字幕在媒体响应体读完之后再取（不让媒体连接闲置）；续传时外挂字幕按地址的 sha256 判断能否沿用。不再引用的 `sub-NN.*`（格式变了、条目没了、上次中途失败留下的）在每次取完字幕后删除。
+>   任何路径上的 `E_LIMIT`（含播放列表 / 分片数超限）都删除该剧集已写的全部文件；写入 `video.json` 的文字按读取时的长度上限截断（显示用）或不保存（`ETag` 等参与续传的）。
 
 已定的取舍（2026-11-23）：
 
@@ -736,6 +760,7 @@ tsumugi.ui.openWebView ────────┘   （单飞 / 节流） └�
 | `script_stack_depth_test.dart` | QuickJS 原生库加载与栈上限；release 下测深度（文件头注释） | ✓ | ✓（本机 + CI） | CI | Android release 实测 |
 | `video_playback_test.dart` | 真实 libmpv 经媒体代理播放（§6.4.2） | ✓ | ✗（见下） | — | Android |
 | `download_offline_test.dart` | 下载漫画章节与带插图的小说章节 → mock 服务器断网 → 从书架「下载」标签离线阅读（§4.5） | ✓ | ✓（本机 + CI） | CI | — |
+| `video_download_offline_test.dart` | 视频详情「下载」一集（AES-128 HLS + 字幕轨 + 外挂字幕）→ 断网 → 本地来源会话返回明文分片与字幕；Windows 上另在播放页离线播放并选字幕（§4.5.1） | ✓ | ✓（本机 + CI，不播放） | CI（不播放） | — |
 
 - **mock 服务器**（`integration_test/test_mock.dart`）：桌面上在测试进程内启动；设备 / 模拟器读不到电脑上的 `test/fixtures/`，
   改为连接电脑上以 `--test-control` 启动的服务器（经 `/__test/*` 取测试数据、读请求记录、`/__test/offline` 模拟断网）。所有 HTTP 连接都经自定义连接接到它，
@@ -1225,6 +1250,10 @@ M5 音乐复用同一 libmpv，不再增加体积。预编译库内部的组件�
 多线路 / 多清晰度：JSON 接口 `/video/api/search`、`/video/api/show/2`（线路 A 走 `/video/protected/`，线路 B 走 `/video/media/`，各 3 集）、
 `/video/api/play/<a|b>/<n>`（`720p` 为 AES-128 HLS，`360p` 为 MP4），配合虚构脚本源 `test/fixtures/sources/mock_video_script.json`
 （脚本即 `test/fixtures/script/video/source.js`，测试检查两者一致）。集成测试用它在真实 libmpv 上覆盖播放页的换清晰度、自动下一集与续播。
+视频下载（§4.5.1）另有：`hls/plain.m3u8`（明文 HLS，分片 `hls/plain/seg0-2.ts` 由 mock 服务器把加密分片即时解密得到）、
+`hls/live.m3u8`（没有 `EXT-X-ENDLIST`）、`hls/sample_aes.m3u8`、`hls/master_plain.m3u8`（两个变体，带宽高的为明文，带字幕轨）；
+`/video/media/*` 带强 `ETag` 与 `Last-Modified` 并按 `If-Range` 决定是否按区间返回（`MockServer.videoRevision` 改变内容版本），
+`/video/noetag/*` 不带校验值。
 
 #### 6.4.6 风险与后续拆分
 

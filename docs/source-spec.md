@@ -648,6 +648,11 @@ export async function search(keyword, page) {
     字幕播放列表中的分片必须是 WebVTT；HLS 以外的播放列表 / 清单、伪装成其他格式的分片会被拒绝。
   - `EXT-X-KEY:METHOD=AES-128` 由客户端取密钥并解密；与 `EXT-X-BYTERANGE` 同时使用暂不支持。
   - 音视频不受 20 MB 响应体上限限制；`timeoutMs` 限制等待响应头的时间，以及读取响应体时相邻两块数据的间隔（而不是整个响应）。
+  - **下载**（离线播放，architecture §4.5.1）：用户下载剧集时，客户端直接经本源的网络层取同样的地址（不经播放器与代理），
+    白名单、Cookie、默认 headers、`StreamRef.headers`（`Range` / `If-Range` 除外，区间由客户端决定）与限速规则与播放时相同：
+    播放列表与外挂字幕计入 `rateLimit`，分片、密钥与单文件的区间续传计入媒体配额。每个剧集最多 3 个分片请求同时进行，
+    因此下载期间的分片请求比播放时密集。HLS 取 `BANDWIDTH` 最高的变体；直播（没有 `EXT-X-ENDLIST`）与 `AES-128` 以外的加密方式不能下载；
+    每个剧集最多 20000 个分片、合计 16 GiB。
 
 ## 6. 错误码
 

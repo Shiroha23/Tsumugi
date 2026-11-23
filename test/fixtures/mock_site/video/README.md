@@ -17,6 +17,10 @@
 | `hls/mixed.m3u8` | 手写：没有密钥的加密分片（密文无法识别为媒体）、白名单外分片、重定向到白名单外的分片、返回 JSON 文本的“分片”（测试代理的拒绝路径） |
 | `hls/key.bin` | AES-128 密钥：ASCII `tsumugi-test-key`（16 字节，虚构，仅供测试），IV = 1 |
 | `hls/master_sub.m3u8` | 手写：同一 `index.m3u8`，另带一条字幕轨（`EXT-X-MEDIA:TYPE=SUBTITLES`，`NAME="HLS Chinese"`，`LANGUAGE="zh"`） |
+| `hls/plain.m3u8` | 手写：明文 HLS（视频下载测试），分片 `plain/seg0-2.ts` 由 mock 服务器把 `seg0-2.ts` 即时解密得到（不另存文件） |
+| `hls/live.m3u8` | 手写：同上但没有 `EXT-X-ENDLIST`（直播，不能下载） |
+| `hls/sample_aes.m3u8` | 手写：`METHOD=SAMPLE-AES`（代理不解密，不能下载） |
+| `hls/master_plain.m3u8` | 手写：两个变体（`index.m3u8` 带宽低、`plain.m3u8` 带宽高）与字幕轨 |
 | `hls/sub.m3u8`、`hls/sub0-2.vtt` | 手写：字幕播放列表与 3 个 2 s 的 WebVTT 分片（`X-TIMESTAMP-MAP` 对应分片的 1.4 s 起始时间戳） |
 | `subs/zh.srt` | 手写：UTF-8（带 BOM）、CRLF 的 srt，含 `<i>` 与 `{\an8}` 标签 |
 | `subs/zh_gbk.srt` | 手写：GBK 编码（无 BOM，服务器不带 charset）的 srt |

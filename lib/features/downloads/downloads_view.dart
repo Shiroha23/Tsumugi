@@ -12,6 +12,7 @@ import '../../sources/runtime/source_error_text.dart';
 import '../../sources/source.dart';
 import '../comic/reader/reader_route.dart';
 import '../novel/novel_routes.dart';
+import '../video/video_routes.dart';
 import 'download_routes.dart';
 
 /// 书架的「下载」标签：下载的条目，点击进入章节状态页（architecture §4.5）。
@@ -57,7 +58,8 @@ class DownloadsTab extends ConsumerWidget {
               overflow: TextOverflow.ellipsis,
             ),
             subtitle: Text(
-              '${source?.name ?? '源已删除'} · 已下载 ${done.length} / ${mine.length} 章'
+              '${source?.name ?? '源已删除'} · 已下载 ${done.length} / ${mine.length} '
+              '${d.item.mediaType == MediaType.video ? '集' : '章'}'
               '${_summary(mine)}',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -195,6 +197,11 @@ class DownloadItemPage extends ConsumerWidget {
                         itemId,
                         u.unitId,
                       ),
+                      MediaType.video => VideoRoutes.player(
+                        sourceId,
+                        itemId,
+                        u.unitId,
+                      ),
                       _ => comicReaderLocation(sourceId, itemId, u.unitId),
                     }),
               onDelete: () => _confirmDelete(context, ref, title, unit: u),
@@ -259,8 +266,11 @@ class _UnitTile extends ConsumerWidget {
     final u = unit;
     final status = switch (u.status) {
       DownloadStatus.done => '已下载',
-      DownloadStatus.running =>
-        u.totalFiles > 0 ? '下载中 ${u.completedFiles} / ${u.totalFiles}' : '下载中',
+      DownloadStatus.running => [
+        '下载中',
+        if (u.totalFiles > 1) ' ${u.completedFiles} / ${u.totalFiles}',
+        if (u.bytes > 0) ' · ${formatBytes(u.bytes)}',
+      ].join(),
       DownloadStatus.queued => '排队中',
       DownloadStatus.paused => u.pausesSource ? '已暂停（需要处理）' : '已暂停',
       DownloadStatus.failed => '失败：${_errorText(u.errorCode)}',
@@ -274,7 +284,7 @@ class _UnitTile extends ConsumerWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('${showGroup ? '${u.groupName} · ' : ''}$status$size'),
-          if (u.status == DownloadStatus.running && u.totalFiles > 0)
+          if (u.status == DownloadStatus.running && u.totalFiles > 1)
             Padding(
               padding: const EdgeInsets.only(top: 4),
               child: LinearProgressIndicator(
@@ -318,7 +328,7 @@ class _UnitTile extends ConsumerWidget {
 
   static String _errorText(String? code) => switch (code) {
     downloadFilesMissing => '本地文件缺失或损坏',
-    downloadIoError => '写入文件失败',
+    downloadIoError || downloadStorageError => '写入文件失败（存储空间不足？）',
     downloadSourceUnavailable => '源不可用',
     null => '未知错误',
     final c => switch (SourceErrorCode.fromWire(c)) {

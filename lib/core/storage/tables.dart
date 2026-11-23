@@ -304,6 +304,10 @@ class DownloadUnits extends Table {
 
   DateTimeColumn get updatedAt => dateTime()();
 
+  /// 视频：下载对话框中选择的清晰度标签（v8，architecture §4.5.1）；下载时选 `content.streams` 中同名的流，
+  /// 没有则第一个。漫画 / 小说为 null。
+  TextColumn get streamLabel => text().nullable()();
+
   @override
   Set<Column<Object>> get primaryKey => {sourceId, itemId, unitId};
 }

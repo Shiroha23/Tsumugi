@@ -403,7 +403,13 @@ class _Actions extends ConsumerWidget {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
-        SnackBar(content: Text(n == 0 ? '所选章节都已下载或已在队列中' : '已加入下载队列（$n 章）')),
+        SnackBar(
+          content: Text(
+            mediaType == MediaType.video
+                ? (n == 0 ? '所选剧集都已下载或已在队列中' : '已加入下载队列（$n 集）')
+                : (n == 0 ? '所选章节都已下载或已在队列中' : '已加入下载队列（$n 章）'),
+          ),
+        ),
       );
   }
 
@@ -462,7 +468,9 @@ class _Actions extends ConsumerWidget {
               }),
               onPressed: read,
             ),
-            if (mediaType == MediaType.comic || mediaType == MediaType.novel)
+            if (mediaType == MediaType.comic ||
+                mediaType == MediaType.novel ||
+                mediaType == MediaType.video)
               OutlinedButton.icon(
                 icon: const Icon(Icons.download_outlined),
                 label: const Text('下载'),

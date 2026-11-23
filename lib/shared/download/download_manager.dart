@@ -5,7 +5,10 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import '../../sources/model/common.dart';
+import '../../core/network/network_exception.dart';
+import '../../core/network/source_http_client.dart';
 import '../../sources/model/content.dart';
+import '../../sources/network_error_mapping.dart';
 import '../../sources/runtime/source_runtime.dart';
 import '../../sources/source.dart';
 import '../export/export_models.dart' show ExportImage;
@@ -18,6 +21,7 @@ import 'download_repository.dart';
 import 'download_store.dart';
 import 'novel_chapter_codec.dart';
 import 'unit_manifest.dart';
+import 'video_downloader.dart';
 
 /// 由 sourceId 取得源实例（`SourceRuntime.get`，与阅读器同一缓存实例）。
 typedef DownloadSourceResolver = Future<Source> Function(String sourceId);
@@ -28,8 +32,17 @@ typedef DownloadImageFetcher = Future<Uint8List> Function(
   ImageRef ref,
 );
 
+/// 为视频下载取得该源的客户端（与媒体代理相同：该源的 `SourceSession`）与清单的 `baseUrl`。
+/// 调用方用完后 `close()` 客户端。
+typedef DownloadVideoClientFactory = Future<(SourceHttpClient, Uri)> Function(
+  String sourceId,
+);
+
 /// 文件读写失败。
 const downloadIoError = 'E_IO';
+
+/// 视频写入下载目录失败（磁盘满等，architecture §4.5.1）。
+const downloadStorageError = 'E_STORAGE';
 
 final class _Cancelled implements Exception {
   const _Cancelled();
@@ -40,6 +53,9 @@ class _Job {
 
   final DownloadUnit unit;
   bool cancelled = false;
+
+  /// 取消时中止进行中的请求（视频分片；漫画 / 小说仍在当前请求结束后停止）。
+  final net = NetCancellation();
 
   /// 取消原因是删除：任务结束时再清一次目录（进行中的写入可能晚于删除完成）。
   bool deleted = false;
@@ -65,6 +81,8 @@ class DownloadManager {
     required this.store,
     required this.sourceFor,
     required this.fetchImage,
+    this.videoClientFor,
+    this.videoLimits = const VideoDownloadLimits(),
     this.maxConcurrentUnits = 2,
     this.maxNovelImageBytes = NovelExportJob.defaultMaxImageBytes,
     this.maxNovelTotalImageBytes = NovelExportJob.defaultMaxTotalImageBytes,
@@ -82,6 +100,10 @@ class DownloadManager {
   final DownloadStore store;
   final DownloadSourceResolver sourceFor;
   final DownloadImageFetcher fetchImage;
+
+  /// 为 null 时不支持视频下载（视频 unit 以 `E_UNSUPPORTED` 失败）。
+  final DownloadVideoClientFactory? videoClientFor;
+  final VideoDownloadLimits videoLimits;
   final int maxConcurrentUnits;
 
   /// 小说正文图片的单张 / 合计上限，沿用导出的默认值；超过的保留占位，不算失败。
@@ -101,12 +123,14 @@ class DownloadManager {
   /// 进行中的任务，按 sourceId（同一源只有一个）。
   final _jobs = <String, _Job>{};
   bool _started = false;
+  bool _starting = false;
   bool _disposed = false;
   Future<void>? _pumping;
   bool _pumpAgain = false;
 
   /// 进行中的任务都结束且没有可开始的任务时完成（测试用）。
   Future<void> get idle async {
+    await _startup;
     while (true) {
       final pumping = _pumping;
       if (pumping != null) {
@@ -120,9 +144,25 @@ class DownloadManager {
 
   /// 应用启动时调用一次：上次进行中的 unit 回到 `queued`，然后开始处理队列。
   Future<void> start() async {
-    if (_started) return;
-    _started = true;
+    if (_starting) return _startup;
+    _starting = true;
+    final done = Completer<void>();
+    _startup = done.future;
+    try {
+      await _startQueue();
+    } finally {
+      done.complete();
+    }
+  }
+
+  Future<void>? _startup;
+
+  Future<void> _startQueue() async {
+    // 清理与重置完成之前不开始任何任务（_pump 检查 _started）：否则新任务的 `*.part` 会被清理删掉、
+    // 刚认领的 unit 会被重置。
     await repository.resetRunning();
+    await _cleanPartFiles();
+    _started = true;
     _pump();
   }
 
@@ -265,6 +305,7 @@ class DownloadManager {
       job
         ..cancelled = true
         ..deleted = job.deleted || deleted;
+      job.net.cancel();
     }
   }
 
@@ -274,6 +315,7 @@ class DownloadManager {
         j
           ..cancelled = true
           ..deleted = j.deleted || deleted;
+        j.net.cancel();
       }
     }
   }
@@ -383,6 +425,8 @@ class DownloadManager {
             code == SourceErrorCode.loginRequired =>
       (DownloadStatus.paused, code.wire),
     SourceException(:final code) => (DownloadStatus.failed, code.wire),
+    NetworkException() => _classify(e.toSourceException()),
+    DownloadStorageException() => (DownloadStatus.failed, downloadStorageError),
     FileSystemException() => (DownloadStatus.failed, downloadIoError),
     _ => (DownloadStatus.failed, SourceErrorCode.parse.wire),
   };
@@ -391,12 +435,13 @@ class DownloadManager {
   Future<(int, int, int)> _download(_Job job) async {
     final u = job.unit;
     final item = await repository.item(u.sourceId, u.itemId);
+    if (item?.item.mediaType == MediaType.video) return _downloadVideo(job);
     final kind = switch (item?.item.mediaType) {
       MediaType.comic => DownloadKind.comic,
       MediaType.novel => DownloadKind.novel,
       _ => throw const SourceException(
         SourceErrorCode.unsupported,
-        '只支持下载漫画与小说',
+        '只支持下载漫画、小说与视频',
       ),
     };
     final dir = await store.unitDir(u.sourceId, u.itemId, u.unitId);
@@ -561,5 +606,80 @@ class DownloadManager {
     await DownloadStore.writeManifest(dir, finalManifest);
     await DownloadStore.markDone(dir);
     return (completed, refs.length, bytes);
+  }
+
+  /// 下载一个视频剧集（architecture §4.5.1）。
+  Future<(int, int, int)> _downloadVideo(_Job job) async {
+    final u = job.unit;
+    final dir = await store.unitDir(u.sourceId, u.itemId, u.unitId);
+    Future<void> ensureRunning() async {
+      job.check();
+      final now = await repository.unit(u.sourceId, u.itemId, u.unitId);
+      if (now?.status != DownloadStatus.running) {
+        job.cancelled = true;
+        throw const _Cancelled();
+      }
+    }
+
+    await ensureRunning();
+    final clientFor = videoClientFor;
+    if (clientFor == null) {
+      throw const SourceException(SourceErrorCode.unsupported, '不支持视频下载');
+    }
+    final source = await sourceFor(u.sourceId);
+    job.check();
+    final content = await source.content(u.unitId);
+    if (content is! VideoContent) {
+      throw const SourceException(SourceErrorCode.parse, '不是视频内容');
+    }
+    await ensureRunning();
+    final done = DownloadStore.fileIn(dir, doneFileName);
+    if (await done.exists()) await done.delete();
+    final (client, baseUrl) = await clientFor(u.sourceId);
+    try {
+      final result = await VideoDownloadTask(
+        client: client,
+        baseUrl: baseUrl,
+        content: content,
+        preferredLabel: u.streamLabel,
+        dir: dir,
+        abort: job.net,
+        limits: videoLimits,
+        onProgress: (completed, total, bytes) => repository.setProgress(
+          u.sourceId,
+          u.itemId,
+          u.unitId,
+          completedFiles: completed,
+          totalFiles: total,
+          bytes: bytes,
+        ),
+      ).run();
+      job.check();
+      await DownloadStore.markDone(dir);
+      return result;
+      // 暂停 / 删除时进行中的请求被中止而抛出的错误由 [_run] 忽略（job.cancelled）。
+    } finally {
+      client.close();
+    }
+  }
+
+  /// 删除下载目录中崩溃 / 强杀留下的临时文件（`*.part`，architecture §4.5.1「安全」）。
+  /// 启动时、开始任何任务之前调用。
+  Future<void> _cleanPartFiles() async {
+    try {
+      final root = await store.root();
+      if (!await root.exists()) return;
+      await for (final e in root.list(recursive: true, followLinks: false)) {
+        if (e is File && e.path.endsWith(partSuffix)) {
+          try {
+            await e.delete();
+          } on FileSystemException {
+            // 正被占用：下次启动再试。
+          }
+        }
+      }
+    } on Object catch (e) {
+      debugPrint('[download] clean *.part failed: $e');
+    }
   }
 }

@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
+import '../../../shared/download/providers.dart';
 import '../../../shared/history/providers.dart';
 import '../../../shared/library/providers.dart';
 import '../../../shared/video/media_proxy_providers.dart';
@@ -17,6 +18,7 @@ import '../../../sources/network_error_mapping.dart';
 import '../../../sources/runtime/source_runtime.dart';
 import '../../../sources/source.dart';
 import '../../common/detail/media_detail_provider.dart';
+import 'video_player_detail.dart';
 import 'video_episode_panel.dart';
 import 'video_fullscreen.dart';
 import 'video_playback.dart';
@@ -80,6 +82,9 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
   late Duration? _initialStart = widget.start;
 
   ProxiedStream? _stream;
+
+  /// 当前剧集已下载：经本地来源会话播放，不调用 `content()`（architecture §4.5.1「离线回放」）。
+  DownloadedVideo? _local;
   List<StreamRef> _streams = const [];
   int _streamIndex = -1;
 
@@ -199,7 +204,7 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
         );
     }
     ref.listenManual(
-      mediaDetailProvider(widget.sourceId, widget.itemId),
+      videoPlayerDetailProvider((widget.sourceId, widget.itemId)),
       (_, next) => _onDetail(next),
       fireImmediately: true,
     );
@@ -306,6 +311,11 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
 
   void _onPlayerError(String e) {
     if (!mounted) return;
+    // 已下载的文件缺失 / 损坏：标为未下载并改用网络（architecture §4.5.1）。
+    if (_stream case final s? when s.isLocal && s.localFileError) {
+      _fallBackToNetwork();
+      return;
+    }
     // 代理记录的上游失败（白名单、人机验证、超时……）比播放器的错误文字更有用：
     // 人机验证 / 登录时显示「打开验证页」，完成后重新加载。
     final failure = _stream?.lastFailure;
@@ -369,14 +379,55 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
   /// 这次加载仍是最新的（没有被重试、换集或页面销毁取代）。
   bool _current(int generation) => mounted && generation == _generation;
 
-  /// 取当前剧集的 content 并播放。
-  Future<void> _load({Duration? start}) async {
+  /// 本地文件不可用：标为未下载，从当前位置改用网络播放。
+  void _fallBackToNetwork() {
+    final local = _local;
+    final position = _loading ? null : _player.state.position;
+    _local = null;
+    if (local != null) {
+      ref
+          .read(downloadLibraryProvider)
+          .markBroken(widget.sourceId, widget.itemId, _unitId, '播放时文件不可用')
+          .ignore();
+    }
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(const SnackBar(content: Text('已下载的文件不可用，改为在线播放')));
+    _load(start: position, skipLocal: true);
+  }
+
+  /// 取当前剧集的 content 并播放；已下载的剧集从本地播放（[skipLocal] 时跳过）。
+  Future<void> _load({Duration? start, bool skipLocal = false}) async {
     // 上一集的流在新一集的 content 到达前不可再选（否则会以旧流播放、进度记到新一集）。
     _streams = const [];
     _streamIndex = -1;
+    _local = null;
     final generation = _begin();
     _setExternalSubtitles(const []);
     try {
+      if (!skipLocal) {
+        final local = await ref
+            .read(downloadLibraryProvider)
+            .video(widget.sourceId, widget.itemId, _unitId);
+        if (!_current(generation)) return;
+        if (local != null) {
+          final from = await _resolveStart(start);
+          if (!_current(generation)) return;
+          _local = local;
+          // 清晰度菜单只列已下载的那一个。
+          _streams = [StreamRef(url: '', quality: local.label)];
+          _setExternalSubtitles([
+            for (final (s, _) in local.subtitles)
+              SubtitleRef(
+                url: '',
+                lang: s.lang,
+                format: s.format,
+                charset: s.charset,
+              ),
+          ]);
+          await _open(generation, 0, from);
+          return;
+        }
+      }
       final source = await ref.read(
         sourceInstanceProvider(widget.sourceId).future,
       );
@@ -434,10 +485,13 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
 
   Future<void> _open(int generation, int index, Duration start) async {
     setState(() => _streamIndex = index);
-    final proxied = await ref.read(openProxiedStreamProvider)(
-      widget.sourceId,
-      _streams[index],
-    );
+    final local = _local;
+    final proxied = local != null
+        ? await ref.read(openLocalVideoProvider)(local)
+        : await ref.read(openProxiedStreamProvider)(
+            widget.sourceId,
+            _streams[index],
+          );
     if (!_current(generation)) {
       proxied.close();
       return;
@@ -610,11 +664,17 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
     if (!_subPending.add(index)) return;
     final generation = _subGeneration;
     try {
-      final document = await ref.read(loadSubtitleProvider)(
-        widget.sourceId,
-        _externalSubs[index],
-        cancellation: _subCancel,
-      );
+      final local = _local;
+      final document = local != null
+          ? await loadDownloadedSubtitle(
+              local.subtitles[index].$2,
+              local.subtitles[index].$1,
+            )
+          : await ref.read(loadSubtitleProvider)(
+              widget.sourceId,
+              _externalSubs[index],
+              cancellation: _subCancel,
+            );
       if (!mounted || generation != _subGeneration) return;
       _subCache[index] = document;
       if (_subChoice == SubtitleChoiceExternal(index)) {
