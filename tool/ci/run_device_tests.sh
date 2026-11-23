@@ -5,25 +5,31 @@
 #   设备 id 以 emulator- 开头时按 Android 模拟器处理，否则按 iOS 模拟器（UDID）处理。
 #
 # 为什么逐个运行并设时限：偶尔 `flutter test` 装好应用后迟迟连不上设备上的测试进程，一个测试都没开始，
-# 一直挂到任务的 60 分钟上限才被取消。这种挂起与测试内容无关，在 Android 和 iOS 上都出现过：
-# 一次是 iOS 在 script_stack_depth_test 编译完成后挂住，另一次是 Android 在 app_flow_test 安装完成后挂住。
-# 因此每个文件限时 FILE_TIMEOUT 秒（默认 900）。
+# 一直挂到任务的 60 分钟上限才被取消。这种挂起与测试内容无关，在 Android 和 iOS 上都出现过。
+# 因此每个文件限时 FILE_TIMEOUT 秒（默认 900）；第一个文件限时 FIRST_FILE_TIMEOUT 秒（默认同 FILE_TIMEOUT），
+# 因为它要承担首次构建（iOS 上 SPM 拉取、pod install、全量 Xcode 构建，合计可达 10 分钟）。
 #
-# 重试：超时，或输出里出现「连不上测试程序 / 设备」这类基础设施错误（见 infra_failure）时，恢复设备后重试一次；
-# 断言失败等真正的测试失败不重试，直接报失败。Android 模拟器上见过的基础设施错误：
-#   - `Connecting to the VM Service timed out.`：flutter_tools 只等 5 秒连接经 adb forward 转发的 VM Service；
-#   - `VmServiceDisappearedException`：连上后 VM Service 随即断开；
-#   - `SocketException: Connection refused`（在 TestMock.start 里）：设备上 127.0.0.1:MOCK_PORT 没有监听，
-#     即 adb reverse 规则已丢失，测试连不上电脑上的 mock 服务器。
-# 这几种在同一次运行中接连出现，重跑整个任务即通过，说明是 adb 与模拟器之间的连接状态坏了，与测试内容无关。
-# 所以 Android 上每个文件开始前都检查设备在线、清掉上一个文件残留的应用进程 / 端口转发 / logcat，
-# 并重新建立 adb reverse；基础设施错误后再重启 adb 服务。失败时的诊断信息（adb 状态、logcat）
-# 写入 DEVICE_LOG_DIR（默认 build/device_logs），由工作流作为 artifact 上传。
+# 重试：超时，或出现「连不上测试程序 / 设备」这类基础设施错误时，恢复设备后重试一次；
+# 断言失败等真正的测试失败不重试，直接报失败。
+#
+# Android 模拟器上的基础设施错误，根因见 logcat：设备上 adbd 与电脑的连接偶尔断开重连
+# （`adbd: host-N: connection terminated: write failed` → `host-N+1`）。连接一重置，其上的 adb forward
+# （flutter_tools 用来连 VM Service）和 adb reverse（测试用来连 mock 服务器）全部失效，表现为：
+#   - `Connecting to the VM Service timed out.`（flutter_tools 只等 5 秒）或 `VmServiceDisappearedException`；
+#   - flutter_tools 一直等不到测试结果，挂到时限；
+#   - `SocketException: Connection refused`（在 TestMock.start 里）：设备上 127.0.0.1:MOCK_PORT 没有监听。
+# 对策：每个文件开始前确认设备在线、清掉残留的应用进程 / 端口转发 / logcat，重新建立 adb reverse；
+# 运行中每 5 秒检查 adb reverse 规则还在不在，不在了说明连接已重置，立即结束这一次并重试，不必等到时限。
+# 失败或重试时的诊断信息（adb 状态、logcat）写入 DEVICE_LOG_DIR（默认 build/device_logs），由工作流上传。
+#
+# 注意：macOS 自带 bash 3.2 会把紧跟在 $name 后面的非 ASCII 字符当作变量名的一部分，
+# 变量后面紧接中文标点时一律写成 ${name}。
 set -uo pipefail
 
 device="$1"
 shift
 timeout_s="${FILE_TIMEOUT:-900}"
+first_timeout_s="${FIRST_FILE_TIMEOUT:-$timeout_s}"
 port="${MOCK_PORT:-8081}"
 log_dir="${DEVICE_LOG_DIR:-build/device_logs}"
 app_id="io.github.tsumugi.tsumugi"
@@ -32,6 +38,11 @@ mkdir -p "$log_dir"
 is_android() { [[ "$device" == emulator-* ]]; }
 
 adb_dev() { adb -s "$device" "$@"; }
+
+# adb reverse 规则是否还在（adb 卡住时 10 秒后算作不在）。
+reverse_alive() {
+  timeout 10 adb -s "$device" reverse --list 2>/dev/null | grep -q "tcp:${port} "
+}
 
 # 等 Android 模拟器在线并启动完成，最多 120 秒。
 wait_android_ready() {
@@ -43,15 +54,16 @@ wait_android_ready() {
     fi
     sleep 2
   done
-  echo "::warning::$device 120 秒内没有就绪"
+  echo "::warning::${device} 120 秒内没有就绪"
   adb devices -l
   return 1
 }
 
 # 每个文件开始前：清掉上一个文件留下的状态，重新建立到 mock 服务器的 adb reverse。
 prepare_device() {
-  if ! curl -fsS -o /dev/null "http://127.0.0.1:$port/"; then
-    echo "::warning::电脑上的 mock 服务器（127.0.0.1:$port）没有响应"
+  # 用控制接口检查：测试可能让 mock 服务器处于「断网」状态，普通路径会被直接断开。
+  if ! curl -fsS -o /dev/null "http://127.0.0.1:${port}/__test/requests"; then
+    echo "::warning::电脑上的 mock 服务器（127.0.0.1:${port}）没有响应"
   fi
   if ! is_android; then
     xcrun simctl bootstatus "$device" -b > /dev/null || true
@@ -62,9 +74,9 @@ prepare_device() {
   adb_dev forward --remove-all > /dev/null 2>&1 || true
   # 旧的 VM Service 地址留在 logcat 里可能被 flutter_tools 误读，先清空。
   adb_dev logcat -c > /dev/null 2>&1 || true
-  adb_dev reverse tcp:"$port" tcp:"$port" > /dev/null
-  if ! adb_dev reverse --list | grep -q "tcp:$port"; then
-    echo "::warning::adb reverse tcp:$port 没有生效"
+  adb_dev reverse "tcp:${port}" "tcp:${port}" > /dev/null
+  if ! reverse_alive; then
+    echo "::warning::adb reverse tcp:${port} 没有生效"
     adb_dev reverse --list
   fi
 }
@@ -81,13 +93,13 @@ recover_device() {
   fi
 }
 
-# 把失败时的设备状态写进 DEVICE_LOG_DIR，供事后定位。
+# 把设备状态写进 DEVICE_LOG_DIR，供事后定位。
 collect_diagnostics() {
   local name="$1"
   local out="$log_dir/$name"
   {
     echo "== date"; date -u
-    echo "== mock server"; curl -sS -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:$port/" || true
+    echo "== mock server"; curl -sS -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:${port}/__test/requests" || true
     if is_android; then
       echo "== adb devices"; adb devices -l
       echo "== get-state"; adb_dev get-state || true
@@ -103,9 +115,19 @@ collect_diagnostics() {
   fi
 }
 
-# 运行一次，超过 timeout_s 秒就结束整个进程组。输出同时写入 $2。返回 flutter 的退出码；超时返回 124。
+# 结束整个进程组。
+kill_group() {
+  local pid="$1"
+  kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
+  sleep 10
+  kill -KILL -- "-$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null
+}
+
+# 运行一次，输出同时写入 $3。返回 flutter 的退出码；超过 $2 秒返回 124；
+# Android 上运行中 adb reverse 规则丢失（adb 连接已重置）返回 125。
 run_once() {
-  local file="$1" log="$2"
+  local file="$1" limit="$2" log="$3"
   # 后台进程放进单独的进程组（子 shell 为组长），超时时连同 flutter 启动的子进程一起结束。
   set -m
   (
@@ -115,18 +137,19 @@ run_once() {
   ) &
   local pid=$!
   set +m
-  local waited=0
+  local start=$SECONDS
   while kill -0 "$pid" 2>/dev/null; do
-    if (( waited >= timeout_s )); then
-      echo "::warning::$file 超过 ${timeout_s}s 没有结束，结束进程"
-      kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
-      sleep 10
-      kill -KILL -- "-$pid" 2>/dev/null || true
-      wait "$pid" 2>/dev/null
+    if (( SECONDS - start >= limit )); then
+      echo "::warning::${file} 超过 ${limit}s 没有结束，结束进程"
+      kill_group "$pid"
       return 124
     fi
+    if is_android && ! reverse_alive && kill -0 "$pid" 2>/dev/null; then
+      echo "::warning::${file} 运行中 adb reverse 规则丢失（adb 与模拟器的连接已重置），结束进程"
+      kill_group "$pid"
+      return 125
+    fi
     sleep 5
-    waited=$((waited + 5))
   done
   wait "$pid"
 }
@@ -140,31 +163,35 @@ infra_failure() {
 }
 
 status=0
+limit="$first_timeout_s"
 for file in "$@"; do
   name="$(basename "$file" .dart)"
   echo "::group::$file"
   prepare_device
   started=$SECONDS
-  run_once "$file" "$log_dir/$name.1.log"
+  run_once "$file" "$limit" "$log_dir/$name.1.log"
   code=$?
   reason=""
   if (( code == 124 )); then
     reason="超时"
+  elif (( code == 125 )); then
+    reason="adb 连接已重置"
   elif (( code != 0 )) && infra_failure "$log_dir/$name.1.log"; then
     reason="连不上设备上的测试程序（基础设施错误）"
   fi
   if [[ -n "$reason" ]]; then
-    echo "::warning::$file ${reason}，恢复设备后重试一次"
+    echo "::warning::${file} ${reason}，恢复设备后重试一次"
     collect_diagnostics "$name.1"
     recover_device
     prepare_device
-    run_once "$file" "$log_dir/$name.2.log"
+    run_once "$file" "$limit" "$log_dir/$name.2.log"
     code=$?
   fi
-  echo "$file 用时 $((SECONDS - started))s"
+  limit="$timeout_s"
+  echo "${file} 用时 $((SECONDS - started))s"
   echo "::endgroup::"
   if (( code != 0 )); then
-    echo "::error::$file 失败（退出码 $code）"
+    echo "::error::${file} 失败（退出码 ${code}）"
     collect_diagnostics "$name.failed"
     status=1
   fi

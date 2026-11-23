@@ -7,8 +7,10 @@ name: Device tests
 # 测试经 TSUMUGI_MOCK_SERVER 连接它（Android 用 adb reverse，由 run_device_tests.sh 在每个文件前建立；
 # iOS 模拟器与 runner 共用网络）。
 #
-# 测试前先单独构建一次（Warm up build）：首次构建要装 NDK / CMake（Android）或拉 SPM 依赖、pod install、
-# 全量 Xcode 构建（iOS），iOS 上合计约 10 分钟，算进第一个测试文件就会超过 FILE_TIMEOUT 而被结束重试。
+# 首次构建很慢，算进第一个测试文件会超过 FILE_TIMEOUT 而被结束重试：
+# Android 测试前先 `flutter build apk --debug`（装 NDK / CMake、冷 Gradle 构建，之后测试只需增量构建）；
+# iOS 上预构建（`flutter build ios --simulator`）的产物测试构建用不上，改为给第一个文件 FIRST_FILE_TIMEOUT
+# （SPM 拉取、pod install、全量 Xcode 构建合计约 10 分钟）。
 #
 # 第三方 Action 固定到提交（注释为对应版本）。
 
@@ -29,6 +31,7 @@ env:
   MOCK_PORT: "8081"
   # 每个测试文件的时限（秒），超时或基础设施错误时重试一次，见 tool/ci/run_device_tests.sh。
   FILE_TIMEOUT: "600"
+  FIRST_FILE_TIMEOUT: "1200"
   TESTS: integration_test/app_flow_test.dart integration_test/script_stack_depth_test.dart integration_test/download_offline_test.dart integration_test/video_download_offline_test.dart integration_test/sync_test.dart
 
 jobs:
@@ -89,8 +92,6 @@ jobs:
           cache: true
       - run: flutter pub get
       - run: dart run build_runner build
-      - name: Warm up build
-        run: flutter build ios --simulator --debug
       - name: Start mock server
         run: tool/ci/start_mock_server.sh
       - name: Boot simulator
