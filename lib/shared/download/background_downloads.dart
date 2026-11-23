@@ -229,6 +229,14 @@ class BackgroundDownloadController with WidgetsBindingObserver {
   void _onUnits(List<DownloadUnit> units) {
     _latest = units;
     _update();
+    // 已在后台时队列才有任务（异步加入、首次数据晚到）：补上后台保护。
+    if (_inBackground && !manager.suspended && activeOf(units).isNotEmpty) {
+      if (usesBackgroundTask) {
+        _beginBackgroundTask().ignore();
+      } else if (_serviceUnavailable) {
+        manager.suspend().ignore();
+      }
+    }
   }
 
   void _update() {
@@ -340,8 +348,10 @@ class BackgroundDownloadController with WidgetsBindingObserver {
     _expiry = null;
     // 迟到的到期通知（已回到前台）：不挂起。
     if (!_inBackground) return;
+    final generation = _taskGeneration;
     manager.suspend().whenComplete(() {
-      if (_taskActive) {
+      // 期间回到前台又进入后台：新的后台任务不由这次结束。
+      if (generation == _taskGeneration && _taskActive) {
         _taskActive = false;
         platform.endBackgroundTask().ignore();
       }

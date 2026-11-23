@@ -386,4 +386,35 @@ void main() {
       expect(await status('/c/2'), DownloadStatus.done);
     },
   );
+
+  test(
+    'iOS: work arriving after entering background still gets a background task',
+    () async {
+      final c = controller(ios: true);
+      c.didChangeAppLifecycleState(AppLifecycleState.paused);
+      await settle();
+      expect(platform.calls, isEmpty);
+      gate = Completer();
+      await enqueue(['/c/1']);
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      expect(platform.calls, containsAllInOrder(['begin', 'end']));
+      expect(manager.suspended, isTrue);
+      await c.dispose();
+    },
+  );
+
+  test(
+    'Android: work arriving in background without a service is suspended',
+    () async {
+      final c = controller();
+      platform.sink.add(BackgroundDownloadEvent.unavailable);
+      c.didChangeAppLifecycleState(AppLifecycleState.paused);
+      await settle();
+      gate = Completer();
+      await enqueue(['/c/1']);
+      await settle();
+      expect(manager.suspended, isTrue);
+      await c.dispose();
+    },
+  );
 }
