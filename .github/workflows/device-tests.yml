@@ -29,7 +29,7 @@ permissions:
 env:
   FLUTTER_VERSION: "3.47.7"
   MOCK_PORT: "8081"
-  # 每个测试文件的时限（秒），超时或基础设施错误时重试一次，见 tool/ci/run_device_tests.sh。
+  # 每个测试文件的时限（秒）；超时重试 1 次、基础设施错误最多重试 2 次，见 tool/ci/run_device_tests.sh。
   FILE_TIMEOUT: "600"
   FIRST_FILE_TIMEOUT: "1200"
   TESTS: integration_test/app_flow_test.dart integration_test/script_stack_depth_test.dart integration_test/download_offline_test.dart integration_test/video_download_offline_test.dart integration_test/sync_test.dart

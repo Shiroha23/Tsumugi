@@ -9,7 +9,7 @@
 # 因此每个文件限时 FILE_TIMEOUT 秒（默认 900）；第一个文件限时 FIRST_FILE_TIMEOUT 秒（默认同 FILE_TIMEOUT），
 # 因为它要承担首次构建（iOS 上 SPM 拉取、pod install、全量 Xcode 构建，合计可达 10 分钟）。
 #
-# 重试：超时，或出现「连不上测试程序 / 设备」这类基础设施错误时，恢复设备后重试一次；
+# 重试：超时（最多 1 次），或出现「连不上测试程序 / 设备」这类基础设施错误（最多 INFRA_RETRIES 次）时，恢复设备后重试；
 # 断言失败等真正的测试失败不重试，直接报失败。
 #
 # Android 模拟器上的基础设施错误，根因见 logcat：设备上 adbd 与电脑的连接偶尔断开重连
@@ -103,6 +103,7 @@ collect_diagnostics() {
     echo "== date"; date -u
     echo "== mock server"; curl -sS -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:${port}/__test/requests" || true
     if is_android; then
+      echo "== adb version"; adb version
       echo "== adb devices"; adb devices -l
       echo "== get-state"; adb_dev get-state || true
       echo "== reverse"; adb_dev reverse --list || true
@@ -164,6 +165,25 @@ infra_failure() {
   grep -q 'SocketException: Connection refused' "$log" && grep -q 'TestMock.start' "$log"
 }
 
+# 这一次失败是否值得重试：输出重试原因（空表示不重试）。$1 退出码，$2 日志。
+retry_reason() {
+  local code="$1" log="$2"
+  if (( code == 124 )); then
+    echo "超时"
+  elif (( code == 125 )); then
+    echo "adb 连接已重置"
+  elif (( code != 0 )) && is_android && ! reverse_alive; then
+    # 运行结束得太快，看门狗没来得及发现，但 adb reverse 已丢失：同样是连接重置。
+    echo "adb 连接已重置"
+  elif (( code != 0 )) && infra_failure "$log"; then
+    echo "连不上设备上的测试程序（基础设施错误）"
+  fi
+}
+
+# 基础设施错误最多重试 INFRA_RETRIES 次（默认 2，每次约 1 分钟）：adb 连接重置在同一文件上接连出现过两次。
+# 超时最多重试 1 次（每次要等满时限）。
+infra_retries="${INFRA_RETRIES:-2}"
+
 status=0
 limit="$first_timeout_s"
 for file in "$@"; do
@@ -171,32 +191,32 @@ for file in "$@"; do
   echo "::group::$file"
   prepare_device
   started=$SECONDS
-  run_once "$file" "$limit" "$log_dir/$name.1.log"
-  code=$?
-  reason=""
-  if (( code == 124 )); then
-    reason="超时"
-  elif (( code == 125 )); then
-    reason="adb 连接已重置"
-  elif (( code != 0 )) && is_android && ! reverse_alive; then
-    # 运行结束得太快，看门狗没来得及发现，但 adb reverse 已丢失：同样是连接重置。
-    reason="adb 连接已重置"
-  elif (( code != 0 )) && infra_failure "$log_dir/$name.1.log"; then
-    reason="连不上设备上的测试程序（基础设施错误）"
-  fi
-  if [[ -n "$reason" ]]; then
-    echo "::warning::${file} ${reason}，恢复设备后重试一次"
-    collect_diagnostics "$name.1"
+  attempt=1
+  timeouts=0
+  infra=0
+  while true; do
+    run_once "$file" "$limit" "$log_dir/$name.$attempt.log"
+    code=$?
+    reason="$(retry_reason "$code" "$log_dir/$name.$attempt.log")"
+    [[ -z "$reason" ]] && break
+    if (( code == 124 )); then
+      (( timeouts >= 1 )) && break
+      timeouts=$((timeouts + 1))
+    else
+      (( infra >= infra_retries )) && break
+      infra=$((infra + 1))
+    fi
+    echo "::warning::${file} 第 ${attempt} 次：${reason}，恢复设备后重试"
+    collect_diagnostics "$name.$attempt"
     recover_device
     prepare_device
-    run_once "$file" "$limit" "$log_dir/$name.2.log"
-    code=$?
-  fi
+    attempt=$((attempt + 1))
+  done
   limit="$timeout_s"
-  echo "${file} 用时 $((SECONDS - started))s"
+  echo "${file} 用时 $((SECONDS - started))s，共 ${attempt} 次"
   echo "::endgroup::"
   if (( code != 0 )); then
-    echo "::error::${file} 失败（退出码 ${code}）"
+    echo "::error::${file} 失败（退出码 ${code}${reason:+，${reason}}）"
     collect_diagnostics "$name.failed"
     status=1
   fi
