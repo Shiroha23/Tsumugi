@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -19,6 +20,8 @@ import 'download_routes.dart';
 class DownloadsTab extends ConsumerWidget {
   const DownloadsTab({super.key});
 
+  static bool get _iosHint => defaultTargetPlatform == TargetPlatform.iOS;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final items = ref.watch(downloadItemsProvider);
@@ -34,8 +37,20 @@ class DownloadsTab extends ConsumerWidget {
       ),
       AsyncData(:final value) => ListView.builder(
         padding: const EdgeInsets.symmetric(vertical: 8),
-        itemCount: value.length,
-        itemBuilder: (context, i) {
+        itemCount: value.length + (_iosHint ? 1 : 0),
+        itemBuilder: (context, index) {
+          if (_iosHint && index == 0) {
+            // iOS 只允许在后台继续约 30 秒（architecture §4.5.1「后台下载」）。
+            return ListTile(
+              dense: true,
+              leading: const Icon(Icons.info_outline),
+              title: Text(
+                'iOS 上切到后台约 30 秒后下载会暂停，回到应用时自动继续。',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            );
+          }
+          final i = index - (_iosHint ? 1 : 0);
           final d = value[i];
           final mine = [
             for (final u in units)

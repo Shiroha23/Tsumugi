@@ -17,6 +17,8 @@ class TsumugiApp extends ConsumerWidget {
     ref.watch(repositoryUpdateSchedulerProvider);
     // 启动下载队列：继续上次未完成的下载（architecture §4.5）。
     ref.watch(downloadManagerProvider);
+    // 后台下载：Android 前台服务 / iOS 后台宽限时间（architecture §4.5.1，#74）。
+    ref.watch(backgroundDownloadsProvider);
     // WebDAV 自动同步（启动、回到前台、本地改动后），architecture §4.6。
     ref.watch(syncSchedulerProvider);
     return MaterialApp.router(

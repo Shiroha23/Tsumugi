@@ -256,7 +256,7 @@ docs/
   时写入结果（暂停与队列认领之间的竞态不会覆盖暂停）。下载调用的脚本若调用 `tsumugi.ui.openWebView`，与浏览时一样
   受 §5.3 的前台 / 单例 / 冷却限制，用户取消后该 unit 按 `E_CHALLENGE` 暂停整个源。
   应用退出时进行中的 unit 回到 `queued`，下次启动后继续。第一期不做后台下载（Android 前台服务 / iOS 后台任务），
-  应用被系统挂起时暂停——已知限制，见 #74。
+  应用被系统挂起时暂停——后台下载见 §4.5.1（#74）。
 - **错误**：单页 / 单图失败按网络层既有的重试后，unit 进入 `failed`，可单独重试；`E_CHALLENGE` / `E_LOGIN_REQUIRED`
   暂停**该源**的全部下载，下载页提供「打开验证页」，完成后自动继续；源被删除 / 禁用时该源的队列暂停。
   “源暂停”不单独存表：出错的 unit 记为 `paused` 并带错误码（`E_CHALLENGE` / `E_LOGIN_REQUIRED` / 内部的 `E_SOURCE_UNAVAILABLE`），
@@ -276,7 +276,8 @@ docs/
 > 状态：视频下载与离线回放已实现（2026-11）：`core/network/media/hls_download_plan.dart`（下载用的 HLS 解析与选择）、
 > `aes128.dart`（与代理共用的解密）、`MediaProxy.openLocal`（本地来源会话）、`shared/download/video_downloader.dart`
 > （`VideoDownloadTask`）与 `video_manifest.dart`（`video.json`、本地播放列表）；播放页对已下载剧集走本地会话。
-> 后台下载（#74）另一个 PR 实现。沿用 §4.5 的队列、表、目录规则与阅读器接入方式，这里只写视频特有的部分与后台下载。
+> 后台下载（#74）也已实现：`shared/download/background_downloads.dart`（`BackgroundDownloadController`）与原生的
+> `DownloadService.kt` / `MainActivity.kt`（Android）、`AppDelegate.swift`（iOS）。沿用 §4.5 的队列、表、目录规则与阅读器接入方式，这里只写视频特有的部分与后台下载。
 >
 > 实现细节（规范未写到的部分）：
 > - 所选清晰度存为 `download_units.stream_label`（v8）。下载对话框的清晰度列表取自所选线路第一集的 `content()`（取不到时下载每集的第一个流）；
@@ -366,7 +367,19 @@ docs/
 - **iOS**：系统不允许任意时长的后台执行，后台 `URLSession` 又无法经过本项目的网络层（白名单、每源 Cookie、解密），因此只做
   “进入后台后用尽系统给的宽限时间”（`beginBackgroundTask`，通常约 30 s），到期前把进行中的任务记为 `queued` 并暂停，回到前台继续；
   文档与下载页说明这一限制。是否另用 `BGProcessingTask` 在充电 / 空闲时继续，留待实现时评估。
-- 插件选型在实现时确定：先查 pub.dev 最新稳定版，确认 Android / iOS 支持与许可证与 GPL-3.0 兼容；Windows 不需要（桌面应用不会被挂起）。
+- **实现（2026-11）：不引入第三方插件**，用本项目自己的 `MethodChannel`（`io.github.tsumugi/background_download`）：
+  Android 为 `DownloadService`（前台服务，系统通知 API，不依赖 androidx）与 `MainActivity` 中的通道，iOS 为 `AppDelegate` 中的
+  `beginBackgroundTask`。需要的只是“启动 / 更新 / 停止一个前台服务”和“申请宽限时间”，几十行原生代码即可；现有插件
+  （如 `flutter_foreground_task`、`flutter_background_service`）都另起 isolate 或后台引擎来执行任务，而这里的下载必须留在主 isolate
+  （共用网络层、会话与数据库），用不上它们的主要功能，反而多一层原生依赖与许可证审查。Windows 不需要（桌面应用不会被挂起）。
+  - Dart 一侧（`BackgroundDownloadController`）订阅 `download_units`：有 `queued` / `running` 时（每秒至多一次）更新通知，
+    文字为“正在下载 n 项，剩余 m 项”，进度为下载中的 unit 已完成文件数之和 / 总数之和；第一次显示前请求通知权限。
+  - 「暂停全部」→ 全部未完成的 unit 记为 `paused`。时限到或宽限时间将尽 → `DownloadManager.suspend()`：进行中的任务中止并记为 `queued`，
+    不开始新任务；回到前台 `resumeQueue()`。iOS 的宽限时间按 `backgroundTimeRemaining`（刚进入后台时可能仍为“无限”，按 25 s 计）提前 5 s 挂起。
+  - 从后台启动前台服务会被 Android 12+ 拒绝：服务只在应用在前台、队列开始有任务时启动，之后在后台只更新通知；启动失败时下载照常在前台进行。
+    界面（`MainActivity`）被销毁时停止服务（Flutter 引擎随之销毁，下载也停止）。
+  - 未做：`BGProcessingTask`（iOS 在充电 / 空闲时继续）——它在系统选定的时机冷启动或唤醒应用，下载需要的源实例、会话与数据库都要在没有界面的情况下
+    重建，且同样有时限；收益不确定，留待需要时再评估。
 
 **安全**
 

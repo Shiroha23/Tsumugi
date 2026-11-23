@@ -1,5 +1,8 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform;
+
 import 'package:path_provider/path_provider.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
@@ -8,11 +11,13 @@ import '../../sources/registry/providers.dart';
 import '../../sources/runtime/source_runtime.dart';
 import '../image/image_providers.dart';
 import '../video/media_proxy_providers.dart';
+import 'background_downloads.dart';
 import 'download_library.dart';
 import 'download_manager.dart';
 import 'download_repository.dart';
 import 'download_store.dart';
 
+export 'background_downloads.dart';
 export 'download_library.dart';
 export 'download_manager.dart';
 export 'download_repository.dart';
@@ -61,6 +66,24 @@ DownloadManager downloadManager(Ref ref) {
   ref.onDispose(manager.dispose);
   manager.start().ignore();
   return manager;
+}
+
+/// 平台的后台下载支持（Android 前台服务 / iOS 后台任务）；测试中覆盖。
+@Riverpod(keepAlive: true)
+BackgroundDownloadPlatform backgroundDownloadPlatform(Ref ref) =>
+    defaultBackgroundDownloadPlatform();
+
+/// 后台下载（architecture §4.5.1，#74）：把下载队列接到平台的后台支持上。`TsumugiApp` 启动时创建。
+@Riverpod(keepAlive: true)
+BackgroundDownloadController backgroundDownloads(Ref ref) {
+  final controller = BackgroundDownloadController(
+    manager: ref.watch(downloadManagerProvider),
+    repository: ref.watch(downloadRepositoryProvider),
+    platform: ref.watch(backgroundDownloadPlatformProvider),
+    usesBackgroundTask: defaultTargetPlatform == TargetPlatform.iOS,
+  )..attach();
+  ref.onDispose(controller.dispose);
+  return controller;
 }
 
 @Riverpod(keepAlive: true)

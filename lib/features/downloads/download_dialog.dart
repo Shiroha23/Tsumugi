@@ -191,9 +191,9 @@ class _DownloadDialogState extends ConsumerState<DownloadDialog> {
               Text(
                 _video
                     ? '将下载 $count 集（已下载的剧集跳过），用于应用内离线播放。'
-                          '直播与不支持的加密方式不能下载。下载遵守该源的限速，在应用打开期间进行。'
+                          '直播与不支持的加密方式不能下载。下载遵守该源的限速；Android 上切到后台后继续，iOS 上只能在后台继续约 30 秒。'
                     : '将下载 $count 章（已下载的章节跳过），用于应用内离线阅读。'
-                          '下载遵守该源的限速，在应用打开期间进行。',
+                          '下载遵守该源的限速；Android 上切到后台后继续，iOS 上只能在后台继续约 30 秒。',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
