@@ -71,7 +71,7 @@ const nativeComponents = <NativeComponent>[
     bundledSources: _wai,
     note:
         '以 -Dgpl=false 构建，按 LGPL-2.1-or-later 提供。'
-        'Windows 版由本项目自建（tool/libmpv_windows/），构建脚本收在源码包中。',
+        'Windows 版由本项目自建（Tsumugi-libmpv 仓库），构建脚本收在源码包中。',
   ),
   NativeComponent(
     name: 'FFmpeg',
@@ -171,7 +171,7 @@ const nativeComponents = <NativeComponent>[
     licenseFiles: ['media-kit-android-helper.txt'],
     bundledSources: {_a},
   ),
-  // ---- Windows：静态链接进 libmpv-2.dll 的其他依赖（tool/libmpv_windows/sources.tsv） ----
+  // ---- Windows：静态链接进 libmpv-2.dll 的其他依赖（Tsumugi-libmpv 的 windows/sources.tsv） ----
   NativeComponent(
     name: 'libplacebo',
     license: 'LGPL-2.1-or-later',

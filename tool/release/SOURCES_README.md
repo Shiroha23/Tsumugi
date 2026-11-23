@@ -8,8 +8,8 @@ Tsumugi 自身的源码见 https://github.com/Shiroha23/Tsumugi （与本 Releas
   Android / iOS 构建仓库的存档（`libmpv-*-build-*.tar.gz`）包含构建脚本与补丁。
 
 **Windows**：`libmpv-2.dll` 由 Tsumugi 自建（mpv + FFmpeg 及其全部依赖，均为固定版本的发布包）。
-`windows/libmpv-win64-<版本>-sources.tar` 是它的完整对应源码：`tarballs/`（全部源码发布包）、`build-scripts/`
-（构建脚本 `build.sh` 与带 sha256 的清单 `sources.tsv`，即仓库中的 `tool/libmpv_windows/`）与 `BUILD_INFO.txt`
+`windows/libmpv-win-<版本>-sources.tar` 是它的完整对应源码：`tarballs/`（全部源码发布包）、`build-scripts/`
+（构建脚本 `build.sh` 与带 sha256 的清单 `sources.tsv`，即 https://github.com/Shiroha23/Tsumugi-libmpv 的 `windows/`）与 `BUILD_INFO.txt`
 （工具链版本、FFmpeg 配置、mpv 特性、导入的系统 DLL）。在 Ubuntu 24.04 上运行
 `build-scripts/build.sh <工作目录> <输出目录>` 即可重新构建（需要的软件包见脚本开头；先把 `tarballs/` 复制为
 `<工作目录>/dl` 则不再联网下载）。

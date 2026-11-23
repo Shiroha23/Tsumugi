@@ -11,14 +11,14 @@ Tsumugi 按 [GPL-3.0-or-later](LICENSE) 发布。本文件列出随安装包分�
 - 核对方法与结论见 [`docs/architecture.md`](docs/architecture.md) §6.4.1（M4-B，2026-11）与 §6.4.6 第 2 项（Windows 自建 libmpv，2026-11）。
   “二进制”指从插件固定的预编译库中读出的版本串 / 配置串。
 
-升级 `media_kit_libs_*_video` 等带原生库的依赖、或改动 Windows 自建 libmpv（`tool/libmpv_windows/`）时，须同步更新本文件、`assets/licenses/`、
+升级 `media_kit_libs_*_video` 等带原生库的依赖、或更换 Windows 自建 libmpv（`windows/libmpv.lock`）时，须同步更新本文件、`assets/licenses/`、
 `native_licenses.dart` 与 `native_sources.tsv`。
 
 ## libmpv 的来源
 
 | 平台 | 插件 | 预编译库 | 构建脚本（确切提交） |
 |---|---|---|---|
-| Windows | `media_kit_libs_windows_video` 1.0.11（只用其插件代码与 ANGLE 包；`libmpv-2.dll` 由 `windows/CMakeLists.txt` 替换） | **本项目自建** `libmpv-win64-0.42.0-ff8.1.3-r1.zip`（本仓库的预发布 Release，sha256 固定在 `windows/CMakeLists.txt`） | 本仓库 [`tool/libmpv_windows/`](tool/libmpv_windows/)（`build.sh` + `sources.tsv`），由 `.github/workflows/libmpv-windows.yml` 构建 |
+| Windows | `media_kit_libs_windows_video` 1.0.11（只用其插件代码与 ANGLE 包；`libmpv-2.dll` 由 `windows/CMakeLists.txt` 替换） | **本项目自建** `libmpv-win-0.42.0-ff8.1.3-r1.zip`（[Shiroha23/Tsumugi-libmpv](https://github.com/Shiroha23/Tsumugi-libmpv) 的不可变 Release，地址与 sha256 固定在 [`windows/libmpv.lock`](windows/libmpv.lock)） | Tsumugi-libmpv 的 `windows/build.sh` + `windows/sources.tsv`，由其 GitHub Actions 构建并附来源证明 |
 | Android | `media_kit_libs_android_video` 1.3.8 | `default-<abi>.jar`（MD5 写死在插件 build.gradle） | [media-kit/libmpv-android-video-build](https://github.com/media-kit/libmpv-android-video-build) `v1.1.7`（`fe8c3ac1a91c`） |
 | iOS | `media_kit_libs_ios_video` 1.1.4 | `libmpv-xcframeworks_v0.6.0_ios-universal-video-default.tar.gz`（sha256 `a95bc185…d36ae`） | [media-kit/libmpv-darwin-build](https://github.com/media-kit/libmpv-darwin-build) `v0.6.0`（`4286f5557bdc`） |
 
@@ -42,13 +42,13 @@ Windows 自建构建的工作流对此有门禁检查）。libplacebo 只在 Win
 | libpng | libpng-2.0 | — | — | 1.6.40（二进制；FreeType 的 meson 回退子项目） | https://github.com/pnggroup/libpng |
 | media-kit-android-helper | MIT | — | `42054e5d479f` | — | https://github.com/media-kit/media-kit-android-helper |
 
-Windows 的版本取自 `tool/libmpv_windows/sources.tsv`（发布包 + sha256）。Android 的版本取自 `buildscripts/include/depinfo.sh`，iOS 取自 `downloads.lock`
+Windows 的版本取自 Tsumugi-libmpv 的 `windows/sources.tsv`（发布包 + sha256）。Android 的版本取自 `buildscripts/include/depinfo.sh`，iOS 取自 `downloads.lock`
 （均在上述确切提交处），并与二进制中的版本串核对。
 
 ## Windows：静态链接进 `libmpv-2.dll` 的其他依赖
 
-全部依赖与上表 Windows 列的组件一样，按 [`tool/libmpv_windows/sources.tsv`](tool/libmpv_windows/sources.tsv) 的发布包（sha256 固定）构建，
-静态链接进 `libmpv-2.dll`，`libmpv-2.dll` 只依赖 Windows 系统 DLL。**对应源码**是同一 Release 中的 `libmpv-win64-<版本>-sources.tar`
+全部依赖与上表 Windows 列的组件一样，按 Tsumugi-libmpv 的 `windows/sources.tsv` 中的发布包（sha256 固定）构建，
+静态链接进 `libmpv-2.dll`，`libmpv-2.dll` 只依赖 Windows 系统 DLL。**对应源码**是同一 Release 中的 `libmpv-win-<版本>-sources.tar`
 （全部源码发布包 + 构建脚本 + `BUILD_INFO.txt`），也收进每次发版的 `tsumugi-<版本>-native-sources.tar`。
 
 （2026-11 之前的 Windows 版本用 media-kit 2023-09 的预编译库，多数依赖的确切源码提交没有记录，见 `docs/architecture.md` §6.4.1。）

@@ -4,9 +4,9 @@
 # 平台为逗号分隔的 windows / android / ios。修改 media_kit_libs_*_video 版本时必须同步更新本文件。
 #
 # ---- 构建脚本（含补丁） ----
-# Windows 的 libmpv 由本项目自建（architecture §6.4.6 第 2 项）：收录 libmpv 预发布 Release 中的对应源码包
-# （tool/libmpv_windows/sources.tsv 的全部发布包 + 构建脚本 + BUILD_INFO.txt），与 windows/CMakeLists.txt 固定的版本一致。
-windows	tsumugi-libmpv-windows (mpv + FFmpeg + dependencies)	libmpv-win64-0.42.0-ff8.1.3-r1	LGPL-2.1-or-later AND LGPL-3.0-or-later AND others (see THIRD_PARTY_NOTICES.md)	https://github.com/Shiroha23/Tsumugi/releases/download/libmpv-win64-0.42.0-ff8.1.3-r1/libmpv-win64-0.42.0-ff8.1.3-r1-sources.tar	0000000000000000000000000000000000000000000000000000000000000000	windows/libmpv-win64-0.42.0-ff8.1.3-r1-sources.tar
+# Windows 的 libmpv 由本项目自建（architecture §6.4.6 第 2 项）：收录 Shiroha23/Tsumugi-libmpv 的 Release 中的对应源码包
+# （全部源码发布包 + 构建脚本 + BUILD_INFO.txt），地址与 sha256 必须与 windows/libmpv.lock 的 sources_* 一致。
+windows	Tsumugi-libmpv (Windows libmpv: mpv + FFmpeg + dependencies, build scripts)	libmpv-win-0.42.0-ff8.1.3-r1	LGPL-2.1-or-later AND LGPL-3.0-or-later AND others (see THIRD_PARTY_NOTICES.md)	https://github.com/Shiroha23/Tsumugi-libmpv/releases/download/libmpv-win-0.42.0-ff8.1.3-r1/libmpv-win-0.42.0-ff8.1.3-r1-sources.tar	0000000000000000000000000000000000000000000000000000000000000000	windows/libmpv-win-0.42.0-ff8.1.3-r1-sources.tar
 android	libmpv-android-video-build	v1.1.7 (fe8c3ac1a91c09aa6fb1deccbc833f1bafa54768)	MIT	https://github.com/media-kit/libmpv-android-video-build/archive/fe8c3ac1a91c09aa6fb1deccbc833f1bafa54768.tar.gz	c278bc8789ebaad45a23afd9588bb77e051714892f7f0367356e1cc6ebfe4c62	android/libmpv-android-video-build-v1.1.7.tar.gz
 android	media-kit-android-helper	42054e5d479f39ccbb0ae604862e2bcaf59b74c2	MIT	https://github.com/media-kit/media-kit-android-helper/archive/42054e5d479f39ccbb0ae604862e2bcaf59b74c2.tar.gz	53ea71476d1cbc9a5d63d4898c6b027af4ccb6525800c7b42e267e6128652423	android/media-kit-android-helper-42054e5.tar.gz
 ios	libmpv-darwin-build	v0.6.0 (4286f5557bdccc0747030e3c376ce5cd160a96a0)	MIT	https://github.com/media-kit/libmpv-darwin-build/archive/4286f5557bdccc0747030e3c376ce5cd160a96a0.tar.gz	092a4bc3dcabcd1d9f931e98664616093e6cad969ddf9be03bf259c1c23bd8e0	ios/libmpv-darwin-build-v0.6.0.tar.gz
