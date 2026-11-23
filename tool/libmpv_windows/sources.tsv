@@ -1,0 +1,17 @@
+# Windows x64 自建 libmpv 的全部源码（docs/architecture.md §6.4.6 第 2 项）。
+# build.sh 只从这里下载，按 sha256 校验后才解压；改版本时同时改 VERSION、本文件、tool/release/native_sources.tsv、
+# THIRD_PARTY_NOTICES.md、lib/features/settings/about/native_licenses.dart 与 assets/licenses/。
+# 列：组件<TAB>版本<TAB>许可证<TAB>下载地址<TAB>sha256<TAB>保存文件名
+mpv	0.42.0	LGPL-2.1-or-later (-Dgpl=false)	https://github.com/mpv-player/mpv/archive/refs/tags/v0.42.0.tar.gz	bcfebbfa2b65a6d88dc97ea18117831072373e38b5785a2afb874ed4df5070dd	mpv-0.42.0.tar.gz
+ffmpeg	8.1.3	LGPL-2.1-or-later	https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz	7138d28c96d9d3e3af4ee3d8cad72741f8ffb40da90c1112235dea3ecd3178a3	ffmpeg-8.1.3.tar.xz
+libplacebo	7.387.0	LGPL-2.1-or-later	https://github.com/haasn/libplacebo/archive/refs/tags/v7.387.0.tar.gz	f9e62d3774a9c4cfd198ec3abaa88294aaade2e31c04d5ab02bcf4abc98b1df5	libplacebo-7.387.0.tar.gz
+glad	73db193f853e2ee079bf3ca8a64aa2eaf6459043	MIT (generator; generated loader: MIT / Apache-2.0)	https://github.com/Dav1dde/glad/archive/73db193f853e2ee079bf3ca8a64aa2eaf6459043.tar.gz	33dbeae44d8315ece57e14eba4b1b4a02ac5406d1c4f49cd20048c91522a6b9a	glad-73db193.tar.gz
+jinja	15206881c006c79667fe5154fe80c01c65410679	BSD-3-Clause (build-time only)	https://github.com/pallets/jinja/archive/15206881c006c79667fe5154fe80c01c65410679.tar.gz	b88a20dcc2e34072fcf4159325bc6c34cd4b29a81a8b83d15d2f28ba561da296	jinja-1520688.tar.gz
+markupsafe	297fc8e356e6836a62087949245d09a28e9f1b13	BSD-3-Clause (build-time only)	https://github.com/pallets/markupsafe/archive/297fc8e356e6836a62087949245d09a28e9f1b13.tar.gz	da7c010c9c81a66ac73036558c1fcb6212b50482f43211cd1254035b94f82414	markupsafe-297fc8e.tar.gz
+fast_float	97b54ca9e75f5303507699d27c6b4f4efe4641a1	MIT OR Apache-2.0 OR BSL-1.0	https://github.com/fastfloat/fast_float/archive/97b54ca9e75f5303507699d27c6b4f4efe4641a1.tar.gz	2b132274539286e41f37857cac22aa8441d21bd86d55de825a3342b149f66801	fast_float-97b54ca.tar.gz
+libass	0.17.5	ISC	https://github.com/libass/libass/releases/download/0.17.5/libass-0.17.5.tar.xz	2dca25c0e0c837ddf00b52011b3f82cac1e4ddd3ad018227806b0c2288864acc	libass-0.17.5.tar.xz
+freetype	2.15.0	FTL OR GPL-2.0-or-later (used under FTL)	https://download.savannah.gnu.org/releases/freetype/freetype-2.15.0.tar.xz	93cd47eb719c325107f2d3cf087d06299e944c3b48a40b55537302304dea1dd5	freetype-2.15.0.tar.xz
+harfbuzz	15.2.0	MIT	https://github.com/harfbuzz/harfbuzz/releases/download/15.2.0/harfbuzz-15.2.0.tar.xz	e2ec49090744383cdbe7df808c1cedaafba06a97be8dc4211fe546ba585f12cb	harfbuzz-15.2.0.tar.xz
+fribidi	1.0.18	LGPL-2.1-or-later	https://github.com/fribidi/fribidi/releases/download/v1.0.18/fribidi-1.0.18.tar.xz	1de5e8073d035388b71d0b2d452b1da1f8caeea8a7702997b401fe1b6250727f	fribidi-1.0.18.tar.xz
+dav1d	1.5.5	BSD-2-Clause	https://downloads.videolan.org/pub/videolan/dav1d/1.5.5/dav1d-1.5.5.tar.xz	ca96b1d0ba3f01f55de7231d775892b64994ba061aaeeaaa4f662a390b3abf9e	dav1d-1.5.5.tar.xz
+zlib	1.4	Zlib	https://zlib.net/zlib-1.4.tar.xz	4f11c512053d7bab8d9e9b89bde3575add3e4c50a383b42ef6cb837035fc5a7c	zlib-1.4.tar.xz

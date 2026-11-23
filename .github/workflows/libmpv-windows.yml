@@ -1,0 +1,85 @@
+name: libmpv (Windows)
+
+# 自建 Windows x64 libmpv-2.dll（mpv + FFmpeg，LGPL，docs/architecture.md §6.4.6 第 2 项）。
+# - 改动 tool/libmpv_windows/ 的 PR：只构建并上传为工作流产物（检查脚本是否可用）。
+# - 手动运行且 publish=true：构建后创建预发布 Release（标签取 tool/libmpv_windows/VERSION），上传
+#   <TAG>.zip、<TAG>-sources.tar（对应源码）与 SHA256SUMS。标签已存在时失败，已发布的资产不会被替换。
+#   windows/CMakeLists.txt 固定该 Release 的地址与 sha256。
+on:
+  pull_request:
+    paths:
+      - "tool/libmpv_windows/**"
+      - ".github/workflows/libmpv-windows.yml"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "创建预发布 Release 并上传产物"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: libmpv-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build libmpv-2.dll
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: tag
+        run: echo "tag=$(tr -d '[:space:]' < tool/libmpv_windows/VERSION)" >> "$GITHUB_OUTPUT"
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64-posix g++-mingw-w64-x86-64-posix \
+            binutils-mingw-w64-x86-64 mingw-w64-tools nasm meson ninja-build pkgconf python3 curl xz-utils zip
+      - name: Build
+        run: bash tool/libmpv_windows/build.sh "$RUNNER_TEMP/libmpv-work" out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libmpv-windows
+          path: out/
+          retention-days: 14
+
+  publish:
+    name: Publish pre-release
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: libmpv-windows
+          path: out
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.build.outputs.tag }}
+          SHA: ${{ github.sha }}
+        run: |
+          cd out
+          sha256sum -c SHA256SUMS
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; bump tool/libmpv_windows/VERSION instead of replacing assets." >&2
+            exit 1
+          fi
+          {
+            echo "Tsumugi 自建的 Windows x64 libmpv（LGPL），由 tool/libmpv_windows/build.sh 在提交 $SHA 构建。"
+            echo "只供 Tsumugi 的 Windows 构建使用（windows/CMakeLists.txt 固定地址与 sha256）。"
+            echo "对应源码：$TAG-sources.tar（全部源码发布包与构建脚本）。"
+            echo
+            echo '```'
+            cat SHA256SUMS
+            echo '```'
+          } > notes.md
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$SHA" --prerelease --latest=false \
+            --title "$TAG" --notes-file notes.md "$TAG.zip" "$TAG-sources.tar" SHA256SUMS
