@@ -40,7 +40,15 @@ final class VideoDownloadLimits {
     this.maxEncryptedSegmentBytes = 64 * 1024 * 1024,
     this.manifestWriteInterval = 10,
     this.progressInterval = const Duration(milliseconds: 500),
+    this.maxTotalPlaylistBytes = 16 * 1024 * 1024,
+    this.metadataTimeout = const Duration(seconds: 60),
   });
+
+  /// 一个剧集全部播放列表（主 / 子）合计的字节上限：主播放列表可引用至多 99 条字幕轨。
+  final int maxTotalPlaylistBytes;
+
+  /// 读取一个播放列表或密钥的总时限（`openStream` 的超时只限制相邻两块数据的间隔）。
+  final Duration metadataTimeout;
 
   /// 每个剧集最多的分片数（含初始化分片与字幕分片）。
   final int maxItems;
@@ -118,7 +126,9 @@ class VideoDownloadTask {
     _label = streamLabel(streams, _streamIndex);
     _headers = {
       for (final e in (_stream.headers ?? const {}).entries)
-        e.key.toLowerCase(): e.value,
+        // 区间由下载器自己决定：源给的 Range / If-Range 会让整文件下载只取到一部分。
+        if (!const {'range', 'if-range'}.contains(e.key.toLowerCase()))
+          e.key.toLowerCase(): e.value,
     };
     final Uri root;
     try {
@@ -131,6 +141,9 @@ class VideoDownloadTask {
     try {
       existing = await _readManifest();
     } on FormatException {
+      existing = null;
+    } on FileSystemException {
+      // 无法按 UTF-8 读取等：视为没有记录，从头下载。
       existing = null;
     }
 
@@ -148,15 +161,21 @@ class VideoDownloadTask {
             f.length != null) {
       final media = DownloadStore.fileIn(dir, videoFileName);
       final have = await _length(media);
-      if (have > 0 && have < f.length!) {
+      if (have > 0 && have <= f.length!) {
+        // 已写满（完成标记写入前退出）时取最后 1 个字节，只用来确认上游的版本未变。
+        final from = have < f.length! ? have : have - 1;
         final resumed = await _open(
           root,
           lane: RateLimitLane.media,
-          extra: {'range': 'bytes=$have-', 'if-range': f.validator!},
+          extra: {'range': 'bytes=$from-', 'if-range': f.validator!},
         );
         if (resumed.status == HttpStatus.partialContent) {
           final cr = _contentRange(resumed.headers['content-range']);
-          if (cr != null && cr.$1 == have && cr.$3 == f.length) {
+          if (cr != null && cr.$1 == from && cr.$3 == f.length) {
+            if (from < have) {
+              resumed.cancel();
+              return _finishFile(existing, have);
+            }
             return _resumeFile(resumed, existing, have);
           }
           resumed.cancel();
@@ -169,9 +188,19 @@ class VideoDownloadTask {
     }
     up ??= await _open(root, lane: RateLimitLane.source);
     _checkStatus(up);
-    final (head, rest) = await _peek(up, 1024);
+    if (up.status != HttpStatus.ok) {
+      // 没有发区间请求却得到 206 等：不能当作完整文件。
+      up.cancel();
+      throw SourceException(
+        SourceErrorCode.http,
+        'HTTP ${up.status}',
+        up.status,
+      );
+    }
+    final until = _metadataDeadline();
+    final (head, rest) = await _peek(up, 1024, until: until);
     if (looksLikeHlsPlaylist(head)) {
-      final text = await _collectText(head, rest, up);
+      final text = await _collectText(head, rest, up, until);
       return _downloadHls(text, up.url, existing);
     }
     if (!looksLikeMediaContainer(head)) {
@@ -216,13 +245,14 @@ class VideoDownloadTask {
         file: state,
       );
       await _writeManifest(manifest);
-      manifest = manifest.copyWith(subtitles: await _downloadSubtitles(null));
-      await _writeManifest(manifest);
       await _progress(0, 1, force: true);
       final written = await _appendBody(head, rest, append: false);
       if (declared != null && written != declared) {
         throw const SourceException(SourceErrorCode.network, '下载不完整');
       }
+      // 外挂字幕在媒体响应体读完之后再取：不让媒体连接在等字幕时闲置（上游可能因此断开）。
+      manifest = manifest.copyWith(subtitles: await _downloadSubtitles(null));
+      await _writeManifest(manifest);
       await _progress(1, 1, force: true);
       return (1, 1, _bytes);
     } catch (e) {
@@ -240,23 +270,29 @@ class VideoDownloadTask {
   ) async {
     final it = StreamIterator(up.body);
     try {
-      // 外挂字幕：已有的沿用，缺失的补下。
-      final subs = await _downloadSubtitles(manifest.subtitles);
-      await _writeManifest(manifest.copyWith(subtitles: subs));
-      _bytes = have;
+      _bytes += have;
       await _progress(0, 1, force: true);
       final written = await _appendBody(Uint8List(0), it, append: true);
       if (have + written != manifest.file!.length) {
         throw const SourceException(SourceErrorCode.network, '下载不完整');
       }
-      await _progress(1, 1, force: true);
-      return (1, 1, _bytes);
+      return await _finishFile(manifest, null);
     } catch (e) {
       await it.cancel();
       up.cancel();
       if (_isLimit(e)) await _clear();
       rethrow;
     }
+  }
+
+  /// 媒体已写完：补下外挂字幕（已有的沿用，缺失的补下）并写入 `video.json`。
+  /// [have] 不为 null 时媒体在本次运行之前就已写满。
+  Future<(int, int, int)> _finishFile(VideoManifest manifest, int? have) async {
+    if (have != null) _bytes += have;
+    final subs = await _downloadSubtitles(manifest.subtitles);
+    await _writeManifest(manifest.copyWith(subtitles: subs));
+    await _progress(1, 1, force: true);
+    return (1, 1, _bytes);
   }
 
   /// 把响应体写入 `media.bin`（[append] 时接在后面），按实际字节计数执行合计上限。返回本次写入的字节数。
@@ -357,6 +393,7 @@ class VideoDownloadTask {
     }
 
     final playlists = <HlsMediaPlaylist>[];
+    var total = 0;
     for (final (_, _, uri, _, _) in planned) {
       final String text;
       final Uri base;
@@ -365,13 +402,14 @@ class VideoDownloadTask {
       } else {
         final up = await _open(uri, lane: RateLimitLane.source);
         _checkStatus(up);
-        final (head, rest) = await _peek(up, 1024);
+        final until = _metadataDeadline();
+        final (head, rest) = await _peek(up, 1024, until: until);
         if (!looksLikeHlsPlaylist(head)) {
           await rest.cancel();
           up.cancel();
           throw const SourceException(SourceErrorCode.parse, '子播放列表无效');
         }
-        text = await _collectText(head, rest, up);
+        text = await _collectText(head, rest, up, until);
         base = up.url;
       }
       try {
@@ -381,8 +419,10 @@ class VideoDownloadTask {
       } on FormatException catch (e) {
         throw SourceException(SourceErrorCode.parse, e.message);
       }
+      // 每取完一个就检查：不先把全部（至多 101 个）播放列表取完、解析完才发现超限。
+      total += playlists.last.items.length;
+      if (total > limits.maxItems) break;
     }
-    final total = playlists.fold(0, (n, p) => n + p.items.length);
     if (total > limits.maxItems) {
       throw SourceException(
         SourceErrorCode.limit,
@@ -626,10 +666,7 @@ class VideoDownloadTask {
       } on Object {
         throw const SourceException(SourceErrorCode.parse, '分片解密失败');
       }
-      final ext = _extensionOf(
-        Uint8List.sublistView(plain, 0, min(plain.length, 64 * 1024)),
-        subtitle: subtitle,
-      );
+      final ext = _extensionOf(plain, subtitle: subtitle);
       _bytes += plain.length;
       if (_bytes > limits.maxBytes) {
         throw SourceException(
@@ -733,15 +770,18 @@ class VideoDownloadTask {
         up.status,
       );
     }
-    final (head, rest) = await _peek(up, 64);
-    final key = await _collect(head, rest, up, 4096);
+    final until = _metadataDeadline();
+    final (head, rest) = await _peek(up, 64, until: until);
+    final key = await _collect(head, rest, up, 4096, until: until);
     if (key == null || key.length != 16) {
       throw const SourceException(SourceErrorCode.parse, '密钥无效');
     }
     return key;
   }
 
-  String _extensionOf(Uint8List head, {required bool subtitle}) {
+  /// 与代理相同的识别：只看开头 1 KB（同 `MediaProxySession` 的识别长度）。
+  String _extensionOf(Uint8List data, {required bool subtitle}) {
+    final head = Uint8List.sublistView(data, 0, min(data.length, _sniffBytes));
     if (subtitle) {
       if (!looksLikeWebVtt(head)) {
         throw const SourceException(SourceErrorCode.parse, '字幕分片不是 WebVTT');
@@ -771,17 +811,28 @@ class VideoDownloadTask {
       final kept = existing
           ?.where((s) => s.file.startsWith(prefix))
           .firstOrNull;
+      final String url;
+      try {
+        url = baseUrl.resolve(ref.url.trim()).toString();
+      } on FormatException {
+        continue;
+      }
+      final source = sha256Hex(url);
+      final keptLength = kept == null
+          ? -1
+          : await _length(DownloadStore.fileIn(dir, kept.file));
       if (kept != null &&
+          kept.source == source &&
           kept.lang == ref.lang &&
           kept.format == ref.format &&
           kept.charset == ref.charset &&
-          await _length(DownloadStore.fileIn(dir, kept.file)) > 0) {
+          keptLength > 0) {
+        _bytes += keptLength;
         out.add(kept);
         continue;
       }
       try {
         final declared = declaredSubtitleFormat(ref.format);
-        final url = baseUrl.resolve(ref.url.trim()).toString();
         final (bytes, contentType) = await fetchSubtitleBytes(
           client,
           url,
@@ -803,6 +854,7 @@ class VideoDownloadTask {
         out.add(
           VideoSubtitleEntry(
             file: name,
+            source: source,
             lang: ref.lang,
             format: ref.format,
             charset: ref.charset,
@@ -883,50 +935,102 @@ class VideoDownloadTask {
     return (int.parse(m[1]!), int.parse(m[2]!), int.tryParse(m[3]!));
   }
 
+  /// 读出开头 [n] 字节；给出 [until] 时到时抛 [NetworkErrorKind.timeout]（并中止请求）。
   Future<(Uint8List, StreamIterator<List<int>>)> _peek(
     NetStreamResponse up,
-    int n,
-  ) async {
+    int n, {
+    DateTime? until,
+  }) async {
     final it = StreamIterator(up.body);
     final head = BytesBuilder(copy: false);
     final rest = <List<int>>[];
-    while (head.length < n && await it.moveNext()) {
-      final chunk = it.current;
-      final take = min(n - head.length, chunk.length);
-      head.add(chunk.sublist(0, take));
-      if (take < chunk.length) rest.add(chunk.sublist(take));
+    try {
+      while (head.length < n && await _next(it, up, until)) {
+        final chunk = it.current;
+        final take = min(n - head.length, chunk.length);
+        head.add(chunk.sublist(0, take));
+        if (take < chunk.length) rest.add(chunk.sublist(take));
+      }
+    } catch (_) {
+      up.cancel();
+      it.cancel().ignore();
+      rethrow;
     }
     return (head.takeBytes(), _Prefixed(rest, it));
   }
 
+  /// [StreamIterator.moveNext]，到 [until] 时抛超时（取消上游请求不一定让正在等的 moveNext 立即返回）。
+  Future<bool> _next(
+    StreamIterator<List<int>> it,
+    NetStreamResponse up,
+    DateTime? until,
+  ) async {
+    if (until == null) return it.moveNext();
+    final left = until.difference(DateTime.now());
+    if (left <= Duration.zero) throw _timeout(up.url);
+    final expired = Completer<bool>();
+    final timer = Timer(left, () => expired.complete(false));
+    try {
+      final more = await Future.any([it.moveNext(), expired.future]);
+      if (expired.isCompleted) throw _timeout(up.url);
+      return more;
+    } finally {
+      timer.cancel();
+    }
+  }
+
+  /// 播放列表 / 密钥的读取期限（[VideoDownloadLimits.metadataTimeout]，从开始读响应体时算起）。
+  DateTime _metadataDeadline() => DateTime.now().add(limits.metadataTimeout);
+
+  /// 读完响应体；超过 [limit] 时返回 null。给出 [until] 时到时中止请求并抛 [NetworkErrorKind.timeout]。
   Future<Uint8List?> _collect(
     Uint8List head,
     StreamIterator<List<int>> rest,
     NetStreamResponse up,
-    int limit,
-  ) async {
+    int limit, {
+    DateTime? until,
+  }) async {
     final out = BytesBuilder(copy: false)..add(head);
     try {
-      while (await rest.moveNext()) {
+      while (await _next(rest, up, until)) {
         out.add(rest.current);
         if (out.length > limit) return null;
       }
       return out.takeBytes();
     } finally {
-      await rest.cancel();
       up.cancel();
+      rest.cancel().ignore();
     }
   }
+
+  NetworkException _timeout(Uri url) => NetworkException(
+    NetworkErrorKind.timeout,
+    message: 'not read within ${limits.metadataTimeout.inSeconds} s',
+    uri: url,
+  );
+
+  int _playlistBytes = 0;
 
   Future<String> _collectText(
     Uint8List head,
     StreamIterator<List<int>> rest,
     NetStreamResponse up,
+    DateTime until,
   ) async {
-    final body = await _collect(head, rest, up, limits.maxPlaylistBytes);
+    final body = await _collect(
+      head,
+      rest,
+      up,
+      min(
+        limits.maxPlaylistBytes,
+        limits.maxTotalPlaylistBytes - _playlistBytes,
+      ),
+      until: until,
+    );
     if (body == null) {
-      throw const SourceException(SourceErrorCode.limit, '播放列表超过 4 MB');
+      throw const SourceException(SourceErrorCode.limit, '播放列表过大');
     }
+    _playlistBytes += body.length;
     return utf8.decode(body, allowMalformed: true);
   }
 
@@ -966,6 +1070,8 @@ class VideoDownloadTask {
       return -1;
     }
   }
+
+  static const _sniffBytes = 1024;
 
   static bool _isLimit(Object e) =>
       e is SourceException && e.code == SourceErrorCode.limit;

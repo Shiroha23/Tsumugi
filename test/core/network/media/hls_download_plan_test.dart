@@ -185,4 +185,29 @@ https://cdn.example.com/last.ts
       'NAME': 'x=y',
     });
   });
+
+  test('SAMPLE-AES with extra URI attributes is still rejected', () {
+    // rewriteHlsPlaylist 会删掉带其他 `…URI=` 属性的整行：不能因此当成没有加密。
+    expect(
+      () => parseHlsMediaPlaylist(
+        '#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI="k",X-KEYURI="skd://x"\n'
+        '#EXTINF:2,\nseg.ts\n#EXT-X-ENDLIST\n',
+        _base,
+      ),
+      throwsA(isA<HlsUnsupportedException>()),
+    );
+  });
+
+  test('infinite EXTINF is a format error', () {
+    for (final d in ['Infinity', '1e400', 'NaN', '-1']) {
+      expect(
+        () => parseHlsMediaPlaylist(
+          '#EXTM3U\n#EXTINF:$d,\nseg.ts\n#EXT-X-ENDLIST\n',
+          _base,
+        ),
+        throwsFormatException,
+        reason: d,
+      );
+    }
+  });
 }

@@ -134,6 +134,7 @@ final class VideoFileState {
 final class VideoSubtitleEntry {
   const VideoSubtitleEntry({
     required this.file,
+    this.source,
     this.lang,
     this.format,
     this.charset,
@@ -142,6 +143,9 @@ final class VideoSubtitleEntry {
 
   /// 文件名（[videoSubtitleFileName]）。
   final String file;
+
+  /// 字幕地址的 sha256（续传时与新地址比较，不一致则重新下载；不保存地址本身）。
+  final String? source;
 
   /// `SubtitleRef.lang` / `format` / `charset`。
   final String? lang;
@@ -275,6 +279,7 @@ final class VideoManifest {
       for (final s in subtitles)
         {
           'file': s.file,
+          'source': ?s.source,
           'lang': ?s.lang,
           'format': ?s.format,
           'charset': ?s.charset,
@@ -313,9 +318,15 @@ final class VideoManifest {
       if (file is! String || !_subFile.hasMatch(file) || !seenSubs.add(file)) {
         _bad('subtitle file');
       }
+      final subSource = s['source'];
+      if (subSource != null &&
+          (subSource is! String || !_key.hasMatch(subSource))) {
+        _bad('subtitle source');
+      }
       subtitles.add(
         VideoSubtitleEntry(
           file: file,
+          source: subSource as String?,
           lang: _optString(s['lang'], 'lang'),
           format: _optString(s['format'], 'format', max: 16),
           charset: _optString(s['charset'], 'charset', max: 64),

@@ -123,12 +123,14 @@ class DownloadManager {
   /// 进行中的任务，按 sourceId（同一源只有一个）。
   final _jobs = <String, _Job>{};
   bool _started = false;
+  bool _starting = false;
   bool _disposed = false;
   Future<void>? _pumping;
   bool _pumpAgain = false;
 
   /// 进行中的任务都结束且没有可开始的任务时完成（测试用）。
   Future<void> get idle async {
+    await _startup;
     while (true) {
       final pumping = _pumping;
       if (pumping != null) {
@@ -142,10 +144,25 @@ class DownloadManager {
 
   /// 应用启动时调用一次：上次进行中的 unit 回到 `queued`，然后开始处理队列。
   Future<void> start() async {
-    if (_started) return;
-    _started = true;
+    if (_starting) return _startup;
+    _starting = true;
+    final done = Completer<void>();
+    _startup = done.future;
+    try {
+      await _startQueue();
+    } finally {
+      done.complete();
+    }
+  }
+
+  Future<void>? _startup;
+
+  Future<void> _startQueue() async {
+    // 清理与重置完成之前不开始任何任务（_pump 检查 _started）：否则新任务的 `*.part` 会被清理删掉、
+    // 刚认领的 unit 会被重置。
     await repository.resetRunning();
     await _cleanPartFiles();
+    _started = true;
     _pump();
   }
 

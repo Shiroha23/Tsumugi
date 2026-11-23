@@ -188,6 +188,24 @@ void main() {
     expect(keep.existsSync(), isTrue);
   });
 
+  test(
+    'enqueue before start() finishes does not race the *.part cleanup',
+    () async {
+      final dir = await store.unitDir(_source, _item, 'ep1');
+      File('${dir.path}/v/00001.ts.part')
+        ..parent.createSync(recursive: true)
+        ..writeAsStringSync('half');
+      final starting = manager.start();
+      await enqueue(['ep1']);
+      await starting;
+      await manager.idle;
+      expect(
+        (await repo.unit(_source, _item, 'ep1'))!.status,
+        DownloadStatus.done,
+      );
+    },
+  );
+
   test('pausing a running video aborts its requests', () async {
     await manager.start();
     await enqueue(['ep1']);

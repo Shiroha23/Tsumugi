@@ -261,7 +261,7 @@ void main() {
       }
 
       // HLS 字幕轨来自本地播放列表：菜单中有它，且按记住的选择选中。
-      // （内嵌字幕文字的显示时机与本地来源无关：在线时 mock 素材同样只显示最后一条，见 #ISSUE。）
+      // （内嵌字幕文字的显示时机与本地来源无关：在线时 mock 素材同样只显示最后一条，见 #84。）
       await tester.tap(find.byTooltip('字幕'));
       await tester.pumpAndSettle();
       expect(

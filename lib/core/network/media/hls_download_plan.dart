@@ -206,6 +206,17 @@ HlsMediaPlaylist parseHlsMediaPlaylist(String text, Uri base) {
     throw const HlsUnsupportedException('直播流不能下载');
   }
   final mapsIn = _lines(text).where((l) => l.startsWith('#EXT-X-MAP')).length;
+  // 原文中的加密方式：rewriteHlsPlaylist 会整行删掉带其他 `…URI=` 属性的标签（如 SAMPLE-AES 的
+  // 厂商扩展属性），不能据改写结果判断“没有加密”。
+  for (final l in _lines(text)) {
+    if (!l.startsWith('#EXT-X-KEY') && !l.startsWith('#EXT-X-SESSION-KEY')) {
+      continue;
+    }
+    final method = RegExp(r'METHOD=([A-Za-z0-9-]+)').firstMatch(l)?[1];
+    if (method != 'NONE' && method != 'AES-128') {
+      throw HlsUnsupportedException('不支持的加密方式：${method ?? '未知'}');
+    }
+  }
   var sequence = 0;
   final items = <HlsItem>[];
   double? duration;
@@ -232,7 +243,7 @@ HlsMediaPlaylist parseHlsMediaPlaylist(String text, Uri base) {
     } else if (line.startsWith('#EXTINF:')) {
       final v = line.substring(8).split(',').first.trim();
       duration = double.tryParse(v);
-      if (duration == null || duration.isNaN || duration < 0) {
+      if (duration == null || !duration.isFinite || duration < 0) {
         throw const FormatException('EXTINF 无效');
       }
     } else if (line == '#EXT-X-DISCONTINUITY') {

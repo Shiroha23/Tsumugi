@@ -299,6 +299,42 @@ void main() {
       expect(file(videoFileName).readAsBytesSync(), expected);
     });
 
+    test('already complete file (marker missing) is confirmed with 1 byte, not re-downloaded', () async {
+      const content = VideoContent(
+        streams: [StreamRef(url: '/video/media/clip.mp4', quality: '360p')],
+        subtitles: [SubtitleRef(url: '/video/media/subs/zh.srt', lang: 'zh')],
+      );
+      await run(content);
+      server.requests.clear();
+      await run(content);
+      final len = fixture('clip.mp4').length;
+      expect(
+        [for (final r in server.requests) r.headers['range']],
+        ['bytes=${len - 1}-'],
+      );
+      expect(file(videoFileName).readAsBytesSync(), fixture('clip.mp4'));
+      expect(manifest().subtitles.single.file, 'sub-01.srt');
+    });
+
+    test(
+      'external subtitles are kept on resume only when the URL is unchanged',
+      () async {
+        VideoContent withSub(String path) => VideoContent(
+          streams: const [
+            StreamRef(url: '/video/media/clip.mp4', quality: '360p'),
+          ],
+          subtitles: [SubtitleRef(url: path, lang: 'zh')],
+        );
+        await run(withSub('/video/media/subs/zh.srt'));
+        server.requests.clear();
+        await run(withSub('/video/media/subs/zh.srt'));
+        expect(server.hits('/video/media/subs/zh.srt'), 0);
+        await run(withSub('/video/media/subs/en.vtt'));
+        expect(server.hits('/video/media/subs/en.vtt'), 1);
+        expect(manifest().subtitles.single.file, 'sub-01.vtt');
+      },
+    );
+
     test(
       'no validators → no range request, downloads from the start',
       () async {
