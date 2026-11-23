@@ -39,6 +39,19 @@ const cases = {
   nestedFlat: () => [holey()].flat(),
   flatMap: () => Array.prototype.flatMap.call(arrayLike(), (x) => x),
   nestedFlatMap: () => [0].flatMap(() => holey()),
+  // 短的真数组；读取 species / 可展开标志时把另一个参数变成很长的稀疏数组。
+  speciesHookConcat: () => {
+    const a = [1];
+    const b = [2];
+    a.constructor = { get [Symbol.species]() { b.length = N; return undefined; } };
+    return a.concat(b);
+  },
+  spreadableHookConcat: () => {
+    const b = [2];
+    const c = [3];
+    Object.defineProperty(c, Symbol.isConcatSpreadable, { get() { b.length = N; return true; } });
+    return [1].concat(c, b);
+  },
   proxyReverse: () => Array.prototype.reverse.call(lengthProxy()),
   proxyCopyWithin: () => Array.prototype.copyWithin.call(lengthProxy(), 0, 1),
   proxySplice: () => Array.prototype.splice.call(lengthProxy(), 0, 0, 1),

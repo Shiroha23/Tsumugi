@@ -187,8 +187,8 @@ void main() {
     );
     final hardened = jsonDecode(await rt.call('run') as String) as List;
 
-    // flat / flatMap 一律走逐步执行的实现（architecture §6.1），其余常见规模走原生实现。
-    const slowFactor = {'flat': 12, 'flatMap': 12};
+    // concat / flat / flatMap 一律走逐步执行的实现（architecture §6.1），其余常见规模走原生实现。
+    const slowFactor = {'concat': 4, 'flat': 12, 'flatMap': 12};
     final report = <String>[];
     final tooSlow = <String>[];
     for (var i = 0; i < native.length; i++) {

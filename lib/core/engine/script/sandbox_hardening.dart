@@ -7,7 +7,8 @@
 /// - 按 `length` 逐项处理的数组方法（`join`、`toLocaleString`、`reverse`、`copyWithin`、`slice`、
 ///   `splice`、`shift`、`unshift`、`sort`、`concat`、`flat`、`flatMap`）：不是代理的真数组且长度不超过
 ///   [SandboxHardening.maxNativeArrayLength] 时直接调用原生实现；否则走按规范逐步执行的 JS 实现
-///   （`length` 只读一次，每一步都经过中断检查点）。`flat` / `flatMap` 一律走 JS 实现。行为与标准一致。
+///   （`length` 只读一次，每一步都经过中断检查点）。`concat` / `flat` / `flatMap` 一律走 JS 实现
+///   （原生实现会在读取长度之前执行可能运行脚本代码的步骤）。行为与标准一致。
 ///   为了不触发陷阱就能识别代理，`Proxy` 与 `Proxy.revocable` 被包装为登记所创建代理的版本。
 /// - 字符串子串查找（`indexOf` / `lastIndexOf` / `includes` / `split` / `replace` / `replaceAll`
 ///   的字符串参数路径）：工作量（两串长度之积）不超过 [SandboxHardening.maxSearchWork] 时
@@ -183,28 +184,14 @@ const _script = r'''
   // 原生实现，在替换之前保存。
   const N = { __proto__: null };
   for (const name of ['join', 'toLocaleString', 'reverse', 'copyWithin', 'slice', 'splice',
-    'shift', 'unshift', 'sort', 'concat']) {
+    'shift', 'unshift', 'sort']) {
     N[name] = AP[name];
   }
-  // 可以直接交给原生实现：不是代理的真数组，且长度不超过上限。
+  // 可以直接交给原生实现：不是代理的真数组，且长度不超过上限。只用于先读取 length、
+  // 之后才可能执行脚本代码的方法（ECMA-262 的步骤顺序，QuickJS 的实现与之相同）。
   const fastArray = (v) =>
     typeof v === 'object' && v !== null && !isProxy(v) && isArray(v) &&
     v.length <= MAX_NATIVE_LENGTH;
-  const fastConcat = (o, items) => {
-    if (!fastArray(o)) return false;
-    let total = o.length;
-    for (let i = 0; i < items.length; i++) {
-      const e = items[i];
-      if (typeof e === 'object' || typeof e === 'function') {
-        if (!fastArray(e)) return false;
-        total += e.length;
-      } else {
-        total++;
-      }
-      if (total > MAX_NATIVE_LENGTH) return false;
-    }
-    return true;
-  };
   const setPrototypeOf = Obj.setPrototypeOf;
   const nSort = AP.sort;
   const privateArray = () => {
@@ -448,11 +435,14 @@ const _script = r'''
     if (s !== undefined) return !!s;
     return isArray(o);
   };
+  // concat 不走原生实现：原生实现在读取各参数的 length 之前会先解析 species 与可展开标志，
+  // 这些步骤可以执行脚本代码并改变随后读到的长度。
   install(AP, 'concat', {
     concat(...items) {
-      if (fastConcat(this, items)) return apply(N.concat, this, items);
       const o = toObject(this);
-      const a = arraySpeciesCreate(o, 0);
+      const c = speciesOf(o);
+      const direct = c === undefined;
+      const a = direct ? privateArray() : construct(c, [0]);
       let n = 0;
       for (let i = -1; i < items.length; i++) {
         const e = i < 0 ? o : items[i];
@@ -460,14 +450,24 @@ const _script = r'''
           const len = lengthOf(e);
           if (n + len > MAX_SAFE) throw new TypeErr('array too long');
           for (let k = 0; k < len; k++, n++) {
-            if (k in e) defineProperty(a, n, dataDesc(e[k]));
+            if (!(k in e)) continue;
+            if (direct) {
+              a[n] = e[k];
+            } else {
+              defineProperty(a, n, dataDesc(e[k]));
+            }
           }
         } else {
           if (n >= MAX_SAFE) throw new TypeErr('array too long');
-          defineProperty(a, n++, dataDesc(e));
+          if (direct) {
+            a[n++] = e;
+          } else {
+            defineProperty(a, n++, dataDesc(e));
+          }
         }
       }
       a.length = n;
+      if (direct) setPrototypeOf(a, AP);
       return a;
     },
   }.concat, 1);
