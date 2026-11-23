@@ -5,6 +5,7 @@ import 'package:qjs/qjs.dart';
 
 import 'host/tsumugi_api.dart' show interactiveHostPaths;
 import 'native_stack.dart';
+import 'sandbox_hardening.dart';
 import 'script_runtime.dart';
 
 /// 基于 `package:qjs`（QuickJS-ng，经 Dart build hooks 编译）的 [ScriptRuntime]。
@@ -28,7 +29,9 @@ import 'script_runtime.dart';
 ///
 /// 已知限制（见 docs/architecture.md §6.1）：
 /// - JS 执行期间会阻塞所在 isolate；脚本源经 `IsolateScriptRuntime` 放在 worker isolate 中运行。
-/// - QuickJS 部分原生内建函数内部的循环不检查中断，极端输入可能长时间无法返回。
+/// - QuickJS 部分原生内建函数内部的循环不检查中断；已知的几类由 [SandboxHardening] 在脚本之前
+///   替换为可中断的实现。引擎每隔一定数量的检查点才核对一次 deadline，
+///   单次开销很大的内建操作在循环中反复调用时，中断可能明显晚于上限（有上界），由 worker 看门狗兜底。
 /// - 内存 / 栈超限表现为分配失败的异常，脚本可以 catch；但超限的分配本身不会成功。
 class QuickJsScriptRuntime implements ScriptRuntime {
   ///
@@ -39,11 +42,14 @@ class QuickJsScriptRuntime implements ScriptRuntime {
   ///
   /// [interactive] 为 [host] 中需要等待用户操作的路径（如 `ui.openWebView`），
   /// 见 [ScriptLimits.interactiveTime]。
+  ///
+  /// [hardening] 为内建函数加固的参数（#29），只应在测试中改动。
   QuickJsScriptRuntime({
     required Map<String, HostFunction> host,
     this.limits = const ScriptLimits(),
     this.prelude,
     Set<String> interactive = const {},
+    this.hardening = const SandboxHardening(),
   }) : _host = Map.unmodifiable(host),
        _interactive = Set.unmodifiable(interactive) {
     final unknown = interactive.difference(host.keys.toSet());
@@ -66,6 +72,7 @@ class QuickJsScriptRuntime implements ScriptRuntime {
 
   final ScriptLimits limits;
   final String? prelude;
+  final SandboxHardening hardening;
   final Map<String, HostFunction> _host;
   final Set<String> _interactive;
 
@@ -239,6 +246,8 @@ class QuickJsScriptRuntime implements ScriptRuntime {
     _errorCtor = global['Error'].asObject.asFunction;
     _rt.onUncaughtError = (_) {};
     _rt.onUnhandledRejection = (_, _, _) {};
+    // 受信任代码，在 prelude 与脚本之前执行；失败属于编程错误，直接抛出。
+    _rt.evaluateJavascript(hardening.script, sourceUrl: 'tsumugi-hardening.js');
     _installHost(_host);
   }
 

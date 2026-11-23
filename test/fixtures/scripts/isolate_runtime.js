@@ -25,3 +25,9 @@ export async function crashLater() {
   tsumugi.test.spin(300);
   return await tsumugi.echo.slow();
 }
+// 反复调用单次开销较大的内建函数：引擎每隔一定数量的检查点才核对一次 deadline，中断会明显晚于上限。
+export function busyBuiltins() {
+  const s = 'a'.repeat(2 ** 20);
+  const t = s.slice(1) + 'b';
+  for (;;) s.startsWith(t);
+}
