@@ -582,6 +582,11 @@ export async function search(keyword, page) {
 - **递归深度**：栈上限按字节计，可用的层数随平台与函数而异；发布版中简单递归函数在 Windows 上约 100 层，
   Android 上约 490 层（局部变量多、参数多的函数更少）。源作者只能依赖**约 100 层**，
   递归遍历 DOM / 深层 JSON 等可能更深的场景请改用循环加显式栈。超出时抛出栈超限异常（见下一条）。
+- **数组长度上限**：`Array.prototype` 的 `join`（含经它实现的 `toString`）、`toLocaleString`、`reverse`、`copyWithin`、
+  `slice`、`splice`、`shift`、`unshift`、`sort` 作用于 `length` 超过 4,194,304（2²²）的数组或类数组对象时，
+  以及 `concat` 展开后的总长度超过该值时，抛出 `RangeError`（未捕获时返回 `E_LIMIT`，可以 catch）。
+  64 MB 内存下稠密数组达不到这个长度，只有稀疏数组或带 `length` 属性的普通对象会受影响。
+  客户端为保证时间限制有效替换了部分内建函数（architecture §6.1），除此之外行为与标准一致。
 - 内存与栈超限表现为**分配失败的异常**：未捕获时返回 `E_LIMIT`；脚本可以 catch 它继续执行，
   但超限的那次分配本身不会成功，内存上限始终有效。
 - 触发 `E_LIMIT` 后，客户端会丢弃该源的 JS 运行时并重新求值模块，**模块级变量会被重置**。

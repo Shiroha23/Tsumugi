@@ -879,7 +879,8 @@ JavaScriptCore 备选。** 规则引擎只依赖 `lib/core/engine/script/script_
 
 验证范围（`test/core/engine/script/quickjs_script_runtime_test.dart`）：调用 ES 模块导出的 async 函数、
 宿主异步函数往返（含错误码透传）、同步宿主函数、死循环超时中断（含脚本内 try/catch、await 之后）、
-CPU 预算跨 await 累计、总时长上限、内存上限、栈上限、超限后运行时可继续使用、沙箱全局对象检查。
+CPU 预算跨 await 累计、总时长上限、内存上限、栈上限、超限后运行时可继续使用、沙箱全局对象检查；
+内建函数加固见 `test/core/engine/script/sandbox_hardening_test.dart`（大输入下的时间限制、与原生实现的行为对照）。
 本机（Windows）`flutter test` 与 `flutter build windows --release` 通过；Android / iOS 由 CI 构建验证。
 
 实现要点：
@@ -889,6 +890,11 @@ CPU 预算跨 await 累计、总时长上限、内存上限、栈上限、超限
 - **总时长**：Dart 侧计时器，超时即让本次调用失败（`E_LIMIT`），之后到达的宿主结果被丢弃。
   交互式宿主调用（`ui.openWebView`）进行中时暂停，改按 `interactiveTime` 计时（§5.3）。
 - **内存 / 栈**：`JSRuntimeConfig.memoryLimit` / `maxStackSize`，超限 → `E_LIMIT`。
+- **内建函数加固**（#29，`core/engine/script/sandbox_hardening.dart`）：QuickJS 只在执行字节码、调用函数等检查点上
+  检查中断 deadline，少数原生内建函数的内部循环不经过检查点（2026-11 实测，回归测试见上）。每个引擎在 prelude 与脚本之前
+  执行一段受信任 JS，替换这些函数：按 `length` 循环的数组方法遇到超大 `length` 时直接以 `E_LIMIT` 失败，`flat` / `flatMap`
+  改为逐项执行的 JS 实现；字符串子串查找在工作量超过阈值时改用按块比较的 JS 实现（结果与原生一致，小输入仍走原生）。
+  替换后的函数只引用自己保存的原生函数，脚本事后篡改原型不影响它们；不新增全局对象或宿主 API。规则见 source-spec §4.4。
 - 已知限制：**递归深度偏低**（2026-11 release 实测，`integration_test/script_stack_depth_test.dart`）：默认 512 KB 栈上限下
   简单递归在 Windows 约 107 层、Android 约 487 层（Windows 的 QuickJS 原生库每层栈帧明显更大），已写入 source-spec §4.4。
   栈上限必须小于执行线程的栈，而脚本所在的 Dart isolate 线程栈大小不可配置，因此不能直接调大；
@@ -910,9 +916,9 @@ CPU 预算跨 await 累计、总时长上限、内存上限、栈上限、超限
 
 已知限制与后续工作：
 
-- **`QuickJsScriptRuntime` 在调用方 isolate 上同步执行 JS**。脚本源已通过 `IsolateScriptRuntime`
-  把每个源的运行时放进独立 worker isolate（§5.5）；声明式引擎的 `js:` 片段仍在调用方 isolate 上执行
-  （可改用 `IsolateScriptRuntime.create` 作为其 `ScriptRuntimeFactory`）。
+- **`QuickJsScriptRuntime` 在调用方 isolate 上同步执行 JS**。脚本源（`ScriptSource`）与声明式引擎的 `js:` 片段
+  （`DeclarativeSourceFactory` 默认的 `IsolateScriptRuntime.create`）都经 `IsolateScriptRuntime` 放在独立 worker isolate 中（§5.5），
+  不会阻塞界面所在的 isolate。
 - **QuickJS 栈顶与线程迁移**（2026-11 实测）：QuickJS 只在创建 `JSRuntime` 时记录一次原生栈顶，
   而 Dart isolate 在两个事件之间可能被调度到另一个 OS 线程。worker 中因此偶发误报
   `Maximum call stack size exceeded`；反方向时栈检查会失效。`qjs` 未暴露 `JS_UpdateStackTop`，
@@ -925,14 +931,17 @@ CPU 预算跨 await 累计、总时长上限、内存上限、栈上限、超限
 - **worker 无法被强制终止**：不能用 `Isolate.kill(priority: immediate)`——worker 往往正处于 QuickJS → Dart 的
   FFI 回调中，在那里被强制终止会让整个进程崩溃（已实测）。因此看门狗只做 `kill(beforeNextEvent)`：worker 回到事件循环时退出，
   一直卡住的 worker 只能放弃（占用一个线程直到进程退出）。
-- **部分原生内建函数不检查中断**：QuickJS-ng 某些内建函数（如 `Array.prototype.flat` 作用于
-  `length` 极大的类数组对象）在 C 循环中不检查中断，CPU / 总时长限制对其无效，可能长时间无法返回
-  （未实测，依据引擎源码判断）。放进 worker isolate 也不够：isolate 卡在原生代码中时 Dart 无法终止它。
-  根治需要给引擎打补丁（在这些循环中加入中断检查）或把脚本放进可被强制结束的独立进程；
-  在此之前，恶意源最坏能卡死其所在的 worker（[#29](https://github.com/Shiroha23/Tsumugi/issues/29)）。
-  缓解：看门狗放弃卡死的 worker 后该源暂时停用，并按源、按进程限制被放弃 worker 的数量（§5.5），恶意源不能借此反复占用线程；
-  其他源的数据隔离不受影响，但全进程上限触发时它们暂时不能新建 worker。
-  验证页打开期间看门狗按交互等待的上限计时，这种卡死要到验证页关闭或该上限到期后才会被发现。
+- **中断可能明显晚于上限**（#29）：
+  - 不经过检查点的内建函数循环：已知的几类由上面的内建函数加固处理（2026-11 按引擎源码逐项实测，见回归测试）。
+    其余未发现的同类情况仍可能让 worker 长时间无法返回。
+  - 引擎按检查点的计数（固定值，不可配置）而不是按时间核对 deadline。单次开销很大的内建操作在循环里反复调用时，
+    中断会晚于上限数秒到数分钟；
+    但它们都有上界（输入受内存上限约束），引擎最终会中断，worker 随后退出、线程收回。
+  - 兜底：§5.5 的看门狗在 `wallTime + hangGrace` 后放弃 worker，该次调用以 `E_LIMIT` 失败，该源暂时停用并提示用户，
+    并按源、按进程限制被放弃 worker 的数量（恶意源不能借此反复占用线程）；其他源的数据隔离不受影响，
+    但全进程上限触发时它们暂时不能新建 worker。验证页打开期间看门狗按交互等待的上限计时，这种卡死要到验证页关闭或该上限到期后才会被发现。
+  - 根治需要修改引擎（在这些循环中补检查点、按工作量核对 deadline），即改为自行维护的 qjs 分支并从源码编译；
+    或把脚本放进可被强制结束的独立进程（iOS 不允许）。见后续 issue。
 - 同一运行时上的调用**串行执行**（宿主 Promise 需要归属到具体调用）。如需单源并发，可按调用开多个运行时。
 - HTML 句柄的 DOM 不在 JS 堆内，只能靠句柄数与解析文本量的上限间接约束（source-spec §4.2.1）。
 - 源脚本**不支持顶层 await**（模块同步求值）；已写入 source-spec §4.1。

@@ -218,6 +218,28 @@ void main() {
     }
   }
 
+  test('slow-to-interrupt engine work: the call fails within the watchdog '
+      'bound and the worker is reclaimed', () async {
+    final rt = create(
+      limits: const ScriptLimits(
+        cpuTime: Duration(milliseconds: 100),
+        wallTime: Duration(milliseconds: 300),
+      ),
+      hangGrace: const Duration(milliseconds: 200),
+    );
+    addTearDown(rt.dispose);
+    await rt.load(_script);
+    final watch = Stopwatch()..start();
+    await expectLater(
+      rt.call('busyBuiltins'),
+      throwsA(isA<ScriptException>().having((e) => e.code, 'code', 'E_LIMIT')),
+    );
+    expect(watch.elapsed, lessThan(const Duration(seconds: 2)));
+    // 被放弃的 worker 在引擎终于中断后回到事件循环并退出，不再占用线程。
+    await waitUntil(() => rt.stuckWorkers == 0);
+    expect(await rt.call('add', [1, 1]), 2);
+  });
+
   test(
     'unresponsive worker suspends the runtime during the cooldown',
     () async {
