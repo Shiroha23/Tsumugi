@@ -360,6 +360,21 @@ void main() {
       expect(file(videoFileName).existsSync(), isFalse);
     });
 
+    test('external subtitles count against the byte limit', () async {
+      final len = fixture('clip.mp4').length;
+      await expectLater(
+        run(
+          const VideoContent(
+            streams: [StreamRef(url: '/video/noetag/clip.mp4')],
+            subtitles: [SubtitleRef(url: '/video/media/subs/ja.ass')],
+          ),
+          limits: VideoDownloadLimits(maxBytes: len + 10),
+        ),
+        throwsCode(SourceErrorCode.limit),
+      );
+      expect(file(videoFileName).existsSync(), isFalse);
+    });
+
     test('non-media content is rejected', () async {
       await expectLater(
         run(mp4('/video/media/subs/zh.srt')),
