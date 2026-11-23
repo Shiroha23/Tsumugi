@@ -3,7 +3,8 @@
 
 检查本项目卡在上游的依赖有没有新进展，有变化时在本仓库对应的 issue 下评论一次：
 
-- media_kit 原生库包 / 上游原生库构建的新发布、better_player 的 Windows 渲染方式 → #56
+- media_kit 原生库包 / 上游原生库构建的新发布、better_player 的 Windows 渲染方式、
+  Windows 自建 libmpv（tool/libmpv_windows/sources.tsv）的 mpv / FFmpeg 新版本 → #56
 - media_kit / media_kit_video 新版本 → #49
 - qjs 新版本（以及是否公开了更新栈顶的 API）→ #28
 - flutter_inappwebview 新的正式版 → #27、#30
@@ -39,6 +40,7 @@ DRY_RUN = (
     or not os.environ.get("GITHUB_REPOSITORY")
 )
 LOCKFILE = "pubspec.lock"
+LIBMPV_WINDOWS_SOURCES = "tool/libmpv_windows/sources.tsv"
 
 # 已经看过、不需要再提醒的上游状态（2026-11-19 的基线）。
 KNOWN_NATIVE_RELEASES = {
@@ -215,6 +217,65 @@ def check_native_releases(report: Report) -> None:
             ))
 
 
+def libmpv_windows_versions(path: str = LIBMPV_WINDOWS_SOURCES) -> dict[str, str]:
+    """Windows 自建 libmpv 的组件 → 版本（sources.tsv 的前两列）。"""
+    versions = {}
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if line.strip() and not line.startswith("#"):
+                cols = line.rstrip("\n").split("\t")
+                versions[cols[0]] = cols[1]
+    return versions
+
+
+def _version_tuple(v: str) -> tuple[int, ...]:
+    return tuple(int(x) for x in re.findall(r"\d+", v))
+
+
+def check_libmpv_windows(report: Report) -> None:
+    """自建的 Windows libmpv：mpv 新发布、FFmpeg 同一发布线的新补丁版本（安全修复）或新发布线。"""
+    try:
+        current = libmpv_windows_versions()
+        mpv, ffmpeg = current["mpv"], current["ffmpeg"]
+    except Exception as e:  # noqa: BLE001
+        report.errors.append(f"读取 {LIBMPV_WINDOWS_SOURCES}：{e}")
+        return
+    try:
+        tag = json.loads(gh("api", "repos/mpv-player/mpv/releases/latest"))["tag_name"]
+        report.checked.append(f"mpv 最新发布 {tag}（Windows 自建 {mpv}）")
+        if _version_tuple(tag) > _version_tuple(mpv):
+            report.findings.append(Finding(
+                f"libmpv-windows:mpv@{tag}", [56],
+                f"mpv 出了新发布 **{tag}**（Windows 自建为 {mpv}）。阅读发布说明（选项改名 / 删除、"
+                "依赖版本要求）后，按 architecture §6.4.6 第 2 项更新 tool/libmpv_windows/。",
+            ))
+    except Exception as e:  # noqa: BLE001
+        report.errors.append(f"mpv 最新发布：{e}")
+    try:
+        tags = gh("api", "--paginate", "repos/FFmpeg/FFmpeg/tags", "--jq", ".[].name").split()
+        releases = sorted(
+            (_version_tuple(t), t) for t in tags if re.fullmatch(r"n\d+(\.\d+)+", t)
+        )
+        cur = _version_tuple(ffmpeg)
+        same_line = [t for v, t in releases if v[:2] == cur[:2] and v > cur]
+        newer_lines = [t for v, t in releases if v[:2] > cur[:2]]
+        report.checked.append(f"FFmpeg 发布标签（Windows 自建 {ffmpeg}）")
+        if same_line:
+            report.findings.append(Finding(
+                f"libmpv-windows:ffmpeg@{same_line[-1]}", [56],
+                f"FFmpeg 同一发布线出了补丁版本 **{same_line[-1]}**（Windows 自建为 {ffmpeg}），"
+                "通常含安全修复，应尽快更新 tool/libmpv_windows/sources.tsv 并重新发布。",
+            ))
+        if newer_lines:
+            report.findings.append(Finding(
+                f"libmpv-windows:ffmpeg-line@{newer_lines[-1]}", [56],
+                f"FFmpeg 已有更新的发布线（最新 **{newer_lines[-1]}**，Windows 自建为 {ffmpeg}）。"
+                "当前发布线停止维护前需要评估升级。",
+            ))
+    except Exception as e:  # noqa: BLE001
+        report.errors.append(f"FFmpeg 发布标签：{e}")
+
+
 def check_better_player(report: Report) -> None:
     try:
         import base64
@@ -281,6 +342,7 @@ def main() -> int:
     check_qjs(report, locked)
     check_inappwebview(report)
     check_native_releases(report)
+    check_libmpv_windows(report)
     check_better_player(report)
     posted = post(report)
 

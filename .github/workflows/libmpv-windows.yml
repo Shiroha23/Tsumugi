@@ -36,9 +36,12 @@ jobs:
       - id: tag
         run: echo "tag=$(tr -d '[:space:]' < tool/libmpv_windows/VERSION)" >> "$GITHUB_OUTPUT"
       - name: Install toolchain
+        timeout-minutes: 15
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64-posix g++-mingw-w64-x86-64-posix \
+          sudo -E apt-get install -y --no-install-recommends -o Dpkg::Use-Pty=0 gcc-mingw-w64-x86-64-posix g++-mingw-w64-x86-64-posix \
             binutils-mingw-w64-x86-64 mingw-w64-tools nasm meson ninja-build pkgconf python3 curl xz-utils zip
       - name: Build
         run: bash tool/libmpv_windows/build.sh "$RUNNER_TEMP/libmpv-work" out

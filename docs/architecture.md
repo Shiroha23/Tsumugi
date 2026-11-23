@@ -1025,14 +1025,14 @@ RFC 9535 是目前唯一的 JSONPath 标准，选它可避免各实现间过滤�
 media_kit 的 Dart / 插件代码都是 MIT；许可证问题在它下载的**预编译 libmpv / FFmpeg**。逐个平台核对了插件实际固定的
 下载地址与构建配置：
 
-| 平台 | 插件固定的二进制 | mpv | FFmpeg | nonfree | 依据 |
+| 平台 | 随包的二进制 | mpv | FFmpeg | nonfree | 依据 |
 |---|---|---|---|---|---|
-| Windows | `media-kit/libmpv-win32-video-build` 发布 `2023-09-24` 的 `mpv-dev-x86_64-20230924-git-652a1dd.7z`（MD5 写死在插件 CMake 中） | `-Dgpl=false`（LGPL-2.1+） | `--disable-gpl --disable-nonfree --enable-version3` → **LGPL-3.0+** | 无 | **二进制实测**：`libmpv-2.dll` 内嵌的配置串，以及 `libavcodec license: LGPL version 3 or later`（libavformat / avutil / avfilter / swscale / swresample 相同） |
+| Windows | **本项目自建**（2026-11 起，§6.4.6 第 2 项）：`libmpv-win64-0.42.0-ff8.1.3-r1.zip`（sha256 写死在 `windows/CMakeLists.txt`）；此前为 `media-kit/libmpv-win32-video-build` 发布 `2023-09-24` 的 `mpv-dev-x86_64-20230924-git-652a1dd.7z` | `0.42.0`，`-Dgpl=false`（LGPL-2.1+） | `8.1.3`，`--enable-version3`，无 `--enable-gpl` / `--enable-nonfree` → **LGPL-3.0+** | 无 | 构建脚本 `tool/libmpv_windows/build.sh`；构建工作流的门禁检查 `libmpv-2.dll` 中的 `LGPL version 3 or later` 与 mpv 的 `gpl=false`（旧版本同样实测为 LGPL-3.0+） |
 | Android | `media-kit/libmpv-android-video-build` `v1.1.7` 的 `default-<abi>.jar`（MD5 写死在插件 build.gradle） | `-Dgpl=false` | `default` 构建脚本：`--disable-gpl --disable-nonfree --enable-version3` → **LGPL-3.0+** | 无 | **二进制实测**：APK 中 `libmpv.so`（静态包含 FFmpeg）的配置串与 `LGPL version 3 or later`；构建脚本 `buildscripts/flavors/default.sh`、`scripts/mpv.sh` 一致 |
 | iOS | `media-kit/libmpv-darwin-build` `v0.6.0` 的 `ios-universal-video-default`（sha256 写死在插件 Makefile） | `0.36.0`，`-Dgpl=false` | `6.0`，`default` flavor：无 `--enable-gpl` / `--enable-nonfree`，有 `--enable-version3` → **LGPL-3.0+** | 无 | **二进制实测**（M4-B，2026-11）：下载插件固定的压缩包（sha256 一致），`Avcodec.framework` 内嵌 `FFmpeg version 6.0` 与 `LGPL version 3 or later`，`Mpv.framework` 内嵌 `mpv 0.36.0` 与 `-Dgpl=false`；`v0.6.0` 标签处的 `scripts/ffmpeg/meson.build`、`downloads.lock` 一致 |
 
-三个平台带 GPL 的版本（`encoders-gpl` / `encodersgpl`，含 x264）都**没有**被插件使用。**libplacebo 三个平台都没有启用**
-（Windows / Android 的 mpv 配置为 `-Dlibplacebo=disabled`，iOS 的依赖锁文件中没有它）。
+三个平台带 GPL 的版本（`encoders-gpl` / `encodersgpl`，含 x264）都**没有**被插件使用。**libplacebo** 只在 Windows 自建构建中启用
+（LGPL-2.1+，mpv 0.37 起必需）；Android 的 mpv 配置为 `-Dlibplacebo=disabled`，iOS 的依赖锁文件中没有它。
 
 **逐项核对（M4-B，2026-11）**：从插件固定的二进制与构建仓库的确切标签核对每个随包组件的版本、许可证与源码地址，
 结果在仓库根目录的 `THIRD_PARTY_NOTICES.md`（逐平台的表），源码下载清单在 `tool/release/native_sources.tsv`（带 sha256）。
@@ -1041,14 +1041,10 @@ media_kit 的 Dart / 插件代码都是 MIT；许可证问题在它下载的**�
 - **Android / iOS**：构建仓库按标签固定了每个依赖的版本（`buildscripts/include/depinfo.sh` / `downloads.lock`），
   二进制中的版本串与之一致（如 Android FriBidi 1.0.12、dav1d 1.2.0、FFmpeg n6.0；iOS libpng 1.6.40 由 FreeType 的 meson
   回退子项目引入，不在锁文件里）。对应源码可以确切取得。
-- **Windows**：构建脚本（shinchiro/mpv-winbuild-cmake 的分支）对多数依赖不固定版本，构建时取各自 git 的最新提交。
-  确切的只有 mpv `652a1dd`、FFmpeg `n6.0`，以及二进制版本串给出的 FriBidi 1.0.13、libsoxr 0.1.3 等；
-  **其余依赖（libass、HarfBuzz、FreeType、Mbed TLS、libxml2、uchardet、libjxl、libvpl、libwebp、zimg、shaderc、SPIRV-Cross、
-  lcms2、libarchive、mujs 等）的确切提交没有记录**。更麻烦的是，发布 `2023-09-24` 时 media-kit 的定制脚本
-  （只保留视频所需解码器等）**不在构建仓库的 git 历史中**：标签所在的 `version` 分支只有一个版本号文件，`master` 上的定制提交是
-  2024-02 才提交的（FFmpeg 已换成别的提交）。现存最准确的记录是二进制内嵌的 mpv / FFmpeg 配置串，已提取到
-  `tool/release/windows_libmpv_build_config.txt`。因此 **Windows 无法提供与二进制逐字节对应的全部源码**，只能尽力而为
-  （见下文第 2 点），根本解决要靠自建 libmpv（§6.4.6 后续 2）。
+- **Windows**（2026-11 起自建，§6.4.6 第 2 项）：每个组件都是固定版本的发布包（`tool/libmpv_windows/sources.tsv`，带 sha256），
+  对应源码是 libmpv 预发布 Release 中的 `<TAG>-sources.tar`（全部发布包 + 构建脚本 + `BUILD_INFO.txt`），可以确切取得。
+  **此前**的 2023-09 预编译库（shinchiro/mpv-winbuild-cmake 的分支构建）对多数依赖不固定版本、不记录确切提交，media-kit 当时的定制脚本
+  也不在构建仓库的 git 历史中，只能尽力提供源码；随该版本发布的 v0.1.0 / v0.2.0 的源码包仍是那时的状态。
 - **ANGLE**（Windows，来自 `alexmercerind/flutter-windows-ANGLE-OpenGL-ES` `v1.0.1` 的自编译包）：`libEGL` / `libGLESv2` 的版本资源为
   `2.1.18844 git hash: 2693b03eba82`（google/angle `2693b03eba82a424a19febaacaab4115a45b7682`，2022-07）；SwiftShader 5.0.0 与
   Vulkan Loader 是 ANGLE 在该提交的第三方依赖；`zlib.dll` 为 zlib 1.2.12。
@@ -1075,13 +1071,11 @@ Apache-2.0 与 GPL-3.0 兼容。**再分发（CI 产物、Release）需要满足
    `.github/workflows/release.yml`（推送 `v*` 标签时触发；`workflow_dispatch` 为 dry-run，只上传为构建产物）构建三平台安装包，
    并用 `tool/release/fetch_native_sources.sh` 按 `tool/release/native_sources.tsv` 下载各组件源码与构建脚本、校验 sha256、
    打成 `tsumugi-<版本>-native-sources.tar`（约 120 MB，其中两个版本的 HarfBuzz 源码各约 35 MB），与安装包上传到同一个 Release。
-   清单收录：Android / iOS 构建仓库在确切提交处的存档、三平台的 mpv / FFmpeg、Android / iOS 锁定的全部依赖、Windows 能确定版本的
-   LGPL 组件，以及从 Windows 二进制提取的构建配置。**已决定（2026-11）**：
-   - Windows 构建仓库没有许可证文件（即保留所有权利），**不收其存档**，只在 `SOURCES_README.md` / `THIRD_PARTY_NOTICES.md` 中给出上游
-     归档仓库与确切提交（构建时的 `master` `f5a6f87`、归档时的 `master` `35a3be3`）；
-   - Windows libmpv 的对应源码**只能尽力提供**（缺多数依赖的确切提交与当时的定制脚本，原因见上文），接受此状态，直到自建 libmpv
-     （§6.4.6 后续 2）落地后提供完整的对应源码与构建脚本；
-   - Windows 版本未知的宽松许可证依赖与 ANGLE（源码体积达 GB 级）只在 `THIRD_PARTY_NOTICES.md` 中给出上游地址。
+   清单收录：Android / iOS 构建仓库在确切提交处的存档、Android / iOS 的 mpv / FFmpeg 与锁定的全部依赖，以及 Windows 自建 libmpv 的
+   完整源码包（`<TAG>-sources.tar`）。**已决定（2026-11）**：
+   - 2023 版 Windows 构建仓库没有许可证文件（即保留所有权利），不收其存档；改用自建 libmpv 后已不再需要它
+     （此前「Windows 对应源码只能尽力提供」的状态到此结束，2026-11-24）；
+   - Windows 的 ANGLE 包（源码体积达 GB 级）只在 `THIRD_PARTY_NOTICES.md` 中给出上游地址。
 3. LGPL 要求用户能替换库：Windows / Android 为动态库，天然满足；iOS 的 xcframework 内是动态 framework（Mach-O `MH_DYLIB`，
    M4-B 实测；此前误记为静态库），同样可以替换。此外整个应用以 GPL-3.0 提供完整源码与构建方式，用户也可以重新构建。
 
@@ -1297,9 +1291,9 @@ M5 音乐复用同一 libmpv，不再增加体积。预编译库内部的组件�
 
 风险：
 
-- **预编译库陈旧，Windows 构建仓库已归档**：Windows 的 mpv / FFmpeg 为 2023-09 的版本，缺少此后的 FFmpeg 安全修复；播放的是第三方源
-  提供的内容，属于不可信输入。代理已限制来源主机与内容类型，但无法防御解码器本身的漏洞。**应尽快换成维护中的 LGPL 构建（自建或 fork）**；
-  Android（v1.1.7）与 iOS（v0.6.0）也落后于各自构建仓库的最新发布。media_kit 主仓库 2026-08 仍有提交，最近一次发版在 2025 年末。
+- **Android / iOS 的预编译库陈旧**：Android（v1.1.7）与 iOS（v0.6.0）的 mpv / FFmpeg 仍是 0.36 / 6.0（2023），缺少此后的 FFmpeg 安全修复；
+  播放的是第三方源提供的内容，属于不可信输入。代理已限制来源主机与内容类型，但无法防御解码器本身的漏洞。Windows 已换成自建的
+  mpv 0.42 + FFmpeg 8.1（第 2 项）；Android / iOS 是第 2 项的第 2 步。自建版本同样需要按第 2 项跟进安全更新。
 - **`d3dcompiler_47.dll`**：`media_kit_libs_windows_video` 随 ANGLE 打包的微软可再分发组件（非开源，按 Windows SDK 的再分发条款）。
   Windows 10 起系统目录自带同名 DLL，可视为 GPL-3.0 的“系统库”。**M4-B 起不再打包**（`windows/CMakeLists.txt` 排除），
   ANGLE 使用系统自带的。Windows 11 上验证（2026-11）：`integration_test/video_playback_test.dart` 在不含该 DLL 的构建中通过
@@ -1307,8 +1301,6 @@ M5 音乐复用同一 libmpv，不再增加体积。预编译库内部的组件�
   release 构建的界面内手动播放尚未执行，**Windows 10 未测试**。
 - **`WebView2Loader.dll`**（M3 起随包）：同为微软的闭源再分发组件，但没有系统自带的副本可用。**保持以动态库随包**（已决定，
   静态链接并不更合规），见 §6.4.1。
-- **Windows libmpv 的对应源码不完整**：见 §6.4.1——除 mpv / FFmpeg 等少数组件外，依赖的确切提交与当时的定制脚本都没有记录，
-  Release 中的源码包只能尽力而为；已决定接受到自建 libmpv（后续 2）落地为止。
 - media_kit 主要由一人维护。播放器只出现在 `features/video/player/` 与 `shared/video/player_options.dart`，代理与播放器无关，
   必要时可以换播放器实现。
 
@@ -1317,7 +1309,42 @@ M5 音乐复用同一 libmpv，不再增加体积。预编译库内部的组件�
 1. ~~**第三方许可证与源码分发**~~（M4-B 完成）：`THIRD_PARTY_NOTICES.md`、「关于」页的许可证列表、Release 工作流上传原生组件源码包、
    不再打包 `d3dcompiler_47.dll`，见 §6.4.1。升级 `media_kit_libs_*_video` 时须同步更新 `THIRD_PARTY_NOTICES.md`、
    `assets/licenses/` 与 `tool/release/native_sources.tsv`。
-2. **原生库更新**（[#56](https://github.com/Shiroha23/Tsumugi/issues/56)）：上游所有发布仍是 FFmpeg 6.0。**当前决定（2026-11-18）：等待 media_kit 上游发布新的原生库包**，届时按本节第 1 项同步升级；在此之前已知风险是解码器缺少 2023 年以后的安全修复（媒体代理只能限制来源主机与内容类型）。同时观察 better_player：已评估可用（Android ExoPlayer / iOS AVPlayer，经本地代理播放正常），但其 Windows 实现是 libmpv 软件渲染，1080p60 时 raster p95 约 16.5 ms（media_kit 约 0.7 ms），因此等它改用 mpv 0.42 起提供的 D3D11 渲染接口后再评估迁移。两者都没有进展时，再考虑自建 libmpv，见该 issue。
+2. **原生库更新**（[#56](https://github.com/Shiroha23/Tsumugi/issues/56)）：上游所有发布仍是 FFmpeg 6.0（Windows 构建仓库已归档），
+   每周的 `upstream-watch.yml` 也没有发现进展。**决定（2026-11-24，取代 2026-11-18「等待 media_kit 上游」的决定）：不再等上游，
+   由本项目自己提供新版 libmpv，分两步：先 Windows，再 Android / iOS。** 理由：播放的是第三方源提供的不可信内容，解码器缺少
+   2023 年以后的安全修复是持续的风险；上游没有升级依赖的迹象；自建还能补上 Windows 对应源码不完整的问题（§6.4.1）。
+   - **Windows（已完成，见下）**：在 CI 里用本仓库的脚本自建，而不是取现成的第三方二进制。比较过的来源：
+     shinchiro / zhongfly 的 `mpv-winbuild`（每天跟 mpv / FFmpeg 的 git master，多数依赖取 git 最新提交、不记录确切提交，
+     无法提供 GPL / LGPL 要求的对应源码；zhongfly 的发布只保留 30 天；体积 29 MB 级的压缩包含大量不需要的组件；shinchiro 默认是 GPL 构建），
+     MSYS2 的 mpv 包（动态链接上百个 DLL，FFmpeg 为 GPL 并带大量编码器）。自建的好处是每个组件都是**发布版 + sha256**，源码包可以确切给出，
+     配置只保留播放所需的部分。
+     - **构建**：`tool/libmpv_windows/build.sh` 在 Ubuntu 24.04 上用 mingw-w64（posix 线程模型）交叉编译，组件与校验和在
+       `tool/libmpv_windows/sources.tsv`：mpv 0.42.0（`-Dgpl=false`，`--auto-features=disabled`，只开 `gl` / `plain-gl` /
+       `d3d-hwaccel` / `wasapi` / `win32-threads` / `zlib`，不带 Lua、JavaScript、libarchive、光盘等）、FFmpeg 8.1.3（**LGPL-3.0+**：
+       `--enable-version3`，不加 `--enable-gpl` / `--enable-nonfree`，与 Android / iOS 一致；`--disable-autodetect --disable-everything` 后只开播放需要的
+       解码器 / 解复用器 / 解析器，协议只有 `http` / `tcp`——所有请求经本地媒体代理，不带 TLS、DASH、file、rtmp 等）、libplacebo 7.387.0
+       （mpv 0.37 起必需，只开 OpenGL 后端）、libass 0.17.5、FreeType 2.15.0、HarfBuzz 15.2.0、FriBidi 1.0.18、dav1d 1.5.5、zlib 1.4。
+       全部静态链接进 `libmpv-2.dll`，只依赖 Windows 系统 DLL。不再带 2023 版里的 GNU libiconv、libsoxr、Mbed TLS、libjxl、libvpl、
+       libwebp、libxml2、uchardet、lcms2、shaderc、SPIRV-Cross、mujs 等。
+     - **发布与校验**：`.github/workflows/libmpv-windows.yml` 手动运行（`publish=true`）时把 `<TAG>.zip`（DLL、导入库、头文件、
+       `BUILD_INFO.txt`）、`<TAG>-sources.tar`（对应源码：全部源码发布包 + 构建脚本）与 `SHA256SUMS` 发布为本仓库的**预发布 Release**，
+       标签取 `tool/libmpv_windows/VERSION`（如 `libmpv-win64-0.42.0-ff8.1.3-r1`）；标签已存在时失败，已发布的资产不替换。
+       `windows/CMakeLists.txt` 固定该 Release 的地址与 **sha256**，在插件配置之前解压到插件使用的同一目录，插件因此不再解压它的旧版本
+       （旧压缩包仍会被插件下载，但不再使用）；CI 与 `release.yml` 都经同一 CMake 生效。工作流内有许可证门禁（FFmpeg 许可证串必须是
+       `LGPL version 3 or later`、配置中不得有 gpl / nonfree、mpv 的 `gpl` 选项必须为 false）和导入表检查（只允许系统 DLL）。
+     - **对应源码**：`tool/release/native_sources.tsv` 收录 `<TAG>-sources.tar`（sha256 固定），发版时进入 `*-native-sources.tar`。
+       编译器运行库（libgcc / libstdc++ 按 GCC 运行库例外、mingw-w64 CRT 与 winpthreads 为宽松许可证）随 Ubuntu 的 mingw-w64 包，
+       版本记在 `BUILD_INFO.txt`。
+     - **跟进更新**：mpv / FFmpeg（8.1 补丁线）或任一依赖发布安全修复时，改 `sources.tsv` 与 `VERSION`（`-r<n>` 递增）、手动发布、
+       更新 CMake 中的标签与 sha256，并按本节第 1 项同步许可证文件；`upstream-watch.yml` 的提醒继续保留。
+     - **行为差异**：media_kit 设置的 `osc`、`ytdl` 选项只在启用 Lua 时存在，新旧两个构建都没有 Lua，设置失败无影响（`ytdl=no` 的
+       目的本来就是不调用 yt-dlp）；其余 media_kit 与本项目设置的选项在 mpv 0.42 中都存在。不带 `egl-angle`：硬解为 `d3d11va-copy`
+       （旧构建实测也是 copy 模式）。
+   - **Android / iOS（第 2 步，未做）**：另开 PR。Android 以 `media-kit/libmpv-android-video-build` 的脚本为起点（需保留
+     `mpv_lavc_set_java_vm` 补丁），iOS 以 `libmpv-darwin-build` 的 nix 脚本为起点（补丁需对新版 FFmpeg 重新确认），产物同样固定版本 + sha256，
+     经仓库内的本地插件包或构建脚本替换。在此之前 Android / iOS 仍是 FFmpeg 6.0，风险同上。
+   - better_player 的观察保持不变：其 Windows 实现是 libmpv 软件渲染，1080p60 时 raster p95 约 16.5 ms（media_kit 约 0.7 ms），
+     等它改用 mpv 0.42 起提供的 D3D11 渲染接口后再评估。
 3. ~~**播放页完善**~~（已完成，见 §5.2「视频播放」）：选集与线路、上一集 / 下一集（含播完自动下一集）、播放进度记忆与书架 / 历史接入、
    清晰度切换。
 4. ~~**字幕**~~（已完成，见 §5.2「视频播放」与 §6.4.7）：外挂字幕（srt / vtt / ass）由 Dart 侧经源的网络层取回、解析并显示，
@@ -1343,7 +1370,7 @@ M5 音乐复用同一 libmpv，不再增加体积。预编译库内部的组件�
 | | (a) Dart 取回、解析、自己渲染 ✅ | (b) 经代理交给 libmpv 作为外挂字幕（`sub-add`） |
 |---|---|---|
 | 网络边界 | 一次性请求，经该源的 `SourceHttpClient`（白名单含每跳重定向、Cookie、默认 headers、限速），与图片同一路径 | 同样经源的网络层，但代理要新增“字幕文件”这一类内容并为它定义识别规则 |
-| 解析不可信内容的代码 | Dart（内存安全），本项目自己的小解析器，有大小 / 条数上限 | FFmpeg 的 srt / webvtt / ass 解复用器与解码器 + **libass**（ASS 事件解析）；`[Fonts]` 中的内嵌字体交给 **FreeType** 解析，绘图指令（`\p`）交给 libass 光栅化。Windows 的 libass / FreeType 版本未记录、停在 2023-09（§6.4.1），无法评估其漏洞 |
+| 解析不可信内容的代码 | Dart（内存安全），本项目自己的小解析器，有大小 / 条数上限 | FFmpeg 的 srt / webvtt / ass 解复用器与解码器 + **libass**（ASS 事件解析）；`[Fonts]` 中的内嵌字体交给 **FreeType** 解析，绘图指令（`\p`）交给 libass 光栅化。Windows 为自建的 libass 0.17.5 / FreeType 2.15.0（§6.4.6 第 2 项），Android / iOS 停在 2023 年的版本 |
 | 编码 | 复用 `core/encoding`，GBK 等有确定的回退规则 | 依赖 mpv 的 `sub-codepage`（uchardet 猜测），无法套用 source-spec §5 的规则 |
 | 显示 | 纯文本；ASS 的位置 / 颜色 / 特效丢失 | media_kit 默认 `libass: false`，本来就只取 `sub-text` 的纯文本由 Flutter 显示，样式同样丢失 |
 

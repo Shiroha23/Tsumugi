@@ -3,7 +3,7 @@
 # THIRD_PARTY_NOTICES.md、lib/features/settings/about/native_licenses.dart 与 assets/licenses/。
 # 列：组件<TAB>版本<TAB>许可证<TAB>下载地址<TAB>sha256<TAB>保存文件名
 mpv	0.42.0	LGPL-2.1-or-later (-Dgpl=false)	https://github.com/mpv-player/mpv/archive/refs/tags/v0.42.0.tar.gz	bcfebbfa2b65a6d88dc97ea18117831072373e38b5785a2afb874ed4df5070dd	mpv-0.42.0.tar.gz
-ffmpeg	8.1.3	LGPL-2.1-or-later	https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz	7138d28c96d9d3e3af4ee3d8cad72741f8ffb40da90c1112235dea3ecd3178a3	ffmpeg-8.1.3.tar.xz
+ffmpeg	8.1.3	LGPL-3.0-or-later (--enable-version3)	https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz	7138d28c96d9d3e3af4ee3d8cad72741f8ffb40da90c1112235dea3ecd3178a3	ffmpeg-8.1.3.tar.xz
 libplacebo	7.387.0	LGPL-2.1-or-later	https://github.com/haasn/libplacebo/archive/refs/tags/v7.387.0.tar.gz	f9e62d3774a9c4cfd198ec3abaa88294aaade2e31c04d5ab02bcf4abc98b1df5	libplacebo-7.387.0.tar.gz
 glad	73db193f853e2ee079bf3ca8a64aa2eaf6459043	MIT (generator; generated loader: MIT / Apache-2.0)	https://github.com/Dav1dde/glad/archive/73db193f853e2ee079bf3ca8a64aa2eaf6459043.tar.gz	33dbeae44d8315ece57e14eba4b1b4a02ac5406d1c4f49cd20048c91522a6b9a	glad-73db193.tar.gz
 jinja	15206881c006c79667fe5154fe80c01c65410679	BSD-3-Clause (build-time only)	https://github.com/pallets/jinja/archive/15206881c006c79667fe5154fe80c01c65410679.tar.gz	b88a20dcc2e34072fcf4159325bc6c34cd4b29a81a8b83d15d2f28ba561da296	jinja-1520688.tar.gz

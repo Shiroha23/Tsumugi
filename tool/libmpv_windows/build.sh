@@ -107,7 +107,7 @@ meson_static libass -Dfontconfig=disabled -Ddirectwrite=enabled -Dcoretext=disab
 meson_static dav1d -Denable_tools=false -Denable_examples=false -Denable_tests=false -Denable_docs=false \
   -Dbitdepths="['8','16']"
 
-# ---- 4. FFmpeg（LGPL-2.1+：不加 --enable-gpl / --enable-nonfree / --enable-version3） ----
+# ---- 4. FFmpeg（LGPL-3.0+：--enable-version3，不加 --enable-gpl / --enable-nonfree；与 Android / iOS 的构建一致） ----
 # 只保留播放需要的部分：协议只有 http / tcp（所有请求经本地媒体代理，见 lib/shared/video/player_options.dart），
 # 不带 TLS、不带 DASH（apiVersion 1 不支持）、不带 rtmp / rtsp / udp / file 等。
 FF_DECODERS=(
@@ -133,7 +133,7 @@ mkdir -p "$BUILD/ffmpeg"
 FF_CONFIGURE=(
   --prefix="$PREFIX" --arch=x86_64 --target-os=mingw32 --cross-prefix="$TRIPLE-" --enable-cross-compile
   --cc="$TRIPLE-gcc-posix" --cxx="$TRIPLE-g++-posix" --pkg-config=pkg-config --pkg-config-flags=--static
-  --enable-static --disable-shared --disable-programs --disable-doc --disable-debug --disable-autodetect
+  --enable-version3 --enable-static --disable-shared --disable-programs --disable-doc --disable-debug --disable-autodetect
   --disable-everything --disable-avdevice
   --enable-avcodec --enable-avformat --enable-avfilter --enable-swscale --enable-swresample --enable-network
   --enable-w32threads --enable-d3d11va --enable-dxva2 --enable-zlib --enable-libdav1d --enable-runtime-cpudetect
@@ -180,9 +180,9 @@ IMPLIB=$PREFIX/lib/libmpv.dll.a
 
 # 许可证门禁：FFmpeg 必须是 LGPL，且没有 GPL / nonfree 组件。
 strings "$DLL" > "$WORK/strings.txt"
-grep -q 'LGPL version 2.1 or later' "$WORK/strings.txt" || { echo 'FFmpeg license string not LGPL' >&2; exit 1; }
-if grep -E -- '--enable-(gpl|nonfree|version3)' "$WORK/strings.txt"; then
-  echo 'FFmpeg configured with GPL / nonfree / version3' >&2; exit 1
+grep -q 'LGPL version 3 or later' "$WORK/strings.txt" || { echo 'FFmpeg license string not LGPL' >&2; exit 1; }
+if grep -E -- '--enable-(gpl|nonfree)' "$WORK/strings.txt"; then
+  echo 'FFmpeg configured with GPL / nonfree' >&2; exit 1
 fi
 python3 -"$BUILD/mpv/meson-info/intro-buildoptions.json" <<'PY'
 import json, sys
