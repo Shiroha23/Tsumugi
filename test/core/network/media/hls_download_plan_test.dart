@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tsumugi/core/network/media/hls_download_plan.dart';
+import 'package:tsumugi/core/network/media/hls_playlist.dart';
 
 final _base = Uri.parse('https://video.example.com/show/1/master.m3u8?sig=abc');
 

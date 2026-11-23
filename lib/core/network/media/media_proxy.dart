@@ -194,6 +194,7 @@ final class MediaProxySession implements _ProxySession {
   late final String _root;
   bool _closed = false;
   final _subtitleTracks = <HlsSubtitleRendition>[];
+  String? _subtitleGroup;
 
   /// 会话内最多登记的地址数（直播流不断追加分片；约等于 2 s 分片的 11 小时）。
   static const maxEntries = 20000;
@@ -217,9 +218,10 @@ final class MediaProxySession implements _ProxySession {
 
   /// HLS 主播放列表声明的字幕轨（按首次出现的顺序，地址相同的只留一条，最多 [maxSubtitleTracks] 条）。
   /// 改写时从交给播放器的主播放列表中去掉，由应用经本会话自己取（architecture §6.4.7）；
-  /// 播放器取过主播放列表之后才有。
+  /// 播放器取过主播放列表之后才有。有多个字幕组时只列播放器会选的变体引用的那一组
+  /// （[hlsPreferredSubtitleGroup]；该组没有轨道时全部列出）。
   List<HlsSubtitleRendition> get subtitleTracks =>
-      List.unmodifiable(_subtitleTracks);
+      _tracksOfGroup(_subtitleTracks, _subtitleGroup);
 
   /// 最多记录的字幕轨数。
   static const maxSubtitleTracks = 64;
@@ -941,12 +943,26 @@ final class MediaProxySession implements _ProxySession {
           map: (uri, k, [aes]) => _register(uri, kindOf(k), aes, ext),
           onSubtitleRendition: playlist.kind == _Kind.subtitlePlaylist
               ? null
-              : (r) => _addSubtitleTrack(_subtitleTracks, r),
+              : (r) {
+                  _subtitleGroup ??= hlsPreferredSubtitleGroup(text);
+                  _addSubtitleTrack(_subtitleTracks, r);
+                },
         ),
       );
     } on FormatException {
       return null;
     }
+  }
+
+  static List<HlsSubtitleRendition> _tracksOfGroup(
+    List<HlsSubtitleRendition> tracks,
+    String? group,
+  ) {
+    final inGroup = [
+      for (final t in tracks)
+        if (group != null && t.groupId == group) t,
+    ];
+    return List.unmodifiable(inGroup.isEmpty ? tracks : inGroup);
   }
 
   static void _addSubtitleTrack(
@@ -1182,12 +1198,13 @@ final class LocalMediaSession implements _ProxySession {
   late final String _root;
   bool _closed = false;
   final _subtitleTracks = <HlsSubtitleRendition>[];
+  String? _subtitleGroup;
 
   static final _base = Uri.parse('http://local.invalid/');
 
   /// 本地主播放列表中的字幕轨（见 [MediaProxySession.subtitleTracks]），打开时即已确定。
   List<HlsSubtitleRendition> get subtitleTracks =>
-      List.unmodifiable(_subtitleTracks);
+      MediaProxySession._tracksOfGroup(_subtitleTracks, _subtitleGroup);
 
   /// 交给播放器的地址。
   Uri get url => Uri.parse(_root);
@@ -1254,8 +1271,10 @@ final class LocalMediaSession implements _ProxySession {
             if (isPlaylist == registeredAsFile) return _urlOf('');
             return _urlOf(name);
           },
-          onSubtitleRendition: (r) =>
-              MediaProxySession._addSubtitleTrack(_subtitleTracks, r),
+          onSubtitleRendition: (r) {
+            _subtitleGroup ??= hlsPreferredSubtitleGroup(text);
+            MediaProxySession._addSubtitleTrack(_subtitleTracks, r);
+          },
         ),
       );
     } on FormatException {

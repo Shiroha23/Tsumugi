@@ -132,6 +132,55 @@ d.ts
     ]);
   });
 
+  group('parseHlsAttributes', () {
+    test('引号内的逗号与等号；同名取第一个；畸形部分忽略', () {
+      expect(
+        parseHlsAttributes(
+          'TYPE=SUBTITLES, NAME="a,b=c",bad,lower=1,TYPE=AUDIO,URI="u"',
+        ),
+        {'TYPE': 'SUBTITLES', 'NAME': 'a,b=c', 'URI': 'u'},
+      );
+      // 引号未闭合：其后都不可信。
+      expect(parseHlsAttributes('A=1,NAME="x,URI=y'), {'A': '1'});
+      expect(parseHlsAttributes(''), isEmpty);
+    });
+
+    test('畸形长串上为线性时间（审查意见：正则会超平方）', () {
+      final watch = Stopwatch()..start();
+      final long = 'A' * 2000000;
+      expect(parseHlsAttributes(long), isEmpty);
+      expect(parseHlsAttributes('X=1,$long'), {'X': '1'});
+      expect(parseHlsAttributes('${'A-' * 500000}=1'), hasLength(1));
+      // 一行百万字符的 EXT-X-MEDIA 照常改写。
+      rewriteHlsPlaylist(
+        '#EXTM3U\n#EXT-X-MEDIA:$long\n',
+        base: base,
+        map: map,
+        onSubtitleRendition: (_) {},
+      );
+      expect(watch.elapsed, lessThan(const Duration(seconds: 2)));
+    });
+  });
+
+  test('hlsPreferredSubtitleGroup：BANDWIDTH 最高的变体引用的组（相同时取先出现的）', () {
+    expect(
+      hlsPreferredSubtitleGroup(
+        '#EXTM3U\n'
+        '#EXT-X-STREAM-INF:BANDWIDTH=100,SUBTITLES="low"\nlow.m3u8\n'
+        '#EXT-X-STREAM-INF:BANDWIDTH=900,SUBTITLES="high"\nhigh.m3u8\n'
+        '#EXT-X-STREAM-INF:BANDWIDTH=900,SUBTITLES="later"\nlater.m3u8\n',
+      ),
+      'high',
+    );
+    expect(
+      hlsPreferredSubtitleGroup(
+        '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nv.m3u8\n',
+      ),
+      isNull,
+    );
+    expect(hlsPreferredSubtitleGroup('#EXTM3U\n#EXTINF:1,\na.ts\n'), isNull);
+  });
+
   group('onSubtitleRendition（#84：字幕轨不交给播放器）', () {
     test('字幕轨整行不输出，地址照常登记并连同名称 / 语言报告；其他 EXT-X-MEDIA 不变', () {
       final found = <HlsSubtitleRendition>[];
@@ -319,6 +368,27 @@ a.ts
       rewriteHlsPlaylist('﻿\n#EXTM3U\n', base: base, map: map),
       '#EXTM3U\n',
     );
+  });
+
+  test('looksLikeWebVtt：WEBVTT 之后必须是空白或结尾', () {
+    final nl = String.fromCharCode(10);
+    final cr = String.fromCharCode(13);
+    final tab = String.fromCharCode(9);
+    const bom = [0xEF, 0xBB, 0xBF];
+    for (final ok in [
+      'WEBVTT',
+      'WEBVTT$nl$nl',
+      'WEBVTT - x$nl',
+      'WEBVTT$tab',
+      'WEBVTT$cr$nl',
+    ]) {
+      expect(looksLikeWebVtt(utf8.encode(ok)), isTrue, reason: ok);
+    }
+    expect(looksLikeWebVtt([...bom, ...utf8.encode('WEBVTT$nl')]), isTrue);
+    expect(looksLikeWebVtt([...bom, ...utf8.encode('WEBVTT')]), isTrue);
+    for (final bad in ['WEBVTTbroken', 'WEBVTT-x', ' WEBVTT', 'WEBVT', '']) {
+      expect(looksLikeWebVtt(utf8.encode(bad)), isFalse, reason: bad);
+    }
   });
 
   test('looksLikeHlsPlaylist', () {

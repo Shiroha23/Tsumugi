@@ -292,7 +292,9 @@ void main() {
     });
     tearDownAll(() => http.close(force: true));
 
-    /// 主播放列表指向 [subs]（相对于 video.example.com），返回该字幕轨的代理地址。
+    late MediaProxySession session;
+
+    /// 主播放列表指向 [subs]（相对于 video.example.com），返回该字幕轨的代理地址（会话记在 [session]）。
     Future<Uri> track(String subs) async {
       up.text(
         '/master.m3u8',
@@ -300,7 +302,7 @@ void main() {
             '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="s",NAME="x",URI="$subs"\n'
             '#EXT-X-STREAM-INF:BANDWIDTH=1,SUBTITLES="s"\nv.m3u8\n',
       );
-      final session = proxy.open(
+      session = proxy.open(
         client: client,
         url: Uri.parse('http://video.example.com/master.m3u8'),
       );
@@ -393,7 +395,8 @@ void main() {
         maxTotalBytes: one * 2,
       );
       expect(doc.cues.map((c) => c.text), ['c0', 'c1']);
-      expect(up.requests.where((p) => p.endsWith('.vtt')), hasLength(3));
+      // 预算恰好用完：不再请求第 3 个分片。
+      expect(up.requests.where((p) => p.endsWith('.vtt')), hasLength(2));
     });
 
     test('单个请求超时：该分片跳过', () async {
@@ -415,6 +418,92 @@ void main() {
       );
       expect(doc.cues.map((c) => c.text), ['ok']);
       expect(watch.elapsed, lessThan(const Duration(seconds: 2)));
+    });
+
+    test('响应头已到之后超时：断开连接（代理随之取消上游），不在后台继续读', () async {
+      up
+        ..text('/s.m3u8', '#EXTM3U\n#EXTINF:1,\nslow.vtt\n#EXTINF:1,\nok.vtt\n')
+        ..routes['/slow.vtt'] = (req) async {
+          req.response.headers.set('content-type', 'text/vtt');
+          // 足够让代理识别为 WebVTT 并开始转发，之后一直慢慢发。
+          req.response.write('WEBVTT\n\n${'NOTE ${'x' * 2000}\n\n'}');
+          await req.response.flush();
+          try {
+            for (var i = 0; i < 100; i++) {
+              await Future<void>.delayed(const Duration(milliseconds: 100));
+              req.response.write('NOTE y\n\n');
+              await req.response.flush();
+            }
+          } catch (_) {}
+          await req.response.close().catchError((_) {});
+        }
+        ..text('/ok.vtt', _vtt('00:01.000 --> 00:02.000\nok'));
+      final doc = await loadHlsSubtitles(
+        await track('s.m3u8'),
+        presentationStart: Duration.zero,
+        concurrency: 1,
+        requestTimeout: const Duration(milliseconds: 500),
+      );
+      expect(doc.cues.map((c) => c.text), ['ok']);
+      // 字幕层断开后，代理在途的上游请求随之取消。
+      final deadline = DateTime.now().add(const Duration(seconds: 2));
+      while (session.inFlight > 0 && DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(session.inFlight, 0);
+    });
+
+    test('合计预算按读到的字节计：失败分片已读的部分也算，耗尽后不再请求', () async {
+      final playlist = StringBuffer('#EXTM3U\n');
+      for (var i = 0; i < 10; i++) {
+        playlist.write('#EXTINF:1,\nbig$i.vtt\n');
+        // 没有 Content-Length、超过单片上限：读到上限才失败。
+        up.routes['/big$i.vtt'] = (req) async {
+          req.response.headers.set('content-type', 'text/vtt');
+          req.response.write('WEBVTT\n\n${'x' * 2000}');
+          await req.response.flush(); // 分块传输：没有 Content-Length
+          req.response.write('x' * 4000);
+          await req.response.close();
+        };
+      }
+      up.text('/s.m3u8', '$playlist');
+      await expectLater(
+        loadHlsSubtitles(
+          await track('s.m3u8'),
+          presentationStart: Duration.zero,
+          concurrency: 1,
+          maxSegmentBytes: 4096,
+          maxTotalBytes: 10000,
+        ),
+        throwsA(isA<SubtitleFormatException>()),
+      );
+      // 每个失败分片约读 2 KB 即超过单片上限；10000 字节的预算约 5 个分片后耗尽（不会把 10 个都请求一遍）。
+      expect(
+        up.requests.where((p) => p.startsWith('/big')).length,
+        lessThanOrEqualTo(6),
+      );
+    });
+
+    test('错误中的地址不含会话令牌', () async {
+      up.text('/s.m3u8', '#EXTM3U\n#EXTINF:1,\nmissing.vtt\n');
+      final url = await track('s.m3u8');
+      final token = url.pathSegments.first;
+      Object? error;
+      final logs = <String>[];
+      try {
+        await loadHlsSubtitles(
+          url,
+          presentationStart: Duration.zero,
+          log: logs.add,
+        );
+      } catch (e) {
+        error = e;
+      }
+      expect(error, isA<NetworkException>());
+      expect('$error', isNot(contains(token)));
+      expect((error! as NetworkException).uri!.pathSegments.first, '-');
+      expect(logs, isNotEmpty);
+      expect(logs.join('\n'), isNot(contains(token)));
     });
 
     test('取消：中止进行中的请求并抛 cancelled', () async {

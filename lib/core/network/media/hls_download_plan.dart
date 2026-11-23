@@ -301,21 +301,6 @@ String strippedHlsUrl(Uri uri) => Uri(
   path: uri.path,
 ).toString();
 
-/// RFC 8216 §4.2 的属性列表：`NAME=value`（值可为带引号的字符串），以逗号分隔。
-/// 无法解析的部分忽略；带引号的值去掉引号。
-Map<String, String> parseHlsAttributes(String list) {
-  final out = <String, String>{};
-  final re = RegExp(r'([A-Z0-9-]+)=("[^"]*"|[^,]*)');
-  for (final m in re.allMatches(list)) {
-    final v = m[2]!;
-    out.putIfAbsent(
-      m[1]!,
-      () => v.startsWith('"') ? v.substring(1, v.length - 1) : v.trim(),
-    );
-  }
-  return out;
-}
-
 List<String> _lines(String text) => [
   for (final l in text.split(RegExp(r'\r\n|\r|\n')))
     if (l.trim().isNotEmpty) l.trim(),

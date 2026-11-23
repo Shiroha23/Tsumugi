@@ -1181,6 +1181,26 @@ void main() {
       );
     });
 
+    test('多个字幕组：只列播放器会选的变体（BANDWIDTH 最高）引用的那一组', () async {
+      up.bytes(
+        '/groups.m3u8',
+        utf8.encode(
+          '#EXTM3U\n'
+          '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="lo",NAME="中文",URI="lo/zh.m3u8"\n'
+          '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="hi",NAME="中文",URI="hi/zh.m3u8"\n'
+          '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="hi",NAME="English",URI="hi/en.m3u8"\n'
+          '#EXT-X-STREAM-INF:BANDWIDTH=100,SUBTITLES="lo"\nlo.m3u8\n'
+          '#EXT-X-STREAM-INF:BANDWIDTH=900,SUBTITLES="hi"\nhi.m3u8\n',
+        ),
+      );
+      final session = openCrafted('/groups.m3u8');
+      await player.text(session.url);
+      expect(
+        [for (final t in session.subtitleTracks) (t.groupId, t.name)],
+        [('hi', '中文'), ('hi', 'English')],
+      );
+    });
+
     test('字幕播放列表中的 WebVTT 可以取得，其他文本不行', () async {
       up
         ..bytes(

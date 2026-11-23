@@ -130,8 +130,10 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
   /// 当前流的 `demuxer-start-time`：HLS 字幕轨的时间换算用。
   Duration _presentationStart = Duration.zero;
 
-  /// 当前流已取得的 HLS 字幕轨（按地址）；换流时清空。
+  /// 当前流已取得的 HLS 字幕轨（按地址，最近用过的在后）；换流时清空，最多 [_maxHlsCache] 条
+  /// （每条轨道最多 8 MB 原文，审查意见：不能让反复切轨把所有轨道都留在内存里）。
   final _hlsCache = <String, SubtitleDocument>{};
+  static const _maxHlsCache = 2;
 
   /// 正在取的 HLS 字幕轨地址；换流、改选其他字幕时取消（[_hlsCancel]）。
   String? _hlsLoading;
@@ -700,7 +702,8 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
         }
       case SubtitleChoiceEmbedded(:final label):
         if (hls != null) {
-          if (_hlsCache[hls.url] case final document?) {
+          if (_hlsCache.remove(hls.url) case final document?) {
+            _hlsCache[hls.url] = document; // 移到最近用过
             _subtitles.showDocument(document);
           } else if (_hlsLoading != hls.url) {
             _subtitles.hide();
@@ -823,6 +826,9 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
       if (!current()) return;
       _hlsLoading = null;
       _hlsCache[track.url] = document;
+      while (_hlsCache.length > _maxHlsCache) {
+        _hlsCache.remove(_hlsCache.keys.first);
+      }
       if (!chosen()) return;
       _subtitles.showDocument(document);
       if (_subRememberPending == SubtitleChoiceEmbedded(label)) {

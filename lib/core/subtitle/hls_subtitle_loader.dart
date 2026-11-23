@@ -127,8 +127,9 @@ Duration hlsCueTime(
 /// [playlist] 为会话登记的字幕播放列表代理地址（必须是回环地址）。分片从 [position] 所在的那个开始向后取，
 /// 再取前面的；最多 [concurrency] 个同时请求。每取完一批（间隔不少于 [progressInterval]）调用一次 [onProgress]。
 ///
-/// 限制：字幕播放列表 [maxHlsSubtitlePlaylistBytes]；分片 [maxSegmentBytes]（超过时跳过该分片）、合计
-/// [maxTotalBytes] 与 [maxSubtitleCues] 条（达到时停止再取）；每个请求 [requestTimeout]。
+/// 限制：字幕播放列表 [maxHlsSubtitlePlaylistBytes]；分片 [maxSegmentBytes]（超过时跳过该分片）；合计
+/// [maxTotalBytes]（按实际读到的字节计，含失败分片已读的部分与并发中的读取）与 [maxSubtitleCues] 条
+/// （达到时停止再取）；每个请求 [requestTimeout]（超时即断开连接）。错误与日志中的地址不含会话令牌。
 /// 字幕播放列表取不到或无效时抛 [NetworkException] / [SubtitleFormatException]；单个分片失败时跳过，
 /// 全部失败时抛第一个错误。[cancellation] 取消时中止全部请求并抛 [NetworkErrorKind.cancelled]。
 Future<SubtitleDocument> loadHlsSubtitles(
@@ -158,7 +159,7 @@ Future<SubtitleDocument> loadHlsSubtitles(
     client.close(force: true);
   });
   NetworkException cancelledError() =>
-      NetworkException(NetworkErrorKind.cancelled, uri: playlist);
+      NetworkException(NetworkErrorKind.cancelled, uri: _redact(playlist));
   try {
     final (playlistBytes, _) = await _get(
       client,
@@ -178,7 +179,7 @@ Future<SubtitleDocument> loadHlsSubtitles(
     final order = hlsSubtitleFetchOrder(segments, position);
 
     final cues = <SubtitleCue>{};
-    var totalBytes = 0;
+    final budget = _Budget(maxTotalBytes);
     var next = 0;
     var succeeded = 0;
     var stopped = false;
@@ -204,6 +205,11 @@ Future<SubtitleDocument> loadHlsSubtitles(
 
     Future<void> worker() async {
       while (!stopped && !cancelled && next < order.length) {
+        if (budget.exhausted) {
+          log?.call('HLS subtitles: total size limit reached');
+          stopped = true;
+          return;
+        }
         final segment = segments[order[next++]];
         if (!_sameSession(segment.url, playlist)) {
           // 代理给不出地址的分片（白名单外、数量超限等）：改写后的地址不在本会话，跳过。
@@ -216,14 +222,9 @@ Future<SubtitleDocument> loadHlsSubtitles(
             segment.url,
             maxSegmentBytes,
             requestTimeout,
+            budget: budget,
           );
           if (cancelled || stopped) return;
-          if (totalBytes + bytes.length > maxTotalBytes) {
-            log?.call('HLS subtitles: total size limit reached');
-            stopped = true;
-            return;
-          }
-          totalBytes += bytes.length;
           final parsed = await _parseSegment(bytes, contentType);
           if (cancelled || stopped) return;
           succeeded++;
@@ -247,6 +248,11 @@ Future<SubtitleDocument> loadHlsSubtitles(
             lastEmit = now;
             onProgress(build());
           }
+        } on _BudgetExhausted {
+          log?.call('HLS subtitles: total size limit reached');
+          stopped = true;
+          firstError ??= SubtitleFormatException(_trackTooLarge(maxTotalBytes));
+          return;
         } on Object catch (e, st) {
           if (cancelled) return;
           log?.call('HLS subtitle segment failed: $e');
@@ -310,67 +316,119 @@ bool _sameSession(Uri url, Uri playlist) =>
     url.pathSegments.length == 3 &&
     url.pathSegments.first == playlist.pathSegments.first;
 
+/// 一条字幕轨共用的字节预算：按读到的每一块扣减。
+class _Budget {
+  _Budget(this.remaining);
+
+  int remaining;
+
+  bool get exhausted => remaining <= 0;
+}
+
+class _BudgetExhausted implements Exception {}
+
+/// 去掉代理地址中的会话令牌（错误与日志用）：`/<令牌>/<编号>/<文件名>` → `/-/<编号>/<文件名>`。
+Uri _redact(Uri url) => url.pathSegments.length == 3
+    ? url.replace(pathSegments: ['-', ...url.pathSegments.skip(1)])
+    : url.replace(path: '/-');
+
 /// GET [url]（不跟随重定向）：非 200 抛 [NetworkErrorKind.http]；超过 [maxBytes]（`Content-Length` 或实际读取）
-/// 抛 [SubtitleFormatException]；整个请求超过 [timeout] 抛 [NetworkErrorKind.timeout]。
+/// 抛 [SubtitleFormatException]；[budget] 不够时抛 [_BudgetExhausted]；整个请求超过 [timeout] 抛
+/// [NetworkErrorKind.timeout]。任何一种失败都立即取消响应体的读取（dart:io 随之关闭该连接），不在后台继续读。
 Future<(Uint8List, String?)> _get(
   HttpClient client,
   Uri url,
   int maxBytes,
-  Duration timeout,
-) async {
+  Duration timeout, {
+  _Budget? budget,
+}) async {
+  final shown = _redact(url);
+  final result = Completer<(Uint8List, String?)>();
   HttpClientRequest? request;
-  HttpClientResponse? response;
-  Future<(Uint8List, String?)> run() async {
-    request = await client.getUrl(url);
-    request!.followRedirects = false;
-    response = await request!.close();
-    final res = response!;
-    if (res.statusCode != HttpStatus.ok) {
-      res.listen(null).cancel().ignore();
-      throw NetworkException(
-        NetworkErrorKind.http,
-        message: 'HTTP ${res.statusCode}',
-        uri: url,
-        status: res.statusCode,
-      );
-    }
-    if (res.contentLength > maxBytes) {
-      res.listen(null).cancel().ignore();
-      throw SubtitleFormatException(_tooLarge(maxBytes));
-    }
-    final out = BytesBuilder(copy: false);
-    await for (final chunk in res) {
-      if (out.length + chunk.length > maxBytes) {
-        throw SubtitleFormatException(_tooLarge(maxBytes));
-      }
-      out.add(chunk);
-    }
-    return (out.takeBytes(), res.headers.value(HttpHeaders.contentTypeHeader));
+  StreamSubscription<List<int>>? body;
+  void finish(Object error) {
+    if (result.isCompleted) return;
+    result.completeError(error);
+    body?.cancel().ignore();
+    request?.abort();
   }
 
+  NetworkException connectionError(Object e) => NetworkException(
+    NetworkErrorKind.connection,
+    message: e is SocketException ? 'socket error' : e.runtimeType.toString(),
+    uri: shown,
+  );
+
+  final timer = Timer(
+    timeout,
+    () => finish(
+      NetworkException(
+        NetworkErrorKind.timeout,
+        message: 'not loaded within ${timeout.inSeconds} s',
+        uri: shown,
+      ),
+    ),
+  );
+  () async {
+    try {
+      final req = request = await client.getUrl(url);
+      if (result.isCompleted) return req.abort();
+      req.followRedirects = false;
+      final res = await req.close();
+      if (result.isCompleted) {
+        res.listen(null).cancel().ignore();
+        return;
+      }
+      if (res.statusCode != HttpStatus.ok) {
+        res.listen(null).cancel().ignore();
+        return finish(
+          NetworkException(
+            NetworkErrorKind.http,
+            message: 'HTTP ${res.statusCode}',
+            uri: shown,
+            status: res.statusCode,
+          ),
+        );
+      }
+      if (res.contentLength > maxBytes) {
+        res.listen(null).cancel().ignore();
+        return finish(SubtitleFormatException(_tooLarge(maxBytes)));
+      }
+      final type = res.headers.value(HttpHeaders.contentTypeHeader);
+      final out = BytesBuilder(copy: false);
+      body = res.listen(
+        (chunk) {
+          if (result.isCompleted) return;
+          if (out.length + chunk.length > maxBytes) {
+            return finish(SubtitleFormatException(_tooLarge(maxBytes)));
+          }
+          if (budget != null) {
+            if (chunk.length > budget.remaining) {
+              budget.remaining = 0;
+              return finish(_BudgetExhausted());
+            }
+            budget.remaining -= chunk.length;
+          }
+          out.add(chunk);
+        },
+        onError: (Object e) => finish(connectionError(e)),
+        onDone: () {
+          if (!result.isCompleted) result.complete((out.takeBytes(), type));
+        },
+        cancelOnError: true,
+      );
+    } on Object catch (e) {
+      finish(connectionError(e));
+    }
+  }();
   try {
-    return await run().timeout(timeout);
-  } on TimeoutException {
-    request?.abort();
-    throw NetworkException(
-      NetworkErrorKind.timeout,
-      message: 'not loaded within ${timeout.inSeconds} s',
-      uri: url,
-    );
-  } on SocketException catch (e) {
-    throw NetworkException(
-      NetworkErrorKind.connection,
-      message: '$e',
-      uri: url,
-    );
-  } on HttpException catch (e) {
-    throw NetworkException(
-      NetworkErrorKind.connection,
-      message: '$e',
-      uri: url,
-    );
+    return await result.future;
+  } finally {
+    timer.cancel();
   }
 }
+
+String _trackTooLarge(int maxBytes) => '字幕轨超过 ${maxBytes ~/ (1024 * 1024)} MB';
 
 String _tooLarge(int maxBytes) => maxBytes >= 1024 * 1024
     ? '字幕分片超过 ${maxBytes ~/ (1024 * 1024)} MB'

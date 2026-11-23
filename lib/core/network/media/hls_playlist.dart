@@ -53,7 +53,12 @@ bool _sameBytes(List<int> a, List<int> b) {
 
 /// 主播放列表中的一条字幕轨（`EXT-X-MEDIA:TYPE=SUBTITLES`），见 [rewriteHlsPlaylist] 的 `onSubtitleRendition`。
 class HlsSubtitleRendition {
-  const HlsSubtitleRendition({required this.url, this.name, this.language});
+  const HlsSubtitleRendition({
+    required this.url,
+    this.name,
+    this.language,
+    this.groupId,
+  });
 
   /// 字幕子播放列表经 `map` 换成的地址（代理地址）。
   final String url;
@@ -62,6 +67,9 @@ class HlsSubtitleRendition {
   final String? name;
   final String? language;
 
+  /// `GROUP-ID`（原样，仅用于与变体的 `SUBTITLES` 属性比较）。
+  final String? groupId;
+
   static const maxLabelLength = 64;
 
   @override
@@ -69,13 +77,32 @@ class HlsSubtitleRendition {
       other is HlsSubtitleRendition &&
       other.url == url &&
       other.name == name &&
-      other.language == language;
+      other.language == language &&
+      other.groupId == groupId;
 
   @override
-  int get hashCode => Object.hash(url, name, language);
+  int get hashCode => Object.hash(url, name, language, groupId);
 
   @override
   String toString() => 'HlsSubtitleRendition($url, $name, $language)';
+}
+
+/// 主播放列表中播放器会选的变体（`BANDWIDTH` 最高的，相同时取先出现的；mpv 默认 `hls-bitrate=max`）
+/// 引用的字幕组（`SUBTITLES` 属性）；没有变体或该变体不引用字幕组时为 null。
+String? hlsPreferredSubtitleGroup(String master) {
+  String? group;
+  var best = -1;
+  for (final raw in const LineSplitter().convert(master)) {
+    final line = raw.trim();
+    if (!line.startsWith('#EXT-X-STREAM-INF:')) continue;
+    final a = parseHlsAttributes(line.substring('#EXT-X-STREAM-INF:'.length));
+    final bandwidth = int.tryParse(a['BANDWIDTH'] ?? '') ?? 0;
+    if (bandwidth > best) {
+      best = bandwidth;
+      group = a['SUBTITLES'];
+    }
+  }
+  return group;
 }
 
 /// 把 [uri]（无法解析或不受支持时为 null）换成播放器应当请求的地址。
@@ -89,9 +116,14 @@ typedef HlsUriMapper = String Function(
 /// 字节是否以 HLS 播放列表开头（可带 UTF-8 BOM 与前导空白）。
 bool looksLikeHlsPlaylist(List<int> head) => _startsWithText(head, '#EXTM3U');
 
-/// 字节是否以 WebVTT 文件头开头（可带 UTF-8 BOM）。
-bool looksLikeWebVtt(List<int> head) =>
-    _startsWithText(head, 'WEBVTT', skipSpace: false);
+/// 字节是否以 WebVTT 文件头开头（可带 UTF-8 BOM）：`WEBVTT` 之后必须是空格、制表符、换行或结尾
+/// （与解析器的格式识别一致，`WEBVTTX` 不算）。
+bool looksLikeWebVtt(List<int> head) {
+  if (!_startsWithText(head, 'WEBVTT', skipSpace: false)) return false;
+  final bom = head.length >= 3 && head[0] == 0xEF && head[1] == 0xBB;
+  final next = (bom ? 3 : 0) + 6;
+  return head.length <= next || _isSpace(head[next]);
+}
 
 bool _startsWithText(List<int> head, String tag, {bool skipSpace = true}) {
   var i = 0;
@@ -229,15 +261,16 @@ String rewriteHlsPlaylist(
     }
     final subtitleMedia =
         tag == '#EXT-X-MEDIA' &&
-        _attributes(line.substring(colon + 1))['TYPE'] == 'SUBTITLES';
+        parseHlsAttributes(line.substring(colon + 1))['TYPE'] == 'SUBTITLES';
     if (subtitleMedia && onSubtitleRendition != null) {
-      final a = _attributes(line.substring(colon + 1));
+      final a = parseHlsAttributes(line.substring(colon + 1));
       if (a['URI'] case final uriValue?) {
         onSubtitleRendition(
           HlsSubtitleRendition(
             url: map(_resolve(base, uriValue), HlsUriKind.subtitlePlaylist),
             name: _label(a['NAME']),
             language: _label(a['LANGUAGE']),
+            groupId: a['GROUP-ID'],
           ),
         );
       }
@@ -284,20 +317,48 @@ String? _attribute(String line, String name) {
   return v.startsWith('"') ? v.substring(1, v.length - 1) : v;
 }
 
-/// 属性列表（`A=1,B="x,y"`）：从左到右逐个读取，引号内的逗号与等号不会被当成新的属性；同名时取第一个。
-Map<String, String> _attributes(String list) {
+/// RFC 8216 §4.2 的属性列表：`NAME=value`（值可为带引号的字符串），以逗号分隔；带引号的值去掉引号，
+/// 引号内的逗号与等号不会被当成新的属性；同名时取第一个。名称不是 `[A-Z0-9-]+` 的、没有 `=` 的、
+/// 引号未闭合的属性忽略。逐字符扫描一遍（线性时间：播放列表来自外部，正则在畸形长串上可能耗时超平方）。
+Map<String, String> parseHlsAttributes(String list) {
   final out = <String, String>{};
-  for (final m in _attributeRe.allMatches(list)) {
-    final v = m[2]!;
-    out.putIfAbsent(
-      m[1]!,
-      () => v.startsWith('"') ? v.substring(1, v.length - 1) : v.trim(),
-    );
+  final n = list.length;
+  var i = 0;
+  while (i < n) {
+    final keyStart = i;
+    while (i < n && list.codeUnitAt(i) != _eq && list.codeUnitAt(i) != _comma) {
+      i++;
+    }
+    if (i >= n || list.codeUnitAt(i) == _comma) {
+      i++; // 没有 `=`：跳过这一段
+      continue;
+    }
+    final key = list.substring(keyStart, i).trim();
+    i++; // `=`
+    String? value;
+    if (i < n && list.codeUnitAt(i) == _quote) {
+      final close = list.indexOf('"', i + 1);
+      if (close < 0) break; // 引号未闭合：其后都不可信
+      value = list.substring(i + 1, close);
+      i = close + 1;
+      while (i < n && list.codeUnitAt(i) != _comma) {
+        i++;
+      }
+    } else {
+      final valueStart = i;
+      while (i < n && list.codeUnitAt(i) != _comma) {
+        i++;
+      }
+      value = list.substring(valueStart, i).trim();
+    }
+    i++; // `,`
+    if (_attributeName.hasMatch(key)) out.putIfAbsent(key, () => value!);
   }
   return out;
 }
 
-final _attributeRe = RegExp(r'([A-Z0-9-]+)=("[^"]*"|[^,]*)');
+const _eq = 0x3D, _comma = 0x2C, _quote = 0x22;
+final _attributeName = RegExp(r'^[A-Z0-9-]+$');
 
 /// 控制字符（C0 / C1 / DEL）与方向控制符（LRM / RLM、嵌入 / 覆盖 / 隔离）。
 bool _isLabelNoise(int c) =>
