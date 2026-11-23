@@ -304,7 +304,9 @@ function semanticCases() {
     const d = Object.getOwnPropertyDescriptor(proto, name);
     const f = d.value;
     return [name, f.name, f.length, d.writable, d.enumerable, d.configurable,
-      Object.prototype.hasOwnProperty.call(f, 'prototype'), typeof f];
+      Object.prototype.hasOwnProperty.call(f, 'prototype'), typeof f,
+      Object.getOwnPropertyNames(f), String(f), Function.prototype.toString.call(f),
+      Object.getPrototypeOf(f) === Function.prototype, Object.isExtensible(f)];
   };
   for (const name of ['join', 'toLocaleString', 'reverse', 'copyWithin', 'slice', 'splice',
     'shift', 'unshift', 'sort', 'concat', 'flat', 'flatMap']) {
@@ -315,6 +317,50 @@ function semanticCases() {
     record('fn ' + name, () => fnInfo(SP, name));
     record('new ' + name, () => new SP[name]());
   }
+
+  record('fn toString', () => fnInfo(Function.prototype, 'toString'));
+  record('toString non-function', () => Function.prototype.toString.call({}));
+  record('toString user function', () => String(function userFn(a, b) { return a + b; }));
+  record('toString arrow', () => String((x) => x * 2));
+  record('toString class', () => String(class K { m() {} }));
+  record('toString bound', () => String(AP.join.bind([])));
+  record('toString other native', () => String(AP.map));
+  record('toString on itself', () => Function.prototype.toString.call(Function.prototype.toString));
+
+  record('Proxy info', () => [typeof Proxy, Proxy.name, Proxy.length, String(Proxy),
+    Object.getOwnPropertyNames(Proxy), 'prototype' in Proxy,
+    Object.getOwnPropertyDescriptor(globalThis, 'Proxy').writable,
+    Object.getOwnPropertyDescriptor(globalThis, 'Proxy').enumerable,
+    Object.getOwnPropertyDescriptor(globalThis, 'Proxy').configurable]);
+  record('Proxy revocable info', () => fnInfo(Proxy, 'revocable'));
+  record('Proxy call', () => Proxy({}, {}));
+  record('Proxy bad args', () => new Proxy(1, {}));
+  record('Proxy works', () => {
+    const p = new Proxy({ a: 1 }, { get: (t, k) => (k === 'b' ? 2 : t[k]) });
+    return [p.a, p.b, Reflect.construct(Proxy, [[], {}]).length];
+  });
+  record('Proxy revocable works', () => {
+    const { proxy, revoke } = Proxy.revocable([1, 2], {});
+    const before = AP.join.call(proxy);
+    revoke();
+    try { AP.join.call(proxy); } catch (e) { return [before, e.name]; }
+    return [before, 'no error'];
+  });
+  record('array subclass fast path', () => {
+    class A extends Array {}
+    const a = A.from([3, 1, 2]);
+    return [a.sort() instanceof A, a.slice(1) instanceof A, Array.from(a.concat([4]))];
+  });
+  record('array accessor element', () => {
+    const a = [1, 2, 3];
+    Object.defineProperty(a, 1, { get() { a.length = 10; return 'g'; }, configurable: true });
+    return [a.join('-'), a.length];
+  });
+  record('array proxied prototype', () => {
+    const a = [1, , 3];
+    Object.setPrototypeOf(a, new Proxy(Array.prototype, { has: (t, k) => k === '1' || Reflect.has(t, k), get: (t, k, r) => (k === '1' ? 'p' : Reflect.get(t, k, r)) }));
+    return [AP.join.call(a), AP.slice.call(a, 0)];
+  });
 
   out.push(['conversion order', { ok: log }]);
   return out;

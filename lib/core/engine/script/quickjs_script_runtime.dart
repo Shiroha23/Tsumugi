@@ -247,10 +247,7 @@ class QuickJsScriptRuntime implements ScriptRuntime {
     _rt.onUncaughtError = (_) {};
     _rt.onUnhandledRejection = (_, _, _) {};
     // 受信任代码，在 prelude 与脚本之前执行；失败属于编程错误，直接抛出。
-    _rt.evaluateJavascript(
-      hardening.script,
-      sourceUrl: 'tsumugi-hardening.js',
-    );
+    _rt.evaluateJavascript(hardening.script, sourceUrl: 'tsumugi-hardening.js');
     _installHost(_host);
   }
 

@@ -5,32 +5,47 @@
 /// 替换这些内建函数：
 ///
 /// - 按 `length` 逐项处理的数组方法（`join`、`toLocaleString`、`reverse`、`copyWithin`、`slice`、
-///   `splice`、`shift`、`unshift`、`sort`、`concat`、`flat`、`flatMap`）：改为按规范逐步执行的 JS 实现，
-///   `length` 只读一次，每一步都经过中断检查点。行为与标准一致。
+///   `splice`、`shift`、`unshift`、`sort`、`concat`、`flat`、`flatMap`）：不是代理的真数组且长度不超过
+///   [SandboxHardening.maxNativeArrayLength] 时直接调用原生实现；否则走按规范逐步执行的 JS 实现
+///   （`length` 只读一次，每一步都经过中断检查点）。`flat` / `flatMap` 一律走 JS 实现。行为与标准一致。
+///   为了不触发陷阱就能识别代理，`Proxy` 与 `Proxy.revocable` 被包装为登记所创建代理的版本。
 /// - 字符串子串查找（`indexOf` / `lastIndexOf` / `includes` / `split` / `replace` / `replaceAll`
 ///   的字符串参数路径）：工作量（两串长度之积）不超过 [SandboxHardening.maxSearchWork] 时
 ///   直接调用原生实现，否则改用按块比较的 JS 实现，结果与原生一致。
 ///
 /// 替换后的函数只引用加固代码自己保存的原生函数，脚本事后篡改原型不影响它们；
-/// 不新增任何全局对象或宿主 API。
+/// 不新增任何全局对象或宿主 API。`name`、`length`、属性描述符、不可 `new`、
+/// `Function.prototype.toString` 的结果都与原生函数相同；差异只在错误消息文本与错误的 `stack`
+/// （其中会出现 `tsumugi-hardening.js` 的帧），见 docs/architecture.md §6.1。
 library;
 
 /// 加固参数。
 class SandboxHardening {
-  const SandboxHardening({this.maxSearchWork = 1 << 24});
+  const SandboxHardening({
+    this.maxSearchWork = 1 << 24,
+    this.maxNativeArrayLength = 1 << 15,
+  });
+
+  /// 数组方法直接走原生实现的最大 `length`（只对不是代理的真数组生效）。
+  ///
+  /// 真数组的 `length` 是普通数据属性，读取不执行脚本代码，所以检查时与原生实现读到的是同一个值；
+  /// 原生循环的次数因此不超过此值。超过此值或不满足条件时走逐步执行的 JS 实现。
+  final int maxNativeArrayLength;
 
   /// 字符串查找直接走原生实现的最大工作量（被查找串剩余长度 × 模式串长度）。
   final int maxSearchWork;
 
   /// 返回在脚本之前执行的受信任 JS（一段脚本，执行结果为 `undefined`）。
-  String get script =>
-      _script.replaceAll('__MAX_SEARCH_WORK__', '$maxSearchWork');
+  String get script => _script
+      .replaceAll('__MAX_SEARCH_WORK__', '$maxSearchWork')
+      .replaceAll('__MAX_NATIVE_LENGTH__', '$maxNativeArrayLength');
 }
 
 const _script = r'''
 (() => {
   'use strict';
   const MAX_WORK = __MAX_SEARCH_WORK__;
+  const MAX_NATIVE_LENGTH = __MAX_NATIVE_LENGTH__;
   const CHUNK = 4096;
 
   const Obj = Object;
@@ -118,7 +133,12 @@ const _script = r'''
   });
   const slice = (s, a, b) => apply(nSlice, s, [a, b]);
 
+  // 被替换的函数 → 原生函数的 toString 文本（Function.prototype.toString 也在下面替换）。
+  const nativeText = new WeakMap();
+  const textGet = WeakMap.prototype.get;
+  const textSet = WeakMap.prototype.set;
   const install = (proto, name, fn, arity) => {
+    apply(textSet, nativeText, [fn, 'function ' + name + '() {\n    [native code]\n}']);
     defineProperty(fn, 'name', { __proto__: null, value: name, configurable: true });
     defineProperty(fn, 'length', { __proto__: null, value: arity, configurable: true });
     defineProperty(proto, name, {
@@ -126,11 +146,65 @@ const _script = r'''
     });
   };
 
+  // --- 代理登记 -----------------------------------------------------------------
+  // 代理的陷阱可以在两次读取之间返回不同的值，且无法在不触发陷阱的情况下识别代理。
+  // 因此在脚本之前包装 Proxy 构造函数与 Proxy.revocable，登记脚本创建的每一个代理。
+  const proxies = new WeakSet();
+  const proxyAdd = WeakSet.prototype.add;
+  const proxyHas = WeakSet.prototype.has;
+  const isProxy = (v) => apply(proxyHas, proxies, [v]);
+  const NativeProxy = Proxy;
+  const nativeRevocable = NativeProxy.revocable;
+  install(NativeProxy, 'revocable', {
+    revocable(target, handler) {
+      const r = apply(nativeRevocable, NativeProxy, [target, handler]);
+      apply(proxyAdd, proxies, [r.proxy]);
+      return r;
+    },
+  }.revocable, 2);
+  const proxyWrapper = new NativeProxy(NativeProxy, {
+    __proto__: null,
+    construct(t, args, newTarget) {
+      const p = construct(t, args, newTarget);
+      apply(proxyAdd, proxies, [p]);
+      return p;
+    },
+  });
+  apply(textSet, nativeText, [proxyWrapper, 'function Proxy() {\n    [native code]\n}']);
+  defineProperty(globalThis, 'Proxy', {
+    __proto__: null, value: proxyWrapper, writable: true, enumerable: false, configurable: true,
+  });
+
   // --- 数组 -------------------------------------------------------------------
   // 按 ECMA-262 §23.1.3 逐步实现：length 只读一次，逐项处理（每步都经过中断检查点）。
   // 只在客户端私有、原型为 null 的稠密数组上调用原生 sort，其长度受内存上限约束。
 
   const MAX_SAFE = 9007199254740991;
+  // 原生实现，在替换之前保存。
+  const N = { __proto__: null };
+  for (const name of ['join', 'toLocaleString', 'reverse', 'copyWithin', 'slice', 'splice',
+    'shift', 'unshift', 'sort', 'concat']) {
+    N[name] = AP[name];
+  }
+  // 可以直接交给原生实现：不是代理的真数组，且长度不超过上限。
+  const fastArray = (v) =>
+    typeof v === 'object' && v !== null && !isProxy(v) && isArray(v) &&
+    v.length <= MAX_NATIVE_LENGTH;
+  const fastConcat = (o, items) => {
+    if (!fastArray(o)) return false;
+    let total = o.length;
+    for (let i = 0; i < items.length; i++) {
+      const e = items[i];
+      if (typeof e === 'object' || typeof e === 'function') {
+        if (!fastArray(e)) return false;
+        total += e.length;
+      } else {
+        total++;
+      }
+      if (total > MAX_NATIVE_LENGTH) return false;
+    }
+    return true;
+  };
   const setPrototypeOf = Obj.setPrototypeOf;
   const nSort = AP.sort;
   const privateArray = () => {
@@ -161,6 +235,7 @@ const _script = r'''
   };
   install(AP, 'join', {
     join(separator) {
+      if (fastArray(this)) return apply(N.join, this, arguments);
       const o = toObject(this);
       const len = lengthOf(o);
       const sep = separator === undefined ? ',' : toStr(separator);
@@ -169,6 +244,7 @@ const _script = r'''
   }.join, 1);
   install(AP, 'toLocaleString', {
     toLocaleString() {
+      if (fastArray(this)) return apply(N.toLocaleString, this, arguments);
       const o = toObject(this);
       return joinItems(o, lengthOf(o), ',', true);
     },
@@ -176,6 +252,7 @@ const _script = r'''
 
   install(AP, 'reverse', {
     reverse() {
+      if (fastArray(this)) return apply(N.reverse, this, arguments);
       const o = toObject(this);
       const len = lengthOf(o);
       const middle = trunc(len / 2);
@@ -202,6 +279,7 @@ const _script = r'''
 
   install(AP, 'copyWithin', {
     copyWithin(target, start, end) {
+      if (fastArray(this)) return apply(N.copyWithin, this, arguments);
       const o = toObject(this);
       const len = lengthOf(o);
       let to = relIndex(target, len);
@@ -229,6 +307,7 @@ const _script = r'''
 
   install(AP, 'slice', {
     slice(start, end) {
+      if (fastArray(this)) return apply(N.slice, this, arguments);
       const o = toObject(this);
       const len = lengthOf(o);
       let k = relIndex(start, len);
@@ -246,6 +325,7 @@ const _script = r'''
 
   install(AP, 'splice', {
     splice(start, deleteCount, ...items) {
+      if (fastArray(this)) return apply(N.splice, this, arguments);
       const o = toObject(this);
       const len = lengthOf(o);
       const actualStart = relIndex(start, len);
@@ -297,6 +377,7 @@ const _script = r'''
 
   install(AP, 'shift', {
     shift() {
+      if (fastArray(this)) return apply(N.shift, this, arguments);
       const o = toObject(this);
       const len = lengthOf(o);
       if (len === 0) {
@@ -319,6 +400,7 @@ const _script = r'''
 
   install(AP, 'unshift', {
     unshift(...items) {
+      if (fastArray(this)) return apply(N.unshift, this, arguments);
       const o = toObject(this);
       const len = lengthOf(o);
       const argCount = items.length;
@@ -342,6 +424,7 @@ const _script = r'''
 
   install(AP, 'sort', {
     sort(comparefn) {
+      if (fastArray(this)) return apply(N.sort, this, arguments);
       if (comparefn !== undefined && typeof comparefn !== 'function') {
         throw new TypeErr('comparefn must be a function');
       }
@@ -367,6 +450,7 @@ const _script = r'''
   };
   install(AP, 'concat', {
     concat(...items) {
+      if (fastConcat(this, items)) return apply(N.concat, this, items);
       const o = toObject(this);
       const a = arraySpeciesCreate(o, 0);
       let n = 0;
@@ -388,19 +472,38 @@ const _script = r'''
     },
   }.concat, 1);
 
-  const arraySpeciesCreate = (o, len) => {
-    if (!isArray(o)) return new Arr(len);
+  // ArraySpeciesCreate 用到的构造函数；默认的 Array 返回 undefined。
+  const speciesOf = (o) => {
+    if (!isArray(o)) return undefined;
     let c = o.constructor;
     if (isObject(c)) {
       c = c[symSpecies];
       if (c === null) c = undefined;
     }
-    if (c === undefined) return new Arr(len);
+    if (c === undefined || c === Arr) return undefined;
     if (!isConstructor(c)) throw new TypeErr('not a constructor');
-    return construct(c, [len]);
+    return c;
+  };
+  const arraySpeciesCreate = (o, len) => {
+    const c = speciesOf(o);
+    return c === undefined ? new Arr(len) : construct(c, [len]);
+  };
+  // 结果是普通数组时，先写进原型为 null 的私有数组（直接赋值不会触发任何 setter，
+  // 与 CreateDataProperty 等价），完成后再设回 Array.prototype。
+  const flatInto = (o, len, depth, mapper, thisArg) => {
+    const c = speciesOf(o);
+    if (c !== undefined) {
+      const a = construct(c, [0]);
+      flatten(a, o, len, 0, depth, mapper, thisArg, false);
+      return a;
+    }
+    const a = privateArray();
+    flatten(a, o, len, 0, depth, mapper, thisArg, true);
+    setPrototypeOf(a, AP);
+    return a;
   };
   // FlattenIntoArray（ECMA-262 §23.1.3.13.1），逐项执行。
-  const flatten = (target, source, sourceLen, start, depth, mapper, thisArg) => {
+  const flatten = (target, source, sourceLen, start, depth, mapper, thisArg, direct) => {
     let targetIndex = start;
     for (let i = 0; i < sourceLen; i++) {
       if (!(i in source)) continue;
@@ -408,10 +511,14 @@ const _script = r'''
       if (mapper !== undefined) element = apply(mapper, thisArg, [element, i, source]);
       if (depth > 0 && isArray(element)) {
         targetIndex = flatten(target, element, toLength(element.length), targetIndex,
-          depth === Infinity ? Infinity : depth - 1);
+          depth === Infinity ? Infinity : depth - 1, undefined, undefined, direct);
       } else {
         if (targetIndex >= MAX_SAFE) throw new TypeErr('array too long');
-        defineProperty(target, targetIndex, dataDesc(element));
+        if (direct) {
+          target[targetIndex] = element;
+        } else {
+          defineProperty(target, targetIndex, dataDesc(element));
+        }
         targetIndex++;
       }
     }
@@ -426,9 +533,7 @@ const _script = r'''
         d = toIntegerOrInfinity(depth);
         if (d < 0) d = 0;
       }
-      const a = arraySpeciesCreate(o, 0);
-      flatten(a, o, len, 0, d);
-      return a;
+      return flatInto(o, len, d);
     },
   }.flat, 0);
   install(AP, 'flatMap', {
@@ -436,9 +541,7 @@ const _script = r'''
       const o = toObject(this);
       const len = toLength(o.length);
       if (typeof mapper !== 'function') throw new TypeErr('not a function');
-      const a = arraySpeciesCreate(o, 0);
-      flatten(a, o, len, 0, 1, mapper, thisArg);
-      return a;
+      return flatInto(o, len, 1, mapper, thisArg);
     },
   }.flatMap, 1);
 
@@ -677,5 +780,15 @@ const _script = r'''
       return result;
     },
   }.replaceAll, replaceAll.length);
+
+  // --- Function.prototype.toString -------------------------------------------
+  // 被替换的函数与原生函数一样显示为 [native code]；其余函数交给原生实现。
+  const fnToString = Function.prototype.toString;
+  install(Function.prototype, 'toString', {
+    toString() {
+      const text = apply(textGet, nativeText, [this]);
+      return text !== undefined ? text : apply(fnToString, this, []);
+    },
+  }.toString, 0);
 })();
 ''';
