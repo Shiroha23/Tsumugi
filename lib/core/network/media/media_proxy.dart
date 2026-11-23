@@ -10,6 +10,7 @@ import 'package:pointycastle/export.dart';
 import '../network_exception.dart';
 import '../pausable_deadline.dart';
 import '../source_http_client.dart';
+import 'aes128.dart';
 import 'connection_watch.dart';
 import 'hls_playlist.dart';
 import 'media_signature.dart';
@@ -76,7 +77,7 @@ class MediaProxy {
 
   final WatchedServerSocket _socket;
   final HttpServer _server;
-  final _sessions = <String, MediaProxySession>{};
+  final _sessions = <String, _ProxySession>{};
   final _random = Random.secure();
   bool _closed = false;
 
@@ -103,6 +104,30 @@ class MediaProxy {
     return session;
   }
 
+  /// 为已下载的剧集建立**本地来源**的会话（architecture §4.5.1「离线回放」）：不发任何上游请求。
+  ///
+  /// [playlists] 与 [files] 以客户端生成的名称登记（调用方从已校验的 `video.json` 得到，
+  /// 名称不来自播放器）；播放器只能按会话编号请求这些条目，代理不接受任何路径。播放列表中的地址
+  /// 是这些名称（相对地址），打开时改写为代理地址；名称未登记、带加密或指向密钥的地址得到总是 403 的地址。
+  /// [root] 为交给播放器的条目名（主播放列表或单个媒体文件）。媒体文件照常按文件头识别
+  /// （[looksLikeMediaContainer]；字幕为 WebVTT），支持 `Range` / `HEAD`。
+  LocalMediaSession openLocal({
+    required String root,
+    Map<String, String> playlists = const {},
+    Map<String, LocalMediaFile> files = const {},
+  }) {
+    if (_closed) throw StateError('MediaProxy is closed');
+    if (!playlists.containsKey(root) && !files.containsKey(root)) {
+      throw ArgumentError.value(root, 'root', '未登记');
+    }
+    final token = base64Url
+        .encode(List.generate(24, (_) => _random.nextInt(256)))
+        .replaceAll('=', '');
+    final session = LocalMediaSession._(this, token, playlists, files, root);
+    _sessions[token] = session;
+    return session;
+  }
+
   Future<void> close() async {
     _closed = true;
     for (final s in _sessions.values.toList()) {
@@ -122,14 +147,13 @@ class MediaProxy {
     try {
       final session = seg.length == 3 ? _sessions[seg[0]] : null;
       final index = seg.length == 3 ? int.tryParse(seg[1]) : null;
-      final entry = session?._entryAt(index);
-      if (session == null || entry == null) {
+      if (session == null || index == null || !session._has(index)) {
         return await _status(res, HttpStatus.notFound);
       }
       if (req.method != 'GET' && req.method != 'HEAD') {
         return await _status(res, HttpStatus.methodNotAllowed);
       }
-      await session._serve(req, entry);
+      await session._serveAt(req, index);
     } catch (e, st) {
       _log('${req.method} $label failed: $e\n$st');
       try {
@@ -147,8 +171,15 @@ class MediaProxy {
   }
 }
 
+/// 代理会话的共同部分：令牌、按编号查找条目、关闭。
+sealed class _ProxySession {
+  bool _has(int index);
+  Future<void> _serveAt(HttpRequest req, int index);
+  void close();
+}
+
 /// 一次播放（一个 `StreamRef`）对应的代理会话。
-class MediaProxySession {
+final class MediaProxySession implements _ProxySession {
   MediaProxySession._(this._proxy, this._token, this._client, this._headers);
 
   final MediaProxy _proxy;
@@ -190,6 +221,7 @@ class MediaProxySession {
   int get inFlight => _inFlight.length;
 
   /// 撤销本会话：之后的请求返回 404，进行中的上游请求被取消。
+  @override
   void close() {
     if (_closed) return;
     _closed = true;
@@ -199,6 +231,13 @@ class MediaProxySession {
     }
     _inFlight.clear();
   }
+
+  @override
+  bool _has(int index) => _entryAt(index) != null;
+
+  @override
+  Future<void> _serveAt(HttpRequest req, int index) =>
+      _serve(req, _entryAt(index)!);
 
   _Entry? _entryAt(int? index) =>
       _closed || index == null || index < 0 || index >= _entries.length
@@ -515,16 +554,7 @@ class MediaProxySession {
         if (cipherText == null) return (null, HttpStatus.badGateway);
         final Uint8List plain;
         try {
-          final cipher =
-              PaddedBlockCipherImpl(PKCS7Padding(), CBCBlockCipher(AESEngine()))
-                ..init(
-                  false,
-                  PaddedBlockCipherParameters(
-                    ParametersWithIV(KeyParameter(key), aes.iv),
-                    null,
-                  ),
-                );
-          plain = cipher.process(cipherText);
+          plain = decryptHlsAes128(cipherText, key, aes.iv);
         } on Object {
           // 长度不是 16 的倍数、填充错误（密钥 / IV 不对）。
           return (null, HttpStatus.badGateway);
@@ -1076,4 +1106,218 @@ class _Shared {
     });
     return result.future;
   }
+}
+
+/// 本地来源会话中一个可交给播放器的文件。
+enum LocalMediaKind {
+  /// 媒体分片 / 单个媒体文件：必须以可识别的媒体容器开头。
+  media,
+
+  /// HLS 字幕轨的分片：必须以 `WEBVTT` 开头。
+  subtitle,
+}
+
+final class LocalMediaFile {
+  const LocalMediaFile(this.file, this.kind, {this.extension});
+
+  final File file;
+  final LocalMediaKind kind;
+
+  /// 代理地址中媒体文件名的扩展名（FFmpeg 的 HLS 分片扩展名检查，architecture §6.4.3）：
+  /// 同一个子播放列表中的分片应使用同一个；为 null 时用 `bin`。
+  final String? extension;
+}
+
+/// 已下载剧集的本地来源会话（[MediaProxy.openLocal]）：只按编号返回打开时登记的条目，
+/// 不接受路径、不发上游请求。
+final class LocalMediaSession implements _ProxySession {
+  LocalMediaSession._(
+    this._proxy,
+    this._token,
+    Map<String, String> playlists,
+    Map<String, LocalMediaFile> files,
+    String root,
+  ) {
+    for (final name in playlists.keys) {
+      _indexOf[name] = _entries.length;
+      _entries.add(null); // 改写后填入
+    }
+    for (final MapEntry(key: name, value: f) in files.entries) {
+      _indexOf[name] = _entries.length;
+      _entries.add(_LocalFileEntry(f));
+    }
+    for (final MapEntry(key: name, value: text) in playlists.entries) {
+      _entries[_indexOf[name]!] = _LocalPlaylistEntry(_rewrite(text));
+    }
+    _root = _urlOf(root);
+  }
+
+  final MediaProxy _proxy;
+  final String _token;
+  final _entries = <_LocalEntry?>[];
+  final _indexOf = <String, int>{};
+  late final String _root;
+  bool _closed = false;
+
+  static final _base = Uri.parse('http://local.invalid/');
+
+  /// 交给播放器的地址。
+  Uri get url => Uri.parse(_root);
+
+  bool get isClosed => _closed;
+
+  /// 曾有登记的文件缺失、读取失败或内容无法识别（下载已损坏，architecture §4.5.1）。
+  bool get hadFileError => _hadFileError;
+  bool _hadFileError = false;
+
+  @override
+  void close() {
+    if (_closed) return;
+    _closed = true;
+    _proxy._sessions.remove(_token);
+  }
+
+  @override
+  bool _has(int index) => !_closed && index >= 0 && index < _entries.length;
+
+  String _urlOf(String name) {
+    final index = _indexOf[name];
+    final entry = index == null ? null : _entries[index];
+    final file = switch (entry) {
+      _LocalPlaylistEntry() => 'index.m3u8',
+      _LocalFileEntry(file: LocalMediaFile(kind: LocalMediaKind.subtitle)) =>
+        'sub.vtt',
+      _LocalFileEntry(:final file) => 'media.${file.extension ?? 'bin'}',
+      // 尚未改写的播放列表（互相引用时）同样是播放列表。
+      null when index != null => 'index.m3u8',
+      null => 'media.bin',
+    };
+    return _proxy.origin
+        .replace(pathSegments: [_token, '${index ?? 'x'}', file])
+        .toString();
+  }
+
+  /// 把播放列表中的名称换成代理地址；无法解析时该播放列表总是 502。
+  Uint8List? _rewrite(String text) {
+    try {
+      return utf8.encode(
+        rewriteHlsPlaylist(
+          text,
+          base: _base,
+          map: (uri, kind, [aes]) {
+            // 本地文件已是明文：带加密参数的地址与密钥都不登记。
+            if (uri == null || aes != null || kind == HlsUriKind.key) {
+              return _urlOf('');
+            }
+            if (uri.scheme != 'http' ||
+                uri.host != _base.host ||
+                uri.hasQuery ||
+                uri.path.length < 2) {
+              return _urlOf('');
+            }
+            final name = uri.path.substring(1);
+            final index = _indexOf[name];
+            if (index == null) return _urlOf('');
+            final isPlaylist =
+                kind == HlsUriKind.playlist ||
+                kind == HlsUriKind.subtitlePlaylist;
+            // 引用的用途必须与登记的条目一致（播放列表 ↔ 播放列表，分片 ↔ 文件）。
+            final registeredAsFile = _entries[index] is _LocalFileEntry;
+            if (isPlaylist == registeredAsFile) return _urlOf('');
+            return _urlOf(name);
+          },
+        ),
+      );
+    } on FormatException {
+      return null;
+    }
+  }
+
+  @override
+  Future<void> _serveAt(HttpRequest req, int index) async {
+    final res = req.response;
+    switch (_entries[index]) {
+      case _LocalPlaylistEntry(:final bytes):
+        if (bytes == null) return _status(res, HttpStatus.badGateway);
+        res
+          ..statusCode = HttpStatus.ok
+          ..headers.contentType = MediaProxySession._hlsType
+          ..contentLength = bytes.length;
+        if (req.method != 'HEAD') res.add(bytes);
+        return res.close();
+      case _LocalFileEntry(:final file):
+        return _serveFile(req, file);
+      case null:
+        return _status(res, HttpStatus.notFound);
+    }
+  }
+
+  Future<void> _serveFile(HttpRequest req, LocalMediaFile f) async {
+    final res = req.response;
+    final int total;
+    final Uint8List head;
+    try {
+      total = await f.file.length();
+      final raf = await f.file.open();
+      try {
+        head = await raf.read(min(total, MediaProxySession._sniffBytes));
+      } finally {
+        await raf.close();
+      }
+    } on FileSystemException {
+      _hadFileError = true;
+      return _status(res, HttpStatus.notFound);
+    }
+    // 每次都按文件头识别（本地读取很便宜）：文件被替换或损坏时不交给播放器。
+    final ok = f.kind == LocalMediaKind.subtitle
+        ? looksLikeWebVtt(head)
+        : looksLikeMediaContainer(head);
+    if (!ok) {
+      _hadFileError = true;
+      return _status(res, HttpStatus.unsupportedMediaType);
+    }
+    res.headers
+      ..contentType = f.kind == LocalMediaKind.subtitle
+          ? MediaProxySession._vttType
+          : ContentType.binary
+      ..set(HttpHeaders.acceptRangesHeader, 'bytes');
+    var (from, to) = (0, total - 1);
+    final range = req.headers.value(HttpHeaders.rangeHeader)?.trim();
+    if (range != null && range.isNotEmpty) {
+      final parsed = MediaProxySession._parseRange(range, total);
+      if (parsed == null) {
+        res.headers.set(HttpHeaders.contentRangeHeader, 'bytes */$total');
+        return _status(res, HttpStatus.requestedRangeNotSatisfiable);
+      }
+      (from, to) = parsed;
+      res
+        ..statusCode = HttpStatus.partialContent
+        ..headers.set(HttpHeaders.contentRangeHeader, 'bytes $from-$to/$total');
+    } else {
+      res.statusCode = HttpStatus.ok;
+    }
+    res.contentLength = to - from + 1;
+    if (req.method == 'HEAD') return res.close();
+    try {
+      await res.addStream(f.file.openRead(from, to + 1));
+    } on FileSystemException {
+      _hadFileError = true;
+    }
+    return res.close();
+  }
+}
+
+sealed class _LocalEntry {}
+
+final class _LocalPlaylistEntry extends _LocalEntry {
+  _LocalPlaylistEntry(this.bytes);
+
+  /// 改写后的播放列表；无法解析时为 null。
+  final Uint8List? bytes;
+}
+
+final class _LocalFileEntry extends _LocalEntry {
+  _LocalFileEntry(this.file);
+
+  final LocalMediaFile file;
 }

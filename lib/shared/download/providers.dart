@@ -4,8 +4,10 @@ import 'package:path_provider/path_provider.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../core/storage/app_database.dart';
+import '../../sources/registry/providers.dart';
 import '../../sources/runtime/source_runtime.dart';
 import '../image/image_providers.dart';
+import '../video/media_proxy_providers.dart';
 import 'download_library.dart';
 import 'download_manager.dart';
 import 'download_repository.dart';
@@ -15,6 +17,9 @@ export 'download_library.dart';
 export 'download_manager.dart';
 export 'download_repository.dart';
 export 'download_store.dart';
+export 'video_downloader.dart'
+    show DownloadStorageException, VideoDownloadLimits;
+export 'video_manifest.dart';
 
 part 'providers.g.dart';
 
@@ -40,6 +45,18 @@ DownloadManager downloadManager(Ref ref) {
     store: ref.watch(downloadStoreProvider),
     sourceFor: runtime.get,
     fetchImage: images.download,
+    // 与媒体代理相同：为该源新建使用其 SourceSession（Cookie、UA、令牌桶）的客户端（architecture §4.5.1）。
+    videoClientFor: (sourceId) async {
+      final manifest = (await ref.read(sourceRegistryProvider).get(sourceId))
+          ?.manifest;
+      if (manifest == null) {
+        throw SourceUnavailableException(sourceId, '源未安装或清单不可用');
+      }
+      return (
+        ref.read(mediaProxyClientProvider)(manifest),
+        Uri.parse(manifest.baseUrl),
+      );
+    },
   );
   ref.onDispose(manager.dispose);
   manager.start().ignore();

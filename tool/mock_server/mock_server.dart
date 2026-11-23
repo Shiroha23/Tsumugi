@@ -52,6 +52,7 @@
 /// | `GET /video/show/1` | 视频详情（6 集，第 5、6 集为诊断用的 MPEG-TS）；种下 `vtoken=1` Cookie |
 /// | `GET /video/show/1/ep/1..6` | 剧集页：`<video><source src=…>` 指向下面的素材 |
 /// | `GET\|HEAD /video/media/<文件>` | `test/fixtures/mock_site/video/` 中的测试视频（`clip.mp4`、`hls/*`）与字幕（`subs/*`），支持 `Range` |
+/// | `GET\|HEAD /video/noetag/<文件>` | 同 `/video/media/`，但不带 `ETag` / `Last-Modified`（单文件下载无校验值时不续传） |
 /// | `GET\|HEAD /video/protected/<文件>` | 同上，但要求 `Referer` 的路径以 `/video/` 开头（否则 403）；`hls/key.bin` 另需 `vtoken` Cookie |
 /// | `GET /video/api/search?q=` | 视频 JSON 接口（脚本源）：搜索，一部多线路的虚构剧集 |
 /// | `GET /video/api/show/2` | JSON 详情：两条线路（A：需要 Referer / Cookie；B：无保护）各 3 集；种下 `vtoken=1` Cookie |
@@ -64,6 +65,16 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
+
+import 'package:pointycastle/export.dart'
+    show
+        AESEngine,
+        CBCBlockCipher,
+        KeyParameter,
+        PKCS7Padding,
+        PaddedBlockCipherImpl,
+        PaddedBlockCipherParameters,
+        ParametersWithIV;
 
 class MockServer {
   MockServer._(
@@ -208,6 +219,7 @@ class MockServer {
         ]);
       case ('POST', '/__test/reset'):
         requests.clear();
+        videoRevision = 0;
         _flakyCounters.clear();
         liveRepository = defaultLiveRepository;
         offline = false;
@@ -358,6 +370,13 @@ class MockServer {
 
     if (path.startsWith('/video/media/')) {
       return _video(req, path.substring('/video/media/'.length));
+    }
+    if (path.startsWith('/video/noetag/')) {
+      return _video(
+        req,
+        path.substring('/video/noetag/'.length),
+        validators: false,
+      );
     }
     if (path.startsWith('/video/protected/')) {
       final referer = Uri.tryParse(req.headers.value('referer') ?? '');
@@ -708,6 +727,15 @@ class MockServer {
     'hls/seg0.ts': 'video/mp2t',
     'hls/seg1.ts': 'video/mp2t',
     'hls/seg2.ts': 'video/mp2t',
+    // 视频下载（architecture §4.5.1）：明文 HLS（分片由加密分片即时解密得到）、直播、SAMPLE-AES、
+    // 两个变体的主播放列表（带宽高的为明文）。
+    'hls/plain.m3u8': 'application/vnd.apple.mpegurl',
+    'hls/live.m3u8': 'application/vnd.apple.mpegurl',
+    'hls/sample_aes.m3u8': 'application/vnd.apple.mpegurl',
+    'hls/master_plain.m3u8': 'application/vnd.apple.mpegurl',
+    'hls/plain/seg0.ts': 'video/mp2t',
+    'hls/plain/seg1.ts': 'video/mp2t',
+    'hls/plain/seg2.ts': 'video/mp2t',
     // 字幕：srt / ass 不带 charset（GBK 的按回退规则识别），bad.srt 实为 HTML。
     'subs/zh.srt': 'text/plain',
     'subs/zh_gbk.srt': 'text/plain',
@@ -716,8 +744,18 @@ class MockServer {
     'subs/bad.srt': 'text/html',
   };
 
-  /// 发送 `video/` 下的测试素材（只认 [_videoFiles] 中的文件名），支持单个 `Range`。
-  Future<void> _video(HttpRequest req, String name) async {
+  /// 改变 `/video/media/` 素材的内容版本（`ETag` / `Last-Modified` 随之改变，内容末尾多一个字节）：
+  /// 测试单文件续传时“上游内容变了”的情形。
+  int videoRevision = 0;
+
+  /// 发送 `video/` 下的测试素材（只认 [_videoFiles] 中的文件名），支持单个 `Range`；
+  /// [validators] 时带 `ETag`（强）与 `Last-Modified`，并按 `If-Range` 决定是否按区间返回。
+  /// `hls/plain/segN.ts` 为 `hls/segN.ts` 解密后的明文。
+  Future<void> _video(
+    HttpRequest req,
+    String name, {
+    bool validators = true,
+  }) async {
     final res = req.response;
     final type = _videoFiles[name];
     if (type == null || (req.method != 'GET' && req.method != 'HEAD')) {
@@ -726,13 +764,34 @@ class MockServer {
           : HttpStatus.methodNotAllowed;
       return res.close();
     }
-    final bytes = await File('${fixturesDir.path}/video/$name').readAsBytes();
+    var bytes = name.startsWith('hls/plain/')
+        ? await _plainSegment(name.substring('hls/plain/'.length))
+        : await File('${fixturesDir.path}/video/$name').readAsBytes();
+    if (videoRevision > 0 && !name.endsWith('.m3u8')) {
+      bytes = Uint8List.fromList([...bytes, videoRevision & 0xFF]);
+    }
     res.headers
       ..set(HttpHeaders.contentTypeHeader, type)
       ..set(HttpHeaders.acceptRangesHeader, 'bytes');
+    final etag = '"v$videoRevision-${bytes.length}"';
+    final lastModified = HttpDate.format(
+      DateTime.utc(2026, 11, 1).add(Duration(days: videoRevision)),
+    );
+    if (validators) {
+      res.headers
+        ..set(HttpHeaders.etagHeader, etag)
+        ..set(HttpHeaders.lastModifiedHeader, lastModified);
+    }
     var start = 0, end = bytes.length - 1;
-    final range = RegExp(r'^bytes=(\d*)-(\d*)$')
-        .firstMatch(req.headers.value(HttpHeaders.rangeHeader) ?? '');
+    // If-Range 与当前版本不符（或没有校验值）时忽略 Range，返回整个文件（RFC 9110 §13.1.5）。
+    final ifRange = req.headers.value('if-range');
+    final rangeAllowed =
+        ifRange == null ||
+        (validators && (ifRange == etag || ifRange == lastModified));
+    final range = !rangeAllowed
+        ? null
+        : RegExp(r'^bytes=(\d*)-(\d*)$')
+              .firstMatch(req.headers.value(HttpHeaders.rangeHeader) ?? '');
     if (range != null) {
       final (a, b) = (int.tryParse(range[1]!), int.tryParse(range[2]!));
       if (a != null) {
@@ -758,6 +817,23 @@ class MockServer {
     res.contentLength = end - start + 1;
     if (req.method == 'GET') res.add(bytes.sublist(start, end + 1));
     return res.close();
+  }
+
+  /// `hls/segN.ts`（AES-128，密钥 `hls/key.bin`，IV = 1）解密后的明文。
+  Future<Uint8List> _plainSegment(String name) async {
+    final dir = '${fixturesDir.path}/video/hls';
+    final key = await File('$dir/key.bin').readAsBytes();
+    final iv = Uint8List(16)..[15] = 1;
+    final cipher =
+        PaddedBlockCipherImpl(PKCS7Padding(), CBCBlockCipher(AESEngine()))
+          ..init(
+            false,
+            PaddedBlockCipherParameters(
+              ParametersWithIV(KeyParameter(key), iv),
+              null,
+            ),
+          );
+    return cipher.process(await File('$dir/$name').readAsBytes());
   }
 
   Future<void> _file(HttpResponse res, String name, ContentType type) async {

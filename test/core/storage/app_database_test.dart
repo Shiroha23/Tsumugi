@@ -25,8 +25,8 @@ void main() {
   setUp(() => db = openTestDatabase());
   tearDown(() => db.close());
 
-  test('schemaVersion 为 7，建表后可读写', () async {
-    expect(db.schemaVersion, 7);
+  test('schemaVersion 为 8，建表后可读写', () async {
+    expect(db.schemaVersion, 8);
     await db.into(db.installedSources).insert(_row('com.example.a'));
 
     final rows = await db.select(db.installedSources).get();

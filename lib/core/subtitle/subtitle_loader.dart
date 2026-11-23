@@ -25,10 +25,42 @@ Future<SubtitleDocument> fetchSubtitle(
   NetCancellation? cancellation,
   void Function(String message)? log,
 }) async {
+  final declared = declaredSubtitleFormat(format);
+  final (bytes, contentType) = await fetchSubtitleBytes(
+    client,
+    url,
+    maxBytes: maxBytes,
+    totalTimeout: totalTimeout,
+    cancellation: cancellation,
+  );
+  return parseSubtitleBytes(
+    bytes,
+    charset: charset,
+    contentType: contentType,
+    declared: declared,
+    maxBytes: maxBytes,
+    log: log,
+  );
+}
+
+/// `SubtitleRef.format` → 声明的格式；给出了但不认识时抛 [SubtitleFormatException]。
+SubtitleFormat? declaredSubtitleFormat(String? format) {
   final declared = SubtitleFormat.parse(format);
   if (!SubtitleFormat.isBlank(format) && declared == null) {
     throw SubtitleFormatException('不支持的字幕格式：$format');
   }
+  return declared;
+}
+
+/// 只取回字幕文件的字节与 `Content-Type`（不解码、不解析），限制与 [fetchSubtitle] 相同。
+/// 视频下载用它保存原文件（architecture §4.5.1），离线时再用 [parseSubtitleBytes] 解析。
+Future<(Uint8List, String?)> fetchSubtitleBytes(
+  SourceHttpClient client,
+  String url, {
+  int maxBytes = maxSubtitleBytes,
+  Duration totalTimeout = defaultSubtitleTimeout,
+  NetCancellation? cancellation,
+}) async {
   final abort = NetCancellation();
   var timedOut = false;
   cancellation?.whenCancelled.then((_) => abort.cancel());
@@ -106,13 +138,7 @@ Future<SubtitleDocument> fetchSubtitle(
     });
     await done.future;
     timer.cancel();
-    return await _decodeAndParse(
-      bytes.takeBytes(),
-      charset: charset,
-      contentType: response.headers['content-type'],
-      declared: declared,
-      log: log,
-    );
+    return (bytes.takeBytes(), response.headers['content-type']);
   } finally {
     timer.cancel();
   }
@@ -121,15 +147,21 @@ Future<SubtitleDocument> fetchSubtitle(
 /// 取一条字幕的总时限。
 const defaultSubtitleTimeout = Duration(seconds: 30);
 
+/// 解码并解析字幕文件的字节（编码与格式规则见 architecture §6.4.7）；超过 [maxSubtitleBytes] 时拒绝。
+///
 /// 大文件在后台 isolate 中解码与解析，不卡界面（日志回调不跨 isolate）。
 /// 单独成函数：交给 [Isolate.run] 的闭包只能捕获可发送的值（不能带上响应、订阅等）。
-Future<SubtitleDocument> _decodeAndParse(
+Future<SubtitleDocument> parseSubtitleBytes(
   Uint8List data, {
   String? charset,
   String? contentType,
   SubtitleFormat? declared,
+  int maxBytes = maxSubtitleBytes,
   void Function(String message)? log,
 }) async {
+  if (data.length > maxBytes) {
+    throw SubtitleFormatException(_tooLarge(maxBytes));
+  }
   if (data.length > isolateThreshold) {
     return Isolate.run(
       () => parseSubtitle(

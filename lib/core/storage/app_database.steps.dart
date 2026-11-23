@@ -1935,6 +1935,356 @@ class Shape16 extends i0.VersionedTable {
       columnsByName['modified_at']! as i1.GeneratedColumn<int>;
 }
 
+final class Schema8 extends i0.VersionedSchema {
+  Schema8({required super.database}) : super(version: 8);
+  @override
+  late final List<i1.DatabaseSchemaEntity> entities = [
+    libraryEntries,
+    syncState,
+    syncTombstones,
+    libraryEntriesSyncInsert,
+    libraryEntriesSyncUpdate,
+    libraryEntriesSyncDelete,
+    itemProgressEntries,
+    itemProgressEntriesSyncInsert,
+    itemProgressEntriesSyncUpdate,
+    itemProgressEntriesSyncDelete,
+    unitProgressEntries,
+    unitProgressEntriesSyncInsert,
+    unitProgressEntriesSyncUpdate,
+    unitProgressEntriesSyncDelete,
+    installedSources,
+    installedSourcesSyncInsert,
+    installedSourcesSyncUpdate,
+    installedSourcesSyncDelete,
+    sourceRepositories,
+    sourceRepositoriesSyncInsert,
+    sourceRepositoriesSyncUpdate,
+    sourceRepositoriesSyncDelete,
+    sourceStorageEntries,
+    downloadItems,
+    downloadUnits,
+    itemProgressUpdatedAt,
+  ];
+  late final Shape10 libraryEntries = Shape10(
+    source: i0.VersionedTable(
+      entityName: 'library_entries',
+      withoutRowId: false,
+      isStrict: false,
+      tableConstraints: ['PRIMARY KEY(source_id, item_id)'],
+      columns: [
+        _column_13,
+        _column_16,
+        _column_17,
+        _column_18,
+        _column_19,
+        _column_20,
+        _column_21,
+        _column_22,
+        _column_23,
+        _column_8,
+        _column_48,
+      ],
+      attachedDatabase: database,
+    ),
+    alias: null,
+  );
+  late final Shape11 syncState = Shape11(
+    source: i0.VersionedTable(
+      entityName: 'sync_state',
+      withoutRowId: false,
+      isStrict: false,
+      tableConstraints: ['PRIMARY KEY(id)'],
+      columns: [
+        _column_49,
+        _column_50,
+        _column_51,
+        _column_52,
+        _column_53,
+        _column_54,
+        _column_55,
+        _column_56,
+        _column_57,
+        _column_58,
+        _column_59,
+        _column_60,
+        _column_61,
+        _column_62,
+      ],
+      attachedDatabase: database,
+    ),
+    alias: null,
+  );
+  late final Shape12 syncTombstones = Shape12(
+    source: i0.VersionedTable(
+      entityName: 'sync_tombstones',
+      withoutRowId: false,
+      isStrict: false,
+      tableConstraints: ['PRIMARY KEY(collection, key1, key2, key3)'],
+      columns: [_column_63, _column_64, _column_65, _column_66, _column_67],
+      attachedDatabase: database,
+    ),
+    alias: null,
+  );
+  final i1.Trigger libraryEntriesSyncInsert = i1.Trigger(
+    'CREATE TRIGGER library_entries_sync_insert AFTER INSERT ON library_entries WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 BEGIN UPDATE library_entries SET modified_at = CAST((julianday(\'now\') - 2440587.5)* 86400000 AS INTEGER) WHERE source_id = NEW.source_id AND item_id = NEW.item_id;DELETE FROM sync_tombstones WHERE collection = \'library\' AND key1 = NEW.source_id AND key2 = NEW.item_id AND key3 = \'\';END',
+    'library_entries_sync_insert',
+  );
+  final i1.Trigger libraryEntriesSyncUpdate = i1.Trigger(
+    'CREATE TRIGGER library_entries_sync_update AFTER UPDATE ON library_entries WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 AND(NEW.title IS NOT OLD.title OR NEW.cover IS NOT OLD.cover OR NEW.cover_headers IS NOT OLD.cover_headers OR NEW.media_type IS NOT OLD.media_type OR NEW.category IS NOT OLD.category OR NEW.sort_order IS NOT OLD.sort_order OR NEW.added_at IS NOT OLD.added_at)BEGIN UPDATE library_entries SET modified_at = CAST((julianday(\'now\') - 2440587.5)* 86400000 AS INTEGER) WHERE source_id = NEW.source_id AND item_id = NEW.item_id;END',
+    'library_entries_sync_update',
+  );
+  final i1.Trigger libraryEntriesSyncDelete = i1.Trigger(
+    'CREATE TRIGGER library_entries_sync_delete AFTER DELETE ON library_entries WHEN EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND applying = 0 AND server_url IS NOT NULL) BEGIN INSERT OR REPLACE INTO sync_tombstones (collection, key1, key2, key3, deleted_at) VALUES (\'library\', OLD.source_id, OLD.item_id, \'\', CAST((julianday(\'now\') - 2440587.5)* 86400000 AS INTEGER));END',
+    'library_entries_sync_delete',
+  );
+  late final Shape13 itemProgressEntries = Shape13(
+    source: i0.VersionedTable(
+      entityName: 'item_progress_entries',
+      withoutRowId: false,
+      isStrict: false,
+      tableConstraints: ['PRIMARY KEY(source_id, item_id)'],
+      columns: [
+        _column_13,
+        _column_16,
+        _column_17,
+        _column_18,
+        _column_19,
+        _column_20,
+        _column_24,
+        _column_25,
+        _column_26,
+        _column_27,
+        _column_28,
+        _column_8,
+        _column_48,
+      ],
+      attachedDatabase: database,
+    ),
+    alias: null,
+  );
+  final i1.Trigger itemProgressEntriesSyncInsert = i1.Trigger(
+    'CREATE TRIGGER item_progress_entries_sync_insert AFTER INSERT ON item_progress_entries WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 BEGIN UPDATE item_progress_entries SET modified_at = CAST((julianday(\'now\') - 2440587.5)* 86400000 AS INTEGER) WHERE source_id = NEW.source_id AND item_id = NEW.item_id;DELETE FROM sync_tombstones WHERE collection = \'itemProgress\' AND key1 = NEW.source_id AND key2 = NEW.item_id AND key3 = \'\';END',
+    'item_progress_entries_sync_insert',
+  );
+  final i1.Trigger itemProgressEntriesSyncUpdate = i1.Trigger(
+    'CREATE TRIGGER item_progress_entries_sync_update AFTER UPDATE ON item_progress_entries WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 AND(NEW.title IS NOT OLD.title OR NEW.cover IS NOT OLD.cover OR NEW.cover_headers IS NOT OLD.cover_headers OR NEW.media_type IS NOT OLD.media_type OR NEW.unit_id IS NOT OLD.unit_id OR NEW.unit_title IS NOT OLD.unit_title OR NEW.page IS NOT OLD.page OR NEW.page_count IS NOT OLD.page_count OR NEW.position IS NOT OLD.position OR NEW.updated_at IS NOT OLD.updated_at)BEGIN UPDATE item_progress_entries SET modified_at = CAST((julianday(\'now\') - 2440587.5)* 86400000 AS INTEGER) WHERE source_id = NEW.source_id AND item_id = NEW.item_id;END',
+    'item_progress_entries_sync_update',
+  );
+  final i1.Trigger itemProgressEntriesSyncDelete = i1.Trigger(
+    'CREATE TRIGGER item_progress_entries_sync_delete AFTER DELETE ON item_progress_entries WHEN EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND applying = 0 AND server_url IS NOT NULL) BEGIN INSERT OR REPLACE INTO sync_tombstones (collection, key1, key2, key3, deleted_at) VALUES (\'itemProgress\', OLD.source_id, OLD.item_id, \'\', CAST((julianday(\'now\') - 2440587.5)* 86400000 AS INTEGER));END',
+    'item_progress_entries_sync_delete',
+  );
+  late final Shape14 unitProgressEntries = Shape14(
+    source: i0.VersionedTable(
+      entityName: 'unit_progress_entries',
+      withoutRowId: false,
+      isStrict: false,
+      tableConstraints: ['PRIMARY KEY(source_id, item_id, unit_id)'],
+      columns: [
+        _column_13,
+        _column_16,
+        _column_24,
+        _column_26,
+        _column_27,
+        _column_28,
+        _column_29,
+        _column_8,
+        _column_48,
+      ],
+      attachedDatabase: database,
+    ),
+    alias: null,
+  );
+  final i1.Trigger unitProgressEntriesSyncInsert = i1.Trigger(
+    'CREATE TRIGGER unit_progress_entries_sync_insert AFTER INSERT ON unit_progress_entries WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 BEGIN UPDATE unit_progress_entries SET modified_at = CAST((julianday(\'now\') - 2440587.5)* 86400000 AS INTEGER) WHERE source_id = NEW.source_id AND item_id = NEW.item_id AND unit_id = NEW.unit_id;DELETE FROM sync_tombstones WHERE collection = \'unitProgress\' AND key1 = NEW.source_id AND key2 = NEW.item_id AND key3 = NEW.unit_id;END',
+    'unit_progress_entries_sync_insert',
+  );
+  final i1.Trigger unitProgressEntriesSyncUpdate = i1.Trigger(
+    'CREATE TRIGGER unit_progress_entries_sync_update AFTER UPDATE ON unit_progress_entries WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 AND(NEW.page IS NOT OLD.page OR NEW.page_count IS NOT OLD.page_count OR NEW.position IS NOT OLD.position OR NEW.read IS NOT OLD.read OR NEW.updated_at IS NOT OLD.updated_at)BEGIN UPDATE unit_progress_entries SET modified_at = CAST((julianday(\'now\') - 2440587.5)* 86400000 AS INTEGER) WHERE source_id = NEW.source_id AND item_id = NEW.item_id AND unit_id = NEW.unit_id;END',
+    'unit_progress_entries_sync_update',
+  );
+  final i1.Trigger unitProgressEntriesSyncDelete = i1.Trigger(
+    'CREATE TRIGGER unit_progress_entries_sync_delete AFTER DELETE ON unit_progress_entries WHEN EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND applying = 0 AND server_url IS NOT NULL) BEGIN INSERT OR REPLACE INTO sync_tombstones (collection, key1, key2, key3, deleted_at) VALUES (\'unitProgress\', OLD.source_id, OLD.item_id, OLD.unit_id, CAST((julianday(\'now\') - 2440587.5)* 86400000 AS INTEGER));END',
+    'unit_progress_entries_sync_delete',
+  );
+  late final Shape15 installedSources = Shape15(
+    source: i0.VersionedTable(
+      entityName: 'installed_sources',
+      withoutRowId: false,
+      isStrict: false,
+      tableConstraints: ['PRIMARY KEY(id)'],
+      columns: [
+        _column_0,
+        _column_1,
+        _column_2,
+        _column_3,
+        _column_4,
+        _column_5,
+        _column_6,
+        _column_7,
+        _column_8,
+        _column_9,
+        _column_10,
+        _column_11,
+        _column_12,
+        _column_30,
+        _column_31,
+        _column_48,
+      ],
+      attachedDatabase: database,
+    ),
+    alias: null,
+  );
+  final i1.Trigger installedSourcesSyncInsert = i1.Trigger(
+    'CREATE TRIGGER installed_sources_sync_insert AFTER INSERT ON installed_sources WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 BEGIN UPDATE installed_sources SET modified_at = CAST((julianday(\'now\') - 2440587.5)* 86400000 AS INTEGER) WHERE id = NEW.id;DELETE FROM sync_tombstones WHERE collection = \'sources\' AND key1 = NEW.id AND key2 = \'\' AND key3 = \'\';END',
+    'installed_sources_sync_insert',
+  );
+  final i1.Trigger installedSourcesSyncUpdate = i1.Trigger(
+    'CREATE TRIGGER installed_sources_sync_update AFTER UPDATE ON installed_sources WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 AND(NEW.manifest_json IS NOT OLD.manifest_json OR NEW.enabled IS NOT OLD.enabled OR NEW.sort_order IS NOT OLD.sort_order OR NEW.settings_json IS NOT OLD.settings_json)BEGIN UPDATE installed_sources SET modified_at = CAST((julianday(\'now\') - 2440587.5)* 86400000 AS INTEGER) WHERE id = NEW.id;END',
+    'installed_sources_sync_update',
+  );
+  final i1.Trigger installedSourcesSyncDelete = i1.Trigger(
+    'CREATE TRIGGER installed_sources_sync_delete AFTER DELETE ON installed_sources WHEN EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND applying = 0 AND server_url IS NOT NULL) BEGIN INSERT OR REPLACE INTO sync_tombstones (collection, key1, key2, key3, deleted_at) VALUES (\'sources\', OLD.id, \'\', \'\', CAST((julianday(\'now\') - 2440587.5)* 86400000 AS INTEGER));END',
+    'installed_sources_sync_delete',
+  );
+  late final Shape16 sourceRepositories = Shape16(
+    source: i0.VersionedTable(
+      entityName: 'source_repositories',
+      withoutRowId: false,
+      isStrict: false,
+      tableConstraints: ['PRIMARY KEY(url)'],
+      columns: [
+        _column_32,
+        _column_1,
+        _column_23,
+        _column_33,
+        _column_34,
+        _column_35,
+        _column_36,
+        _column_37,
+        _column_48,
+      ],
+      attachedDatabase: database,
+    ),
+    alias: null,
+  );
+  final i1.Trigger sourceRepositoriesSyncInsert = i1.Trigger(
+    'CREATE TRIGGER source_repositories_sync_insert AFTER INSERT ON source_repositories WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 BEGIN UPDATE source_repositories SET modified_at = CAST((julianday(\'now\') - 2440587.5)* 86400000 AS INTEGER) WHERE url = NEW.url;DELETE FROM sync_tombstones WHERE collection = \'repositories\' AND key1 = NEW.url AND key2 = \'\' AND key3 = \'\';END',
+    'source_repositories_sync_insert',
+  );
+  final i1.Trigger sourceRepositoriesSyncUpdate = i1.Trigger(
+    'CREATE TRIGGER source_repositories_sync_update AFTER UPDATE ON source_repositories WHEN (SELECT applying FROM sync_state WHERE id = 1) IS NOT 1 AND(NEW.added_at IS NOT OLD.added_at)BEGIN UPDATE source_repositories SET modified_at = CAST((julianday(\'now\') - 2440587.5)* 86400000 AS INTEGER) WHERE url = NEW.url;END',
+    'source_repositories_sync_update',
+  );
+  final i1.Trigger sourceRepositoriesSyncDelete = i1.Trigger(
+    'CREATE TRIGGER source_repositories_sync_delete AFTER DELETE ON source_repositories WHEN EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND applying = 0 AND server_url IS NOT NULL) BEGIN INSERT OR REPLACE INTO sync_tombstones (collection, key1, key2, key3, deleted_at) VALUES (\'repositories\', OLD.url, \'\', \'\', CAST((julianday(\'now\') - 2440587.5)* 86400000 AS INTEGER));END',
+    'source_repositories_sync_delete',
+  );
+  late final Shape1 sourceStorageEntries = Shape1(
+    source: i0.VersionedTable(
+      entityName: 'source_storage_entries',
+      withoutRowId: false,
+      isStrict: false,
+      tableConstraints: ['PRIMARY KEY(source_id, "key")'],
+      columns: [_column_13, _column_14, _column_15],
+      attachedDatabase: database,
+    ),
+    alias: null,
+  );
+  late final Shape8 downloadItems = Shape8(
+    source: i0.VersionedTable(
+      entityName: 'download_items',
+      withoutRowId: false,
+      isStrict: false,
+      tableConstraints: ['PRIMARY KEY(source_id, item_id)'],
+      columns: [
+        _column_13,
+        _column_16,
+        _column_17,
+        _column_18,
+        _column_19,
+        _column_20,
+        _column_38,
+        _column_39,
+        _column_8,
+      ],
+      attachedDatabase: database,
+    ),
+    alias: null,
+  );
+  late final Shape17 downloadUnits = Shape17(
+    source: i0.VersionedTable(
+      entityName: 'download_units',
+      withoutRowId: false,
+      isStrict: false,
+      tableConstraints: ['PRIMARY KEY(source_id, item_id, unit_id)'],
+      columns: [
+        _column_13,
+        _column_16,
+        _column_24,
+        _column_17,
+        _column_40,
+        _column_41,
+        _column_42,
+        _column_43,
+        _column_44,
+        _column_45,
+        _column_46,
+        _column_47,
+        _column_8,
+        _column_68,
+      ],
+      attachedDatabase: database,
+    ),
+    alias: null,
+  );
+  final i1.Index itemProgressUpdatedAt = i1.Index(
+    'item_progress_updated_at',
+    'CREATE INDEX item_progress_updated_at ON item_progress_entries (updated_at)',
+  );
+}
+
+class Shape17 extends i0.VersionedTable {
+  Shape17({required super.source, required super.alias}) : super.aliased();
+  i1.GeneratedColumn<String> get sourceId =>
+      columnsByName['source_id']! as i1.GeneratedColumn<String>;
+  i1.GeneratedColumn<String> get itemId =>
+      columnsByName['item_id']! as i1.GeneratedColumn<String>;
+  i1.GeneratedColumn<String> get unitId =>
+      columnsByName['unit_id']! as i1.GeneratedColumn<String>;
+  i1.GeneratedColumn<String> get title =>
+      columnsByName['title']! as i1.GeneratedColumn<String>;
+  i1.GeneratedColumn<String> get groupName =>
+      columnsByName['group_name']! as i1.GeneratedColumn<String>;
+  i1.GeneratedColumn<int> get unitIndex =>
+      columnsByName['unit_index']! as i1.GeneratedColumn<int>;
+  i1.GeneratedColumn<String> get status =>
+      columnsByName['status']! as i1.GeneratedColumn<String>;
+  i1.GeneratedColumn<int> get completedFiles =>
+      columnsByName['completed_files']! as i1.GeneratedColumn<int>;
+  i1.GeneratedColumn<int> get totalFiles =>
+      columnsByName['total_files']! as i1.GeneratedColumn<int>;
+  i1.GeneratedColumn<int> get bytes =>
+      columnsByName['bytes']! as i1.GeneratedColumn<int>;
+  i1.GeneratedColumn<String> get errorCode =>
+      columnsByName['error_code']! as i1.GeneratedColumn<String>;
+  i1.GeneratedColumn<int> get queueOrder =>
+      columnsByName['queue_order']! as i1.GeneratedColumn<int>;
+  i1.GeneratedColumn<int> get updatedAt =>
+      columnsByName['updated_at']! as i1.GeneratedColumn<int>;
+  i1.GeneratedColumn<String> get streamLabel =>
+      columnsByName['stream_label']! as i1.GeneratedColumn<String>;
+}
+
+i1.GeneratedColumn<String> _column_68(String aliasedName) =>
+    i1.GeneratedColumn<String>(
+      'stream_label',
+      aliasedName,
+      true,
+      type: i1.DriftSqlType.string,
+      $customConstraints: 'NULL',
+    );
 i0.MigrationStepWithVersion migrationSteps({
   required Future<void> Function(i1.Migrator m, Schema2 schema) from1To2,
   required Future<void> Function(i1.Migrator m, Schema3 schema) from2To3,
@@ -1942,6 +2292,7 @@ i0.MigrationStepWithVersion migrationSteps({
   required Future<void> Function(i1.Migrator m, Schema5 schema) from4To5,
   required Future<void> Function(i1.Migrator m, Schema6 schema) from5To6,
   required Future<void> Function(i1.Migrator m, Schema7 schema) from6To7,
+  required Future<void> Function(i1.Migrator m, Schema8 schema) from7To8,
 }) {
   return (currentVersion, database) async {
     switch (currentVersion) {
@@ -1975,6 +2326,11 @@ i0.MigrationStepWithVersion migrationSteps({
         final migrator = i1.Migrator(database, schema);
         await from6To7(migrator, schema);
         return 7;
+      case 7:
+        final schema = Schema8(database: database);
+        final migrator = i1.Migrator(database, schema);
+        await from7To8(migrator, schema);
+        return 8;
       default:
         throw ArgumentError.value('Unknown migration from $currentVersion');
     }
@@ -1988,6 +2344,7 @@ i1.OnUpgrade stepByStep({
   required Future<void> Function(i1.Migrator m, Schema5 schema) from4To5,
   required Future<void> Function(i1.Migrator m, Schema6 schema) from5To6,
   required Future<void> Function(i1.Migrator m, Schema7 schema) from6To7,
+  required Future<void> Function(i1.Migrator m, Schema8 schema) from7To8,
 }) => i0.VersionedSchema.stepByStepHelper(
   step: migrationSteps(
     from1To2: from1To2,
@@ -1996,5 +2353,6 @@ i1.OnUpgrade stepByStep({
     from4To5: from4To5,
     from5To6: from5To6,
     from6To7: from6To7,
+    from7To8: from7To8,
   ),
 );

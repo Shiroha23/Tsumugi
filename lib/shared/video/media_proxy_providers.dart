@@ -5,6 +5,7 @@ import '../../core/network/media/media_proxy.dart';
 import '../../core/network/network_exception.dart';
 import '../../core/network/source_http_client.dart';
 import '../../sources/model/content.dart';
+import '../download/download_library.dart' show DownloadedVideo;
 import '../../sources/model/manifest.dart';
 import '../../sources/registry/providers.dart';
 import '../../sources/session/source_sessions.dart';
@@ -25,21 +26,58 @@ final mediaProxyProvider = FutureProvider<MediaProxy>((ref) async {
 
 /// 一次播放：播放器使用 [url]（代理地址），结束时 [close]。
 class ProxiedStream {
-  ProxiedStream._(this._session, this._client);
+  ProxiedStream._(this._session, this._client) : _local = null;
 
-  final MediaProxySession _session;
-  final SourceHttpClient _client;
+  ProxiedStream._local(LocalMediaSession session)
+    : _local = session,
+      _session = null,
+      _client = null;
 
-  Uri get url => _session.url;
+  final MediaProxySession? _session;
+  final SourceHttpClient? _client;
+  final LocalMediaSession? _local;
 
-  /// 代理最近一次上游请求失败的原因（见 [MediaProxySession.lastFailure]）。
-  NetworkException? get lastFailure => _session.lastFailure;
+  Uri get url => _session?.url ?? _local!.url;
+
+  /// 本地来源（已下载的剧集）。
+  bool get isLocal => _local != null;
+
+  /// 本地来源：曾有文件缺失或内容无法识别（下载已损坏）。
+  bool get localFileError => _local?.hadFileError ?? false;
+
+  /// 代理最近一次上游请求失败的原因（见 [MediaProxySession.lastFailure]）；本地来源为 null。
+  NetworkException? get lastFailure => _session?.lastFailure;
 
   void close() {
-    _session.close();
-    _client.close();
+    _session?.close();
+    _client?.close();
+    _local?.close();
   }
 }
+
+/// 为已下载的剧集建立本地来源的代理会话（architecture §4.5.1「离线回放」）：播放器看到的仍是
+/// `http://127.0.0.1:<port>/<token>/…`，代理只按编号返回 [video] 登记的文件，不发上游请求。
+final openLocalVideoProvider =
+    Provider<Future<ProxiedStream> Function(DownloadedVideo video)>(
+      (ref) => (video) async {
+        final proxy = await ref.read(mediaProxyProvider.future);
+        final layout = video.layout;
+        final session = proxy.openLocal(
+          root: layout.root,
+          playlists: layout.playlists,
+          files: {
+            for (final MapEntry(key: name, value: (subtitle, ext))
+                in layout.files.entries)
+              name: LocalMediaFile(
+                video.fileOf(name),
+                subtitle ? LocalMediaKind.subtitle : LocalMediaKind.media,
+                extension: ext,
+              ),
+          },
+        );
+        return ProxiedStream._local(session);
+      },
+    );
 
 /// 代理请求上游所用的客户端：使用该源 `SourceSession`（Cookie、UA）的新客户端。
 /// 集成测试覆盖它，把请求接到 mock 服务器。

@@ -13,6 +13,7 @@ import '../../sources/model/content.dart';
 import '../../sources/network_error_mapping.dart';
 import '../../sources/registry/providers.dart';
 import '../../sources/source.dart';
+import '../download/video_manifest.dart' show VideoSubtitleEntry;
 import 'media_proxy_providers.dart';
 
 export '../../core/network/source_http_client.dart' show NetCancellation;
@@ -71,6 +72,25 @@ final loadSubtitleProvider =
         }
       },
     );
+
+/// 解析已下载的外挂字幕（离线回放，architecture §4.5.1）：与在线时相同的解析器、编码规则与 4 MB 上限，
+/// 不发任何请求。
+Future<SubtitleDocument> loadDownloadedSubtitle(
+  File file,
+  VideoSubtitleEntry entry,
+) async {
+  final length = await file.length();
+  if (length > maxSubtitleBytes) {
+    throw const SubtitleFormatException('字幕文件过大');
+  }
+  return parseSubtitleBytes(
+    await file.readAsBytes(),
+    charset: entry.charset,
+    contentType: entry.contentType,
+    declared: declaredSubtitleFormat(entry.format),
+    log: (m) => debugPrint('[subtitle] $m'),
+  );
+}
 
 /// 按源记住的字幕选择（architecture §5.2「字幕」）。
 sealed class SubtitlePreference {

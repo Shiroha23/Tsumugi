@@ -37,7 +37,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 7;
+  int get schemaVersion => 8;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -121,6 +121,13 @@ class AppDatabase extends _$AppDatabase {
           ]) {
             await m.create(trigger);
           }
+        },
+        // v8：视频下载所选的清晰度（architecture §4.5.1）。
+        from7To8: (m, schema) async {
+          await m.addColumn(
+            schema.downloadUnits,
+            schema.downloadUnits.streamLabel,
+          );
         },
       )(m, from, to);
     },
