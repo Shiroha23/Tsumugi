@@ -30,9 +30,14 @@ class _FakePlatform implements BackgroundDownloadPlatform {
   @override
   Stream<BackgroundDownloadEvent> get events => sink.stream;
 
+  bool showResult = true;
+  Completer<Duration?>? beginGate;
+
   @override
-  Future<void> show({required String text, double? progress}) async =>
-      calls.add('show');
+  Future<bool> show({required String text, double? progress}) async {
+    calls.add('show');
+    return showResult;
+  }
 
   @override
   Future<void> hide() async => calls.add('hide');
@@ -43,6 +48,7 @@ class _FakePlatform implements BackgroundDownloadPlatform {
   @override
   Future<Duration?> beginBackgroundTask() async {
     calls.add('begin');
+    if (beginGate case final g?) return g.future;
     return remaining;
   }
 
@@ -268,4 +274,116 @@ void main() {
       ('排队中：1 项', null),
     );
   });
+
+  test('Android: service unavailable (timeout in foreground / start refused) → suspend when going to background', () async {
+    final c = controller();
+    gate = Completer();
+    await enqueue(['/c/1']);
+    await settle();
+    platform.sink.add(BackgroundDownloadEvent.timeout); // 仍在前台
+    await settle();
+    expect(manager.suspended, isFalse, reason: '前台时不挂起');
+    final shows = platform.calls.where((c) => c == 'show').length;
+    c.didChangeAppLifecycleState(AppLifecycleState.paused);
+    await settle();
+    expect(manager.suspended, isTrue);
+    expect(await status('/c/1'), DownloadStatus.queued);
+    c.didChangeAppLifecycleState(AppLifecycleState.resumed);
+    await settle();
+    expect(
+      platform.calls.where((c) => c == 'show').length,
+      shows,
+      reason: '本次进程内不再启动服务',
+    );
+    if (!gate!.isCompleted) gate!.complete();
+    await manager.idle;
+    expect(await status('/c/1'), DownloadStatus.done);
+    await c.dispose();
+  });
+
+  test('Android: show() refused marks the service unavailable', () async {
+    platform.showResult = false;
+    final c = controller();
+    gate = Completer();
+    await enqueue(['/c/1']);
+    await settle();
+    c.didChangeAppLifecycleState(AppLifecycleState.paused);
+    await settle();
+    expect(manager.suspended, isTrue);
+    await c.dispose();
+  });
+
+  test('Android: permission is not requested while in background', () async {
+    final c = controller();
+    c.didChangeAppLifecycleState(AppLifecycleState.paused);
+    gate = Completer();
+    await enqueue(['/c/1']);
+    await settle();
+    expect(platform.calls, isNot(contains('permission')));
+    c.didChangeAppLifecycleState(AppLifecycleState.resumed);
+    await settle();
+    expect(platform.calls, contains('permission'));
+    await c.dispose();
+  });
+
+  test('iOS: quick background/foreground switching does not suspend in the foreground', () async {
+    final c = controller(ios: true);
+    gate = Completer();
+    await enqueue(['/c/1']);
+    await settle();
+    platform.beginGate = Completer();
+    c.didChangeAppLifecycleState(AppLifecycleState.paused);
+    await settle();
+    c.didChangeAppLifecycleState(AppLifecycleState.resumed);
+    // 过期的 begin 结果迟到：不再建立计时器。
+    platform.beginGate!.complete(const Duration(seconds: 30));
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    expect(manager.suspended, isFalse);
+    // 迟到的到期通知（已在前台）同样忽略。
+    platform.sink.add(BackgroundDownloadEvent.expiring);
+    await settle();
+    expect(manager.suspended, isFalse);
+    await c.dispose();
+  });
+
+  test('iOS: no grace period returned → suspend immediately', () async {
+    platform.remaining = null;
+    final c = controller(ios: true);
+    gate = Completer();
+    await enqueue(['/c/1']);
+    await settle();
+    c.didChangeAppLifecycleState(AppLifecycleState.paused);
+    await settle();
+    expect(manager.suspended, isTrue);
+    expect(platform.calls.last, 'end');
+    await c.dispose();
+  });
+
+  test('pauseAll does not overwrite units that completed meanwhile', () async {
+    await enqueue(['/c/1']);
+    await manager.idle;
+    expect(await status('/c/1'), DownloadStatus.done);
+    await manager.pauseAll();
+    expect(await status('/c/1'), DownloadStatus.done);
+  });
+
+  test(
+    'suspend while the queue is claiming a unit puts it back to queued',
+    () async {
+      gate = Completer();
+      // enqueue 触发 _pump；不等它，立刻挂起（认领与挂起交错）。
+      final adding = enqueue(['/c/1', '/c/2']);
+      await Future<void>.delayed(Duration.zero);
+      await manager.suspend();
+      await adding;
+      await settle();
+      expect(await status('/c/1'), DownloadStatus.queued);
+      expect(await status('/c/2'), DownloadStatus.queued);
+      if (!gate!.isCompleted) gate!.complete();
+      manager.resumeQueue();
+      await settle();
+      await manager.idle;
+      expect(await status('/c/2'), DownloadStatus.done);
+    },
+  );
 }

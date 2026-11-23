@@ -33,9 +33,9 @@ class DownloadService : Service() {
         /** 通知中的「暂停全部」、系统时限到：转给 Dart（由 MainActivity 设置）。 */
         var listener: ((String) -> Unit)? = null
 
+        /** 服务已进入前台。由服务在 startForeground 成功后置 true；MainActivity 停止服务时同步置 false。 */
         @Volatile
         var running = false
-            private set
 
         fun ensureChannel(context: Context) {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -101,22 +101,33 @@ class DownloadService : Service() {
         when (intent?.action) {
             ACTION_PAUSE_ALL -> {
                 listener?.invoke("pauseAll")
+                // 服务原本不在前台（例如刚被停止）：这次是作为普通服务被启动的，处理完即停止。
+                if (!running) stopSelf(startId)
                 return START_NOT_STICKY
             }
             else -> {
                 val text = intent?.getStringExtra(EXTRA_TEXT) ?: ""
                 val progress = intent?.getIntExtra(EXTRA_PROGRESS, -1) ?: -1
                 val notification = build(this, text, progress)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    startForeground(
-                        NOTIFICATION_ID,
-                        notification,
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
-                    )
-                } else {
-                    startForeground(NOTIFICATION_ID, notification)
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        startForeground(
+                            NOTIFICATION_ID,
+                            notification,
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+                        )
+                    } else {
+                        startForeground(NOTIFICATION_ID, notification)
+                    }
+                    running = true
+                } catch (e: RuntimeException) {
+                    // Android 12+ 已转到后台（ForegroundServiceStartNotAllowedException）、
+                    // Android 15 当日 dataSync 时限已用完等：不进入前台，通知 Dart 并停止。
+                    android.util.Log.w("Tsumugi", "startForeground failed: $e")
+                    running = false
+                    listener?.invoke("unavailable")
+                    stopSelf()
                 }
-                running = true
             }
         }
         // 进程被杀后不由系统重启：下载在 Dart 中，重启服务没有意义。
@@ -127,6 +138,13 @@ class DownloadService : Service() {
     override fun onTimeout(startId: Int, fgsType: Int) {
         listener?.invoke("timeout")
         stopSelf()
+    }
+
+    /** 从最近任务中划掉：Flutter 引擎随界面销毁，下载已停止，不留下空转的服务与通知。 */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        running = false
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {

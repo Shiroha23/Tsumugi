@@ -15,7 +15,8 @@ import 'download_repository.dart';
 /// - iOS：`beginBackgroundTask` 的宽限时间（通常约 30 s）。
 abstract interface class BackgroundDownloadPlatform {
   /// Android：启动或更新前台服务的通知。[progress] 为 0–1，未知时为 null。
-  Future<void> show({required String text, double? progress});
+  /// 返回 false 表示前台服务无法启动（从后台启动被拒、当日时限已用完等）。
+  Future<bool> show({required String text, double? progress});
 
   /// Android：停止前台服务。
   Future<void> hide();
@@ -42,6 +43,9 @@ enum BackgroundDownloadEvent {
 
   /// iOS：后台宽限时间即将到期（系统的到期回调）。
   expiring,
+
+  /// Android：前台服务启动后未能进入前台（`startForeground` 被拒）。
+  unavailable,
 }
 
 /// 经 `MethodChannel` 与 `MainActivity` / `AppDelegate` 中的原生实现通信（不引入第三方插件）。
@@ -54,6 +58,7 @@ class MethodChannelBackgroundDownloadPlatform
         'pauseAll' => BackgroundDownloadEvent.pauseAll,
         'timeout' => BackgroundDownloadEvent.timeout,
         'expiring' => BackgroundDownloadEvent.expiring,
+        'unavailable' => BackgroundDownloadEvent.unavailable,
         _ => null,
       };
       if (event != null) _events.add(event);
@@ -80,12 +85,13 @@ class MethodChannelBackgroundDownloadPlatform
   }
 
   @override
-  Future<void> show({required String text, double? progress}) =>
-      _call<void>('show', {
+  Future<bool> show({required String text, double? progress}) async =>
+      await _call<bool>('show', {
         'text': text,
         // 千分比；-1 表示进度未知。
         'progress': progress == null ? -1 : (progress * 1000).round(),
-      });
+      }) ??
+      false;
 
   @override
   Future<void> hide() => _call<void>('hide');
@@ -110,7 +116,7 @@ class NoopBackgroundDownloadPlatform implements BackgroundDownloadPlatform {
   const NoopBackgroundDownloadPlatform();
 
   @override
-  Future<void> show({required String text, double? progress}) async {}
+  Future<bool> show({required String text, double? progress}) async => true;
 
   @override
   Future<void> hide() async {}
@@ -174,6 +180,13 @@ class BackgroundDownloadController with WidgetsBindingObserver {
   Timer? _pendingUpdate;
   bool _disposed = false;
 
+  /// 本次进程内前台服务不可用（Android 15 时限已到、启动被拒）：不再尝试启动，
+  /// 进入后台时与 iOS 一样挂起队列。
+  bool _serviceUnavailable = false;
+
+  /// [_beginBackgroundTask] 的代号：前后台快速切换时丢弃过期的续体。
+  int _taskGeneration = 0;
+
   void attach() {
     WidgetsBinding.instance.addObserver(this);
     _units = repository.watchAllUnits().listen(_onUnits);
@@ -219,7 +232,7 @@ class BackgroundDownloadController with WidgetsBindingObserver {
   }
 
   void _update() {
-    if (_disposed || usesBackgroundTask) return;
+    if (_disposed || usesBackgroundTask || _serviceUnavailable) return;
     final active = activeOf(_latest);
     if (active.isEmpty || manager.suspended) {
       _pendingUpdate?.cancel();
@@ -240,25 +253,36 @@ class BackgroundDownloadController with WidgetsBindingObserver {
       return;
     }
     _lastUpdate = now;
-    if (!_askedPermission) {
+    // 在后台时系统不会弹出权限对话框：等回到前台再问。
+    if (!_askedPermission && !_inBackground) {
       _askedPermission = true;
       platform.requestNotificationPermission().ignore();
     }
     _shown = true;
     final (text, progress) = describe(active);
-    platform.show(text: text, progress: progress).ignore();
+    platform.show(text: text, progress: progress).then((ok) {
+      if (!ok) _markServiceUnavailable();
+    }).ignore();
+  }
+
+  void _markServiceUnavailable() {
+    _serviceUnavailable = true;
+    _shown = false;
+    _pendingUpdate?.cancel();
+    _pendingUpdate = null;
+    if (_inBackground && activeOf(_latest).isNotEmpty) {
+      manager.suspend().ignore();
+    }
   }
 
   void _onEvent(BackgroundDownloadEvent e) {
     switch (e) {
       case BackgroundDownloadEvent.pauseAll:
         manager.pauseAll().ignore();
-      case BackgroundDownloadEvent.timeout:
-        // 前台服务已被系统停止。在后台时进程随时可能被挂起：挂起队列，回到前台继续。
-        _shown = false;
-        if (_inBackground) {
-          manager.suspend().ignore();
-        }
+      case BackgroundDownloadEvent.timeout ||
+          BackgroundDownloadEvent.unavailable:
+        // 前台服务已被系统停止 / 无法启动：本次进程内不再尝试；在后台时挂起队列，回到前台继续。
+        _markServiceUnavailable();
       case BackgroundDownloadEvent.expiring:
         _suspendForBackground();
     }
@@ -270,9 +294,15 @@ class BackgroundDownloadController with WidgetsBindingObserver {
       case AppLifecycleState.paused || AppLifecycleState.hidden:
         if (_inBackground) return;
         _inBackground = true;
-        if (usesBackgroundTask) _beginBackgroundTask().ignore();
+        if (usesBackgroundTask) {
+          _beginBackgroundTask().ignore();
+        } else if (_serviceUnavailable && activeOf(_latest).isNotEmpty) {
+          // 没有前台服务保护：与 iOS 一样先挂起，回到前台继续。
+          manager.suspend().ignore();
+        }
       case AppLifecycleState.resumed:
         _inBackground = false;
+        _taskGeneration++;
         _expiry?.cancel();
         _expiry = null;
         if (_taskActive) {
@@ -289,14 +319,16 @@ class BackgroundDownloadController with WidgetsBindingObserver {
   Future<void> _beginBackgroundTask() async {
     if (activeOf(_latest).isEmpty || _taskActive) return;
     _taskActive = true;
+    final generation = ++_taskGeneration;
     final remaining = await platform.beginBackgroundTask();
-    if (!_inBackground || !_taskActive) return;
+    if (generation != _taskGeneration || !_inBackground) return;
     if (remaining == null) {
       // 拿不到宽限时间：立即挂起，避免被系统挂起时请求半途中断。
       _suspendForBackground();
       return;
     }
     final wait = remaining - safetyMargin;
+    _expiry?.cancel();
     _expiry = Timer(
       wait.isNegative ? Duration.zero : wait,
       _suspendForBackground,
@@ -306,6 +338,8 @@ class BackgroundDownloadController with WidgetsBindingObserver {
   void _suspendForBackground() {
     _expiry?.cancel();
     _expiry = null;
+    // 迟到的到期通知（已回到前台）：不挂起。
+    if (!_inBackground) return;
     manager.suspend().whenComplete(() {
       if (_taskActive) {
         _taskActive = false;

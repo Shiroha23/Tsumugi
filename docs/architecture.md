@@ -374,10 +374,11 @@ docs/
   （共用网络层、会话与数据库），用不上它们的主要功能，反而多一层原生依赖与许可证审查。Windows 不需要（桌面应用不会被挂起）。
   - Dart 一侧（`BackgroundDownloadController`）订阅 `download_units`：有 `queued` / `running` 时（每秒至多一次）更新通知，
     文字为“正在下载 n 项，剩余 m 项”，进度为下载中的 unit 已完成文件数之和 / 总数之和；第一次显示前请求通知权限。
-  - 「暂停全部」→ 全部未完成的 unit 记为 `paused`。时限到或宽限时间将尽 → `DownloadManager.suspend()`：进行中的任务中止并记为 `queued`，
-    不开始新任务；回到前台 `resumeQueue()`。iOS 的宽限时间按 `backgroundTimeRemaining`（刚进入后台时可能仍为“无限”，按 25 s 计）提前 5 s 挂起。
-  - 从后台启动前台服务会被 Android 12+ 拒绝：服务只在应用在前台、队列开始有任务时启动，之后在后台只更新通知；启动失败时下载照常在前台进行。
-    界面（`MainActivity`）被销毁时停止服务（Flutter 引擎随之销毁，下载也停止）。
+  - 「暂停全部」→ 全部未完成的 unit 记为 `paused`。时限到或宽限时间将尽 → `DownloadManager.suspend()`：进行中的任务记为 `queued`
+    （视频分片请求立即中止，漫画 / 小说的当前请求结束后丢弃结果），不开始新任务；回到前台 `resumeQueue()`。iOS 的宽限时间按 `backgroundTimeRemaining`（刚进入后台时可能仍为“无限”，按 25 s 计）提前 5 s 挂起。
+  - 从后台启动前台服务会被 Android 12+ 拒绝：服务只在应用在前台、队列开始有任务时启动，之后在后台只更新通知。
+    启动失败、进入前台失败（`startForeground` 被拒）或时限已到时，本次进程内不再尝试，进入后台时与 iOS 一样挂起队列。
+    Flutter 引擎销毁（界面被销毁、从最近任务划掉，`stopWithTask`）时停止服务，下载也随之停止。
   - 未做：`BGProcessingTask`（iOS 在充电 / 空闲时继续）——它在系统选定的时机冷启动或唤醒应用，下载需要的源实例、会话与数据库都要在没有界面的情况下
     重建，且同样有时限；收益不确定，留待需要时再评估。
 

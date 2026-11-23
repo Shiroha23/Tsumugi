@@ -234,7 +234,6 @@ class DownloadManager {
     _pump();
   }
 
-  /// 暂停 / 继续一个条目的全部未完成 unit。
   /// 暂停全部未完成的 unit（后台下载通知中的「暂停全部」）。
   Future<void> pauseAll() async {
     for (final u in await repository.allUnits()) {
@@ -245,6 +244,8 @@ class DownloadManager {
           u.itemId,
           u.unitId,
           DownloadStatus.paused,
+          // 快照之后已完成（done）或失败的不覆盖。
+          onlyFrom: const {DownloadStatus.queued, DownloadStatus.running},
         );
         _cancel(u);
       }
@@ -283,6 +284,7 @@ class DownloadManager {
     _pump();
   }
 
+  /// 暂停 / 继续一个条目的全部未完成 unit。
   Future<void> pauseItem(String sourceId, String itemId) async {
     for (final u in await _unitsOf(sourceId, itemId)) {
       if (u.status == DownloadStatus.queued ||
@@ -292,6 +294,8 @@ class DownloadManager {
           itemId,
           u.unitId,
           DownloadStatus.paused,
+          // 快照之后已完成（done）或失败的不覆盖。
+          onlyFrom: const {DownloadStatus.queued, DownloadStatus.running},
         );
         _cancel(u);
       }
@@ -413,6 +417,17 @@ class DownloadManager {
           continue;
         }
         if (!await repository.claim(u.sourceId, u.itemId, u.unitId)) continue;
+        if (_suspended || _disposed) {
+          // 认领期间被挂起 / 退出：suspend() 的快照里没有它，放回队列。
+          await repository.setStatus(
+            u.sourceId,
+            u.itemId,
+            u.unitId,
+            DownloadStatus.queued,
+            onlyFrom: const {DownloadStatus.running},
+          );
+          break;
+        }
         final job = _jobs[u.sourceId] = _Job(u);
         unawaited(_run(job));
       }

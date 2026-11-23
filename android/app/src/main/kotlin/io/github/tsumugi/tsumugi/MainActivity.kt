@@ -29,14 +29,15 @@ class MainActivity : FlutterActivity() {
         ch.setMethodCallHandler { call, result ->
             when (call.method) {
                 "show" -> {
-                    show(
-                        call.argument<String>("text") ?: "",
-                        call.argument<Int>("progress") ?: -1,
+                    result.success(
+                        show(
+                            call.argument<String>("text") ?: "",
+                            call.argument<Int>("progress") ?: -1,
+                        ),
                     )
-                    result.success(null)
                 }
                 "hide" -> {
-                    stopService(Intent(this, DownloadService::class.java))
+                    stopDownloadService()
                     result.success(null)
                 }
                 "requestNotificationPermission" -> {
@@ -54,14 +55,21 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun show(text: String, progress: Int) {
+    private fun stopDownloadService() {
+        // 同步清掉：onDestroy 在 stopService 之后才异步执行，期间的 show 不能只更新一条已无服务的通知。
+        DownloadService.running = false
+        stopService(Intent(this, DownloadService::class.java))
+    }
+
+    /** 启动或更新前台服务；无法启动时返回 false。 */
+    private fun show(text: String, progress: Int): Boolean {
         if (DownloadService.running) {
             // 已在前台：只更新通知（从后台再次启动前台服务会被系统拒绝）。
             getSystemService(NotificationManager::class.java).notify(
                 DownloadService.NOTIFICATION_ID,
                 DownloadService.build(this, text, progress),
             )
-            return
+            return true
         }
         val intent = Intent(this, DownloadService::class.java)
             .setAction(DownloadService.ACTION_UPDATE)
@@ -73,10 +81,12 @@ class MainActivity : FlutterActivity() {
             } else {
                 startService(intent)
             }
+            // 服务进入前台失败时另以 "unavailable" 事件通知。
+            return true
         } catch (e: RuntimeException) {
-            // Android 12+ 不允许从后台启动前台服务（ForegroundServiceStartNotAllowedException）、
-            // 或当日 dataSync 时限已用完：下载照常在前台进行。
+            // Android 12+ 不允许从后台启动前台服务（ForegroundServiceStartNotAllowedException）等。
             android.util.Log.w("Tsumugi", "download service not started: $e")
+            return false
         }
     }
 
@@ -84,12 +94,9 @@ class MainActivity : FlutterActivity() {
         channel?.setMethodCallHandler(null)
         channel = null
         DownloadService.listener = null
+        // 引擎销毁后下载随之停止：不留下空转的前台服务与通知。
+        stopDownloadService()
         super.cleanUpFlutterEngine(flutterEngine)
     }
 
-    override fun onDestroy() {
-        // 界面被销毁时 Flutter 引擎随之销毁，下载也停止：不留下空转的前台服务。
-        if (isFinishing) stopService(Intent(this, DownloadService::class.java))
-        super.onDestroy()
-    }
 }
