@@ -164,6 +164,20 @@ void main() {
     },
   );
 
+  test('truncated single file (header intact) is treated as broken', () async {
+    await manager.start();
+    await enqueue(['ep1'], label: '360p');
+    await manager.idle;
+    final dir = await store.unitDir(_source, _item, 'ep1');
+    final media = File('${dir.path}/media.bin');
+    media.writeAsBytesSync(media.readAsBytesSync().sublist(0, 4096));
+    expect(await library.video(_source, _item, 'ep1'), isNull);
+    expect(
+      (await repo.unit(_source, _item, 'ep1'))!.errorCode,
+      downloadFilesMissing,
+    );
+  });
+
   test('write failure → E_STORAGE', () async {
     // 让剧集目录的位置被一个文件占住，创建目录失败。
     final dir = await store.unitDir(_source, _item, 'ep1');

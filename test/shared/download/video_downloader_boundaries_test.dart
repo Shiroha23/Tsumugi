@@ -10,6 +10,7 @@ import 'package:tsumugi/core/network/dio_source_http_client.dart';
 import 'package:tsumugi/core/network/network_exception.dart';
 import 'package:tsumugi/core/network/source_http_client.dart';
 import 'package:tsumugi/shared/download/video_downloader.dart';
+import 'package:tsumugi/shared/download/video_manifest.dart';
 import 'package:tsumugi/sources/model/content.dart';
 import 'package:tsumugi/sources/source.dart';
 
@@ -31,7 +32,11 @@ void main() {
         req.response.statusCode = 404;
         return req.response.close();
       }
-      await h(req);
+      try {
+        await h(req);
+      } on Object {
+        // 客户端已断开（超时 / 取消用例）：写入失败不影响其他用例。
+      }
     });
   });
   tearDownAll(() => upstream.close(force: true));
@@ -66,7 +71,7 @@ void main() {
     String type = 'application/vnd.apple.mpegurl',
   }) => routes[path] = (req) {
     req.response.headers.set('content-type', type);
-    req.response.write(body);
+    req.response.add(utf8.encode(body));
     return req.response.close();
   };
 
@@ -444,4 +449,212 @@ void main() {
       isA<Map>(),
     );
   });
+
+  test('slow response headers count against the metadata time limit', () async {
+    routes['/index.m3u8'] = (req) async {
+      await Future<void>.delayed(const Duration(seconds: 3));
+      req.response.write('#EXTM3U\n');
+      await req.response.close();
+    };
+    final started = DateTime.now();
+    await expectLater(
+      run(
+        limits: const VideoDownloadLimits(
+          metadataTimeout: Duration(milliseconds: 500),
+        ),
+      ),
+      net(NetworkErrorKind.timeout),
+    );
+    expect(
+      DateTime.now().difference(started),
+      lessThan(const Duration(seconds: 2)),
+    );
+  });
+
+  test('slow key counts against the metadata time limit', () async {
+    text(
+      '/index.m3u8',
+      media(['/a.ts'], extra: '#EXT-X-KEY:METHOD=AES-128,URI="/k"\n'),
+    );
+    bytes('/a.ts', List.filled(32, 1));
+    routes['/k'] = (req) async {
+      await Future<void>.delayed(const Duration(seconds: 3));
+      req.response.add(List.filled(16, 1));
+      await req.response.close();
+    };
+    final started = DateTime.now();
+    await expectLater(
+      run(
+        limits: const VideoDownloadLimits(
+          metadataTimeout: Duration(milliseconds: 500),
+        ),
+      ),
+      net(NetworkErrorKind.timeout),
+    );
+    expect(
+      DateTime.now().difference(started),
+      lessThan(const Duration(seconds: 2)),
+    );
+  });
+
+  test('resume: a 206 carrying a different ETag is not appended', () async {
+    var version = 'A';
+    final ranges = <String?>[];
+    routes['/v.mp4'] = (req) {
+      ranges.add(req.headers.value('range'));
+      final body = ts(1880);
+      if (version == 'B') body[1000] = 0x55;
+      req.response.headers.set('etag', '"$version"');
+      final range = req.headers.value('range');
+      if (range != null) {
+        // 忽略 If-Range，照样按区间返回新版本。
+        final from = int.parse(RegExp(r'bytes=(\d+)-').firstMatch(range)![1]!);
+        req.response
+          ..statusCode = 206
+          ..headers.set('content-range', 'bytes $from-1879/1880');
+        req.response
+          ..contentLength = 1880 - from
+          ..add(body.sublist(from));
+      } else {
+        req.response
+          ..contentLength = body.length
+          ..add(body);
+      }
+      return req.response.close();
+    };
+    await run(url: '/v.mp4', type: StreamType.mp4);
+    final media = File('${dir.path}/media.bin');
+    media.writeAsBytesSync(media.readAsBytesSync().sublist(0, 500));
+    version = 'B';
+    ranges.clear();
+    await run(url: '/v.mp4', type: StreamType.mp4);
+    expect(ranges, ['bytes=500-', null], reason: '续传被拒后从头下载');
+    expect(media.readAsBytesSync()[1000], 0x55);
+    expect(media.lengthSync(), 1880);
+  });
+
+  test('long quality labels and track names still read back', () async {
+    text(
+      '/index.m3u8',
+      '#EXTM3U\n'
+          '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="s",NAME="${'名' * 400}",URI="/s.m3u8"\n'
+          '#EXT-X-STREAM-INF:BANDWIDTH=1,SUBTITLES="s",RESOLUTION=${'9' * 40}x1\n/v.m3u8\n',
+    );
+    text('/v.m3u8', media(['/a.ts']));
+    text('/s.m3u8', media(['/s.vtt']));
+    bytes('/a.ts', ts());
+    bytes('/s.vtt', utf8.encode('WEBVTT\n\n00:00.000 --> 00:01.000\nx\n'));
+    await VideoDownloadTask(
+      client: client,
+      baseUrl: Uri.parse('http://video.example.com'),
+      content: VideoContent(
+        streams: [
+          StreamRef(
+            url: '/index.m3u8',
+            type: StreamType.hls,
+            quality: 'q' * 400,
+          ),
+        ],
+      ),
+      preferredLabel: null,
+      dir: dir,
+      abort: NetCancellation(),
+      onProgress: (_, _, _) async {},
+    ).run();
+    final m = VideoManifest.decode(
+      File('${dir.path}/video.json').readAsStringSync(),
+    );
+    expect(m.label.length, 256);
+    expect(m.tracks[1].name!.length, 256);
+    expect(m.resolution, isNull);
+  });
+
+  test('E_LIMIT on a retry deletes the earlier partial download', () async {
+    text('/index.m3u8', media(['/a.ts', '/b.ts']));
+    bytes('/a.ts', ts());
+    bytes('/b.ts', ts());
+    await run();
+    expect(written(), hasLength(2));
+    text('/index.m3u8', media(List.generate(10, (i) => '/s$i.ts')));
+    await expectLater(
+      run(limits: const VideoDownloadLimits(maxItems: 5)),
+      code(SourceErrorCode.limit),
+    );
+    expect(dir.existsSync() && dir.listSync().isNotEmpty, isFalse);
+  });
+
+  test('segments requested without a range must return 200, not 206', () async {
+    text('/index.m3u8', media(['/a.ts']));
+    bytes(
+      '/a.ts',
+      ts(),
+      status: 206,
+      headers: {'content-range': 'bytes 0-1879/18800'},
+    );
+    await expectLater(run(), code(SourceErrorCode.http));
+    expect(written(), isEmpty);
+  });
+
+  test(
+    'a small playlist read entirely in the peek still counts against the total',
+    () async {
+      text('/index.m3u8', '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\n/v.m3u8\n');
+      text('/v.m3u8', media(['/a.ts', '/b.ts']));
+      await expectLater(
+        run(limits: const VideoDownloadLimits(maxTotalPlaylistBytes: 100)),
+        code(SourceErrorCode.limit),
+      );
+    },
+  );
+
+  test(
+    'a default Range header from the manifest never yields a partial file',
+    () async {
+      final withRange = DioSourceHttpClient(
+        SourceNetworkConfig(
+          sourceId: 'com.example.video',
+          baseUrl: Uri.parse('http://video.example.com'),
+          defaultHeaders: const {'Range': 'bytes=0-99'},
+          timeout: const Duration(seconds: 5),
+          maxRetries: 0,
+        ),
+        adapter: IOHttpClientAdapter(
+          createHttpClient: () => HttpClient()
+            ..connectionFactory = (uri, proxyHost, proxyPort) =>
+                Socket.startConnect(
+                  InternetAddress.loopbackIPv4,
+                  upstream.port,
+                ),
+        ),
+      );
+      addTearDown(withRange.close);
+      routes['/v.mp4'] = (req) {
+        final body = ts();
+        if (req.headers.value('range') != null) {
+          req.response
+            ..statusCode = 206
+            ..headers.set('content-range', 'bytes 0-99/1880')
+            ..add(body.sublist(0, 100));
+        } else {
+          req.response.add(body);
+        }
+        return req.response.close();
+      };
+      await expectLater(
+        VideoDownloadTask(
+          client: withRange,
+          baseUrl: Uri.parse('http://video.example.com'),
+          content: const VideoContent(
+            streams: [StreamRef(url: '/v.mp4', type: StreamType.mp4)],
+          ),
+          preferredLabel: null,
+          dir: dir,
+          abort: NetCancellation(),
+          onProgress: (_, _, _) async {},
+        ).run(),
+        code(SourceErrorCode.http),
+      );
+      expect(File('${dir.path}/media.bin').existsSync(), isFalse);
+    },
+  );
 }
