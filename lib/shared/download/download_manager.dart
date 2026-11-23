@@ -277,6 +277,28 @@ class DownloadManager {
     // 不等进行中的请求结束（漫画 / 小说的当前请求不中断）：结果会被丢弃，状态已是 queued。
   }
 
+  /// 把没有任务在跑的 `running` unit 改回 `queued`（进程曾在挂起完成前被系统冻结），然后继续处理队列。
+  Future<void> recoverStale() async {
+    if (!_started || _disposed) return;
+    for (final u in await repository.allUnits()) {
+      if (u.status != DownloadStatus.running) continue;
+      final job = _jobs[u.sourceId];
+      if (job != null &&
+          job.unit.itemId == u.itemId &&
+          job.unit.unitId == u.unitId) {
+        continue;
+      }
+      await repository.setStatus(
+        u.sourceId,
+        u.itemId,
+        u.unitId,
+        DownloadStatus.queued,
+        onlyFrom: const {DownloadStatus.running},
+      );
+    }
+    _pump();
+  }
+
   /// 取消 [suspend]，继续处理队列。
   void resumeQueue() {
     if (!_suspended) return;

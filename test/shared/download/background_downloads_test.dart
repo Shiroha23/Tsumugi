@@ -30,6 +30,11 @@ class _FakePlatform implements BackgroundDownloadPlatform {
   @override
   Stream<BackgroundDownloadEvent> get events => sink.stream;
 
+  Future<void> Function()? expiring;
+
+  @override
+  set onExpiring(Future<void> Function()? handler) => expiring = handler;
+
   bool showResult = true;
   Completer<Duration?>? beginGate;
 
@@ -417,4 +422,33 @@ void main() {
       await c.dispose();
     },
   );
+
+  test('iOS: native expiry waits for the suspension to be written', () async {
+    final c = controller(ios: true);
+    platform.remaining = const Duration(minutes: 10);
+    gate = Completer();
+    await enqueue(['/c/1']);
+    await settle();
+    c.didChangeAppLifecycleState(AppLifecycleState.paused);
+    await settle();
+    await platform.expiring!();
+    // 回复原生之前，进行中的已记为 queued。
+    expect(manager.suspended, isTrue);
+    expect(await status('/c/1'), DownloadStatus.queued);
+    await c.dispose();
+  });
+
+  test('resume repairs units left running without a job', () async {
+    final c = controller(ios: true);
+    await enqueue(['/c/1']);
+    await manager.idle;
+    // 模拟进程在挂起写完前被冻结：数据库里残留 running。
+    await repo.setStatus(_source, _item, '/c/1', DownloadStatus.running);
+    c.didChangeAppLifecycleState(AppLifecycleState.paused);
+    c.didChangeAppLifecycleState(AppLifecycleState.resumed);
+    await settle();
+    await manager.idle;
+    expect(await status('/c/1'), DownloadStatus.done);
+    await c.dispose();
+  });
 }

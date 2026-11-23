@@ -376,7 +376,7 @@ docs/
   - Dart 一侧（`BackgroundDownloadController`）订阅 `download_units`：有 `queued` / `running` 时（每秒至多一次）更新通知，
     文字为“正在下载 n 项，剩余 m 项”，进度为下载中的 unit 已完成文件数之和 / 总数之和；第一次显示前请求通知权限。
   - 「暂停全部」→ 全部未完成的 unit 记为 `paused`。时限到或宽限时间将尽 → `DownloadManager.suspend()`：进行中的任务记为 `queued`
-    （视频分片请求立即中止，漫画 / 小说的当前请求结束后丢弃结果），不开始新任务；回到前台 `resumeQueue()`。iOS 的宽限时间按 `backgroundTimeRemaining`（刚进入后台时可能仍为“无限”，按 25 s 计）提前 5 s 挂起。
+    （视频分片请求立即中止，漫画 / 小说的当前请求结束后丢弃结果），不开始新任务；回到前台 `resumeQueue()`。iOS 的宽限时间按 `backgroundTimeRemaining`（刚进入后台时可能仍为“无限”，按 25 s 计）提前 5 s 挂起。系统的到期回调先让 Dart 挂起队列、等它回复（最多 1 s）再结束后台任务；回到前台时把没有任务在跑的 `running` 改回 `queued`（进程在挂起写完前被冻结时的兜底）。
   - 从后台启动前台服务会被 Android 12+ 拒绝：服务只在应用在前台、队列开始有任务时启动，之后在后台只更新通知。
     启动失败、进入前台失败（`startForeground` 被拒）或时限已到时，本次进程内不再尝试，进入后台时与 iOS 一样挂起队列。
     Flutter 引擎销毁（界面被销毁、从最近任务划掉，`stopWithTask`）时停止服务，下载也随之停止。

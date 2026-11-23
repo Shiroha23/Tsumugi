@@ -32,6 +32,9 @@ abstract interface class BackgroundDownloadPlatform {
 
   /// 平台事件。
   Stream<BackgroundDownloadEvent> get events;
+
+  /// iOS：收到系统的到期通知时调用并等待它完成（挂起队列），之后原生一侧才结束后台任务。
+  set onExpiring(Future<void> Function()? handler);
 }
 
 enum BackgroundDownloadEvent {
@@ -61,9 +64,20 @@ class MethodChannelBackgroundDownloadPlatform
         'unavailable' => BackgroundDownloadEvent.unavailable,
         _ => null,
       };
+      if (event == BackgroundDownloadEvent.expiring) {
+        // 等挂起写完再回复：原生在回复后结束后台任务（最多等 1 s）。
+        await _onExpiring?.call();
+        return null;
+      }
       if (event != null) _events.add(event);
+      return null;
     });
   }
+
+  Future<void> Function()? _onExpiring;
+
+  @override
+  set onExpiring(Future<void> Function()? handler) => _onExpiring = handler;
 
   static const channelName = 'io.github.tsumugi/background_download';
 
@@ -132,6 +146,9 @@ class NoopBackgroundDownloadPlatform implements BackgroundDownloadPlatform {
 
   @override
   Stream<BackgroundDownloadEvent> get events => const Stream.empty();
+
+  @override
+  set onExpiring(Future<void> Function()? handler) {}
 }
 
 /// 当前平台的实现：Android / iOS 用原生通道，其余为空实现。
@@ -189,6 +206,12 @@ class BackgroundDownloadController with WidgetsBindingObserver {
 
   void attach() {
     WidgetsBinding.instance.addObserver(this);
+    platform.onExpiring = () async {
+      _expiry?.cancel();
+      _expiry = null;
+      if (!_inBackground) return;
+      await manager.suspend();
+    };
     _units = repository.watchAllUnits().listen(_onUnits);
     _events = platform.events.listen(_onEvent);
   }
@@ -196,6 +219,7 @@ class BackgroundDownloadController with WidgetsBindingObserver {
   Future<void> dispose() async {
     _disposed = true;
     WidgetsBinding.instance.removeObserver(this);
+    platform.onExpiring = null;
     _expiry?.cancel();
     _pendingUpdate?.cancel();
     await _units?.cancel();
@@ -318,6 +342,8 @@ class BackgroundDownloadController with WidgetsBindingObserver {
           platform.endBackgroundTask().ignore();
         }
         manager.resumeQueue();
+        // 兜底：系统在挂起写完前冻结了进程时，可能留下没有任务在跑的 running。
+        manager.recoverStale().ignore();
         _update();
       case AppLifecycleState.inactive || AppLifecycleState.detached:
         break;

@@ -47,9 +47,15 @@ import UIKit
   private func beginDownloadTask() -> Double {
     if downloadTask == .invalid {
       downloadTask = UIApplication.shared.beginBackgroundTask(withName: "downloads") { [weak self] in
-        // 到期：通知 Dart 挂起队列，并立即结束任务（否则系统会终止应用）。
-        self?.downloadChannel?.invokeMethod("expiring", arguments: nil)
-        self?.endDownloadTask()
+        // 到期：先让 Dart 挂起队列（把进行中的任务记为 queued），它回复后再结束任务；
+        // Dart 来不及回复时 1 s 后无论如何结束（不结束会被系统终止）。回到前台时 Dart 还会修正残留的 running。
+        guard let self = self else { return }
+        self.downloadChannel?.invokeMethod("expiring", arguments: nil) { _ in
+          self.endDownloadTask()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+          self.endDownloadTask()
+        }
       }
     }
     if downloadTask == .invalid { return 0 }
