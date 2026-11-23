@@ -349,10 +349,13 @@ class VideoDownloadTask {
     } on FileSystemException catch (e) {
       throw DownloadStorageException(e);
     }
+    // IOSink 的写入错误只经 done 报告：立刻接住，并让等待中的网络读取结束（File.openWrite 的约定）。
+    final sinkError = _watchSink(sink, rest);
     var written = 0;
     var sinceFlush = 0;
     var failed = false;
     Future<void> add(List<int> chunk) async {
+      sinkError.check();
       _bytes += chunk.length;
       written += chunk.length;
       if (_bytes > limits.maxBytes) {
@@ -375,6 +378,7 @@ class VideoDownloadTask {
       while (await rest.moveNext()) {
         await add(rest.current);
       }
+      sinkError.check();
       await sink.flush();
     } on FileSystemException catch (e) {
       failed = true;
@@ -677,6 +681,15 @@ class VideoDownloadTask {
       }
     } else {
       _checkStatus(up);
+      // 没有发区间请求：206（只给了一部分）不能当作完整分片。
+      if (up.status != HttpStatus.ok) {
+        up.cancel();
+        throw SourceException(
+          SourceErrorCode.http,
+          'HTTP ${up.status}',
+          up.status,
+        );
+      }
     }
     if (!_identity(up) && up.status != HttpStatus.ok) {
       up.cancel();
@@ -750,7 +763,9 @@ class VideoDownloadTask {
     try {
       await sub.create(recursive: true);
       sink = part.openWrite();
+      final sinkError = _watchSink(sink, rest);
       Future<void> add(List<int> chunk) async {
+        sinkError.check();
         written += chunk.length;
         _bytes += chunk.length;
         if (range != null && written > range.$2) {
@@ -770,6 +785,7 @@ class VideoDownloadTask {
       while (await rest.moveNext()) {
         await add(rest.current);
       }
+      sinkError.check();
       await sink.flush();
       await sink.close();
       sink = null;
@@ -1070,6 +1086,8 @@ class VideoDownloadTask {
   }) async {
     final out = BytesBuilder(copy: false)..add(head);
     try {
+      // 整个响应可能都在预读的 head 里：先检查一次。
+      if (out.length > limit) return null;
       while (await _next(rest, up, until)) {
         out.add(rest.current);
         if (out.length > limit) return null;
@@ -1158,6 +1176,19 @@ class VideoDownloadTask {
     return drop ? null : v.substring(0, max);
   }
 
+  /// 接住 [sink] 的异步写入错误（经 `done` 报告）；出错时结束 [rest] 的读取。
+  static _SinkError _watchSink(IOSink sink, StreamIterator<List<int>> rest) {
+    final watch = _SinkError();
+    sink.done.then(
+      (_) {},
+      onError: (Object e) {
+        watch.error = e is FileSystemException ? e : FileSystemException('$e');
+        rest.cancel().ignore();
+      },
+    );
+    return watch;
+  }
+
   static bool _isLimit(Object e) =>
       e is SourceException && e.code == SourceErrorCode.limit;
 
@@ -1190,6 +1221,14 @@ final class _Deadline {
 
   /// 不再计时（请求仍可继续，例如根地址确认是媒体文件之后）。
   void stop() => _timer.cancel();
+}
+
+final class _SinkError {
+  FileSystemException? error;
+
+  void check() {
+    if (error case final e?) throw DownloadStorageException(e);
+  }
 }
 
 /// 先交出已读出的 [_pending]，再继续读 [_it]。

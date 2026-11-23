@@ -139,6 +139,13 @@ class DownloadLibrary {
           throw FormatException('文件缺失：$name');
         }
       }
+      // 单文件：记录了长度时必须一致（截断但保留文件头的文件也能通过容器识别）。
+      if (manifest.file?.length case final length?) {
+        final actual = await DownloadStore.fileIn(dir, videoFileName).length();
+        if (actual != length) {
+          throw FormatException('文件长度不符：$actual / $length');
+        }
+      }
       final subtitles = <(VideoSubtitleEntry, File)>[];
       for (final s in manifest.subtitles) {
         final file = DownloadStore.fileIn(dir, s.file);

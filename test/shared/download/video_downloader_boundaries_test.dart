@@ -582,4 +582,79 @@ void main() {
     );
     expect(dir.existsSync() && dir.listSync().isNotEmpty, isFalse);
   });
+
+  test('segments requested without a range must return 200, not 206', () async {
+    text('/index.m3u8', media(['/a.ts']));
+    bytes(
+      '/a.ts',
+      ts(),
+      status: 206,
+      headers: {'content-range': 'bytes 0-1879/18800'},
+    );
+    await expectLater(run(), code(SourceErrorCode.http));
+    expect(written(), isEmpty);
+  });
+
+  test(
+    'a small playlist read entirely in the peek still counts against the total',
+    () async {
+      text('/index.m3u8', '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\n/v.m3u8\n');
+      text('/v.m3u8', media(['/a.ts', '/b.ts']));
+      await expectLater(
+        run(limits: const VideoDownloadLimits(maxTotalPlaylistBytes: 100)),
+        code(SourceErrorCode.limit),
+      );
+    },
+  );
+
+  test(
+    'a default Range header from the manifest never yields a partial file',
+    () async {
+      final withRange = DioSourceHttpClient(
+        SourceNetworkConfig(
+          sourceId: 'com.example.video',
+          baseUrl: Uri.parse('http://video.example.com'),
+          defaultHeaders: const {'Range': 'bytes=0-99'},
+          timeout: const Duration(seconds: 5),
+          maxRetries: 0,
+        ),
+        adapter: IOHttpClientAdapter(
+          createHttpClient: () => HttpClient()
+            ..connectionFactory = (uri, proxyHost, proxyPort) =>
+                Socket.startConnect(
+                  InternetAddress.loopbackIPv4,
+                  upstream.port,
+                ),
+        ),
+      );
+      addTearDown(withRange.close);
+      routes['/v.mp4'] = (req) {
+        final body = ts();
+        if (req.headers.value('range') != null) {
+          req.response
+            ..statusCode = 206
+            ..headers.set('content-range', 'bytes 0-99/1880')
+            ..add(body.sublist(0, 100));
+        } else {
+          req.response.add(body);
+        }
+        return req.response.close();
+      };
+      await expectLater(
+        VideoDownloadTask(
+          client: withRange,
+          baseUrl: Uri.parse('http://video.example.com'),
+          content: const VideoContent(
+            streams: [StreamRef(url: '/v.mp4', type: StreamType.mp4)],
+          ),
+          preferredLabel: null,
+          dir: dir,
+          abort: NetCancellation(),
+          onProgress: (_, _, _) async {},
+        ).run(),
+        code(SourceErrorCode.http),
+      );
+      expect(File('${dir.path}/media.bin').existsSync(), isFalse);
+    },
+  );
 }
