@@ -1181,6 +1181,26 @@ void main() {
       );
     });
 
+    test('大量字幕轨且最高变体不引用字幕组：主播放列表只扫描一遍（审查意见：不能每条重扫）', () async {
+      final master = StringBuffer('#EXTM3U\n');
+      for (var i = 0; i < 40000; i++) {
+        master.write(
+          '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="g",NAME="n$i",URI="s$i.m3u8"\n',
+        );
+      }
+      master.write('#EXT-X-STREAM-INF:BANDWIDTH=9\nv.m3u8\n');
+      up.bytes('/many.m3u8', utf8.encode('$master'));
+      final session = openCrafted('/many.m3u8');
+      final watch = Stopwatch()..start();
+      final out = await player.text(session.url);
+      expect(watch.elapsed, lessThan(const Duration(seconds: 5)));
+      expect(out, isNot(contains('TYPE=SUBTITLES')));
+      expect(
+        session.subtitleTracks,
+        hasLength(MediaProxySession.maxSubtitleTracks),
+      );
+    });
+
     test('多个字幕组：只列播放器会选的变体（BANDWIDTH 最高）引用的那一组', () async {
       up.bytes(
         '/groups.m3u8',

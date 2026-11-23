@@ -936,6 +936,8 @@ final class MediaProxySession implements _ProxySession {
           playlist.segmentExtension = ext;
         }
       }
+      // 每次改写最多扫描一遍主播放列表找字幕组（结果为 null 也算扫过：不能每条字幕轨都重扫，审查意见）。
+      var groupScanned = false;
       return utf8.encode(
         rewriteHlsPlaylist(
           text,
@@ -944,7 +946,10 @@ final class MediaProxySession implements _ProxySession {
           onSubtitleRendition: playlist.kind == _Kind.subtitlePlaylist
               ? null
               : (r) {
-                  _subtitleGroup ??= hlsPreferredSubtitleGroup(text);
+                  if (!groupScanned) {
+                    groupScanned = true;
+                    _subtitleGroup ??= hlsPreferredSubtitleGroup(text);
+                  }
                   _addSubtitleTrack(_subtitleTracks, r);
                 },
         ),
@@ -970,6 +975,8 @@ final class MediaProxySession implements _ProxySession {
     HlsSubtitleRendition r,
   ) {
     if (tracks.length >= maxSubtitleTracks) return;
+    // 代理给不出编号的地址（非 http(s) 或无法解析、未登记的本地名称、超出数量上限）总是 403 / 404：不列出。
+    if (Uri.parse(r.url).pathSegments case [_, 'x', _]) return;
     if (tracks.any((t) => t.url == r.url)) return;
     tracks.add(r);
   }
@@ -1245,6 +1252,8 @@ final class LocalMediaSession implements _ProxySession {
   /// 把播放列表中的名称换成代理地址；无法解析时该播放列表总是 502。
   Uint8List? _rewrite(String text) {
     try {
+      // 每次改写最多扫描一遍主播放列表找字幕组（结果为 null 也算扫过：不能每条字幕轨都重扫，审查意见）。
+      var groupScanned = false;
       return utf8.encode(
         rewriteHlsPlaylist(
           text,
@@ -1272,7 +1281,10 @@ final class LocalMediaSession implements _ProxySession {
             return _urlOf(name);
           },
           onSubtitleRendition: (r) {
-            _subtitleGroup ??= hlsPreferredSubtitleGroup(text);
+            if (!groupScanned) {
+              groupScanned = true;
+              _subtitleGroup ??= hlsPreferredSubtitleGroup(text);
+            }
             MediaProxySession._addSubtitleTrack(_subtitleTracks, r);
           },
         ),

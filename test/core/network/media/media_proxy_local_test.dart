@@ -141,6 +141,24 @@ void main() {
     expect(session.hadFileError, isFalse);
   });
 
+  test('many subtitle renditions without a preferred group: one scan', () {
+    final master = StringBuffer('#EXTM3U\n');
+    for (var i = 0; i < 40000; i++) {
+      master.write(
+        '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="g",NAME="n$i",URI="s$i.m3u8"\n',
+      );
+    }
+    master.write('#EXT-X-STREAM-INF:BANDWIDTH=9\nv.m3u8\n');
+    final watch = Stopwatch()..start();
+    final session = proxy.openLocal(
+      root: 'index.m3u8',
+      playlists: {'index.m3u8': '$master'},
+    );
+    expect(watch.elapsed, lessThan(const Duration(seconds: 5)));
+    expect(session.subtitleTracks, isEmpty, reason: '名称都未登记');
+    session.close();
+  });
+
   test('Range and HEAD', () async {
     final session = openHls();
     final media = utf8.decode(
