@@ -828,6 +828,7 @@ class VideoDownloadTask {
           kept.charset == ref.charset &&
           keptLength > 0) {
         _bytes += keptLength;
+        await _checkSubtitleLimit();
         out.add(kept);
         continue;
       }
@@ -844,6 +845,11 @@ class VideoDownloadTask {
           contentType: contentType,
           declared: declared,
         );
+        // 字幕同样计入剧集的合计上限（单文件时在媒体写完之后才取）。
+        if (_bytes + bytes.length > limits.maxBytes) {
+          _bytes += bytes.length;
+          await _checkSubtitleLimit();
+        }
         final name = videoSubtitleFileName(i, doc.format.name);
         try {
           await DownloadStore.writeBytes(dir, name, bytes);
@@ -875,6 +881,16 @@ class VideoDownloadTask {
       }
     }
     return out;
+  }
+
+  /// 合计超过上限：删除该剧集已写的全部文件并以 `E_LIMIT` 失败。
+  Future<void> _checkSubtitleLimit() async {
+    if (_bytes <= limits.maxBytes) return;
+    await _clear();
+    throw SourceException(
+      SourceErrorCode.limit,
+      '视频超过 ${_gib(limits.maxBytes)}，已中止',
+    );
   }
 
   static String? _safeContentType(String? v) =>
