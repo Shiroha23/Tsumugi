@@ -4,7 +4,13 @@ name: Device tests
 # 较慢（每个任务约 15–30 分钟），只在推送 main 与手动触发时运行，不在 PR 上运行，也不设为必须通过的检查。
 #
 # 模拟器读不到仓库里的 test/fixtures/：mock 服务器在 runner 上以 --test-control 启动，
-# 测试经 TSUMUGI_MOCK_SERVER 连接它（Android 用 adb reverse，iOS 模拟器与 runner 共用网络）。
+# 测试经 TSUMUGI_MOCK_SERVER 连接它（Android 用 adb reverse，由 run_device_tests.sh 在每个文件前建立；
+# iOS 模拟器与 runner 共用网络）。
+#
+# 首次构建很慢，算进第一个测试文件会超过 FILE_TIMEOUT 而被结束重试：
+# Android 测试前先 `flutter build apk --debug`（装 NDK / CMake、冷 Gradle 构建，之后测试只需增量构建）；
+# iOS 上预构建（`flutter build ios --simulator`）的产物测试构建用不上，改为给第一个文件 FIRST_FILE_TIMEOUT
+# （SPM 拉取、pod install、全量 Xcode 构建合计约 10 分钟）。
 #
 # 第三方 Action 固定到提交（注释为对应版本）。
 
@@ -23,8 +29,9 @@ permissions:
 env:
   FLUTTER_VERSION: "3.47.7"
   MOCK_PORT: "8081"
-  # 每个测试文件的时限（秒），超时重试一次，见 tool/ci/run_device_tests.sh。
+  # 每个测试文件的时限（秒）；超时重试 1 次、基础设施错误最多重试 2 次，见 tool/ci/run_device_tests.sh。
   FILE_TIMEOUT: "600"
+  FIRST_FILE_TIMEOUT: "1200"
   TESTS: integration_test/app_flow_test.dart integration_test/script_stack_depth_test.dart integration_test/download_offline_test.dart integration_test/video_download_offline_test.dart integration_test/sync_test.dart
 
 jobs:
@@ -45,6 +52,8 @@ jobs:
           cache: true
       - run: flutter pub get
       - run: dart run build_runner build
+      - name: Warm up build
+        run: flutter build apk --debug
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -59,15 +68,15 @@ jobs:
           arch: x86_64
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
-          # 每行单独执行。
-          script: |
-            adb reverse tcp:${{ env.MOCK_PORT }} tcp:${{ env.MOCK_PORT }}
-            tool/ci/run_device_tests.sh emulator-5554 ${{ env.TESTS }}
-      - if: failure()
+          script: tool/ci/run_device_tests.sh emulator-5554 ${{ env.TESTS }}
+      # 重试后通过的基础设施错误也留下诊断信息，便于定位，所以不只在失败时上传。
+      - if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: android-emulator-logs
-          path: mock_server.log
+          path: |
+            mock_server.log
+            build/device_logs/
           retention-days: 7
 
   ios:
@@ -102,9 +111,12 @@ jobs:
           xcrun simctl list devices booted
       - name: Run integration tests
         run: tool/ci/run_device_tests.sh ${{ steps.sim.outputs.udid }} ${{ env.TESTS }}
-      - if: failure()
+      # 重试后通过的基础设施错误也留下诊断信息，便于定位，所以不只在失败时上传。
+      - if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-simulator-logs
-          path: mock_server.log
+          path: |
+            mock_server.log
+            build/device_logs/
           retention-days: 7
