@@ -203,6 +203,87 @@ SubtitleDocument parseSubtitle(String text, {SubtitleFormat? declared}) {
   return SubtitleDocument(format, [for (final (_, c) in indexed) c]);
 }
 
+/// WebVTT \u5934\u90E8\u7684 `X-TIMESTAMP-MAP`\uFF08RFC 8216 \u00A73.5\uFF09\uFF1Acue \u65F6\u95F4 [local] \u5BF9\u5E94 MPEG-TS \u65F6\u95F4 [mpegts]\uFF0890 kHz\uFF09\u3002
+class WebVttTimestampMap {
+  const WebVttTimestampMap(this.local, this.mpegts);
+
+  final Duration local;
+
+  /// 33 \u4F4D PES \u65F6\u95F4\u6233\uFF08\u5DF2\u5BF9 2\u00B3\u00B3 \u53D6\u6A21\uFF09\u3002
+  final int mpegts;
+
+  @override
+  bool operator ==(Object other) =>
+      other is WebVttTimestampMap &&
+      other.local == local &&
+      other.mpegts == mpegts;
+
+  @override
+  int get hashCode => Object.hash(local, mpegts);
+
+  @override
+  String toString() => 'WebVttTimestampMap($local, $mpegts)';
+}
+
+/// HLS \u5B57\u5E55\u8F68\u7684\u4E00\u4E2A WebVTT \u5206\u7247\uFF1A[cues] \u4E3A\u5206\u7247\u5185\u7684\u65F6\u95F4\uFF08\u672A\u6362\u7B97\uFF09\uFF0C\u6309\u6587\u4EF6\u4E2D\u7684\u987A\u5E8F\uFF1B\u53EF\u4EE5\u4E3A\u7A7A\u3002
+class WebVttSegment {
+  const WebVttSegment(this.cues, this.timestampMap);
+
+  final List<SubtitleCue> cues;
+
+  /// \u5934\u90E8\u6CA1\u6709\uFF08\u6216\u65E0\u6CD5\u89E3\u6790\uFF09`X-TIMESTAMP-MAP` \u65F6\u4E3A null\u3002
+  final WebVttTimestampMap? timestampMap;
+}
+
+/// \u89E3\u6790 HLS \u5B57\u5E55\u8F68\u7684\u4E00\u4E2A\u5206\u7247\uFF08architecture \u00A76.4.7\u300CHLS \u5B57\u5E55\u8F68\u300D\uFF09\uFF1A\u4E0E [parseSubtitle] \u7684 WebVTT \u89C4\u5219\u76F8\u540C\uFF0C
+/// \u4F46\u6CA1\u6709 cue \u4E0D\u7B97\u9519\u8BEF\uFF08HLS \u4E2D\u5E38\u89C1\u7A7A\u5206\u7247\uFF09\uFF0C\u5E76\u8BFB\u53D6\u5934\u90E8\u7684 `X-TIMESTAMP-MAP`\u3002
+/// \u4E0D\u4EE5 `WEBVTT` \u5F00\u5934\u65F6\u629B [SubtitleFormatException]\u3002
+WebVttSegment parseWebVttSegment(String text) {
+  final body = _stripBom(text);
+  if (sniffSubtitleFormat(body) != SubtitleFormat.vtt) {
+    throw const SubtitleFormatException(
+      '\u5B57\u5E55\u5206\u7247\u4E0D\u662F WebVTT',
+    );
+  }
+  WebVttTimestampMap? map;
+  final header = _blocks(body.trimLeft()).firstOrNull ?? const <String>[];
+  for (final line in header.skip(1)) {
+    final t = line.trim();
+    if (t.startsWith(_timestampMapHeader)) {
+      map = _timestampMap(t.substring(_timestampMapHeader.length));
+      break;
+    }
+  }
+  return WebVttSegment(_parseVtt(body), map);
+}
+
+const _timestampMapHeader = 'X-TIMESTAMP-MAP=';
+final _vttTimeOnly = RegExp('^$_vttTime\$');
+final _mpegTsDigits = RegExp(r'^\d{1,18}$');
+
+/// `LOCAL:<cue \u65F6\u95F4>,MPEGTS:<\u6574\u6570>`\uFF08\u4E24\u9879\u987A\u5E8F\u4E0D\u9650\uFF09\uFF1B\u7F3A\u9879\u6216\u65E0\u6548\u65F6\u4E3A null\u3002
+WebVttTimestampMap? _timestampMap(String value) {
+  Duration? local;
+  int? mpegts;
+  for (final part in value.split(',')) {
+    final p = part.trim();
+    if (p.startsWith('LOCAL:')) {
+      final m = _vttTimeOnly.firstMatch(p.substring(6).trim());
+      if (m != null) local = _time(m[1], m[2], m[3], m[4], 3);
+    } else if (p.startsWith('MPEGTS:')) {
+      final digits = p.substring(7).trim();
+      if (_mpegTsDigits.hasMatch(digits)) {
+        mpegts = int.parse(digits) % mpegTsWrap;
+      }
+    }
+  }
+  if (local == null || mpegts == null) return null;
+  return WebVttTimestampMap(local, mpegts);
+}
+
+/// MPEG-TS \u65F6\u95F4\u6233\uFF0890 kHz\uFF09\u7684\u56DE\u7ED5\u5468\u671F\uFF1A2\u00B3\u00B3\u3002
+const mpegTsWrap = 1 << 33;
+
 String _stripBom(String s) => s.startsWith('\uFEFF') ? s.substring(1) : s;
 
 final _newline = RegExp(r'\r\n|\r|\n');

@@ -51,6 +51,33 @@ bool _sameBytes(List<int> a, List<int> b) {
   return true;
 }
 
+/// 主播放列表中的一条字幕轨（`EXT-X-MEDIA:TYPE=SUBTITLES`），见 [rewriteHlsPlaylist] 的 `onSubtitleRendition`。
+class HlsSubtitleRendition {
+  const HlsSubtitleRendition({required this.url, this.name, this.language});
+
+  /// 字幕子播放列表经 `map` 换成的地址（代理地址）。
+  final String url;
+
+  /// `NAME` / `LANGUAGE`：去掉控制字符与方向控制符、首尾空白，最多 [maxLabelLength] 个字符；为空时为 null。
+  final String? name;
+  final String? language;
+
+  static const maxLabelLength = 64;
+
+  @override
+  bool operator ==(Object other) =>
+      other is HlsSubtitleRendition &&
+      other.url == url &&
+      other.name == name &&
+      other.language == language;
+
+  @override
+  int get hashCode => Object.hash(url, name, language);
+
+  @override
+  String toString() => 'HlsSubtitleRendition($url, $name, $language)';
+}
+
 /// 把 [uri]（无法解析或不受支持时为 null）换成播放器应当请求的地址。
 /// [aes] 非 null 时该地址的内容需要由调用方按 AES-128 解密后再交给播放器。
 typedef HlsUriMapper = String Function(
@@ -100,12 +127,17 @@ bool _isSpace(int b) => b == 0x20 || b == 0x09 || b == 0x0A || b == 0x0D;
 /// 于交给 [map] 之前收到该区间（起点, 长度）；`EXT-X-BYTERANGE` 省略起点时接着上一个区间（RFC 8216 §4.3.2.2），
 /// `EXT-X-MAP` 省略起点时为 0。
 ///
+/// [onSubtitleRendition] 给出时，字幕轨（`EXT-X-MEDIA:TYPE=SUBTITLES`）整行不输出：其 `URI` 照常以
+/// [HlsUriKind.subtitlePlaylist] 交给 [map]，结果连同名称 / 语言交给 [onSubtitleRendition]（没有 `URI` 的忽略）。
+/// 播放器因此看不到字幕轨，由应用自己取（architecture §6.4.7，#84）。
+///
 /// 输入不是播放列表（首个非空行不是 `#EXTM3U`）时抛出 [FormatException]。
 String rewriteHlsPlaylist(
   String text, {
   required Uri base,
   required HlsUriMapper map,
   void Function(int offset, int length)? onByteRange,
+  void Function(HlsSubtitleRendition rendition)? onSubtitleRendition,
 }) {
   final lines = const LineSplitter().convert(
     text.startsWith('﻿') ? text.substring(1) : text,
@@ -195,9 +227,24 @@ String rewriteHlsPlaylist(
       out.add(line);
       continue;
     }
+    final subtitleMedia =
+        tag == '#EXT-X-MEDIA' &&
+        _attributes(line.substring(colon + 1))['TYPE'] == 'SUBTITLES';
+    if (subtitleMedia && onSubtitleRendition != null) {
+      final a = _attributes(line.substring(colon + 1));
+      if (a['URI'] case final uriValue?) {
+        onSubtitleRendition(
+          HlsSubtitleRendition(
+            url: map(_resolve(base, uriValue), HlsUriKind.subtitlePlaylist),
+            name: _label(a['NAME']),
+            language: _label(a['LANGUAGE']),
+          ),
+        );
+      }
+      continue;
+    }
     final kind = switch (tag) {
-      '#EXT-X-MEDIA' when _subtitles.hasMatch(line) =>
-        HlsUriKind.subtitlePlaylist,
+      '#EXT-X-MEDIA' when subtitleMedia => HlsUriKind.subtitlePlaylist,
       _ => _uriKindOf[tag] ?? HlsUriKind.media,
     };
     if (tag == '#EXT-X-MAP') {
@@ -237,6 +284,44 @@ String? _attribute(String line, String name) {
   return v.startsWith('"') ? v.substring(1, v.length - 1) : v;
 }
 
+/// 属性列表（`A=1,B="x,y"`）：从左到右逐个读取，引号内的逗号与等号不会被当成新的属性；同名时取第一个。
+Map<String, String> _attributes(String list) {
+  final out = <String, String>{};
+  for (final m in _attributeRe.allMatches(list)) {
+    final v = m[2]!;
+    out.putIfAbsent(
+      m[1]!,
+      () => v.startsWith('"') ? v.substring(1, v.length - 1) : v.trim(),
+    );
+  }
+  return out;
+}
+
+final _attributeRe = RegExp(r'([A-Z0-9-]+)=("[^"]*"|[^,]*)');
+
+/// 控制字符（C0 / C1 / DEL）与方向控制符（LRM / RLM、嵌入 / 覆盖 / 隔离）。
+bool _isLabelNoise(int c) =>
+    c < 0x20 ||
+    (c >= 0x7f && c <= 0x9f) ||
+    c == 0x200e ||
+    c == 0x200f ||
+    (c >= 0x202a && c <= 0x202e) ||
+    (c >= 0x2066 && c <= 0x2069);
+
+/// 显示用的名称：去掉控制字符、方向控制符与首尾空白，最多
+/// [HlsSubtitleRendition.maxLabelLength] 个字符；为空时为 null。
+String? _label(String? value) {
+  if (value == null) return null;
+  final runes = [
+    for (final c in value.runes)
+      if (!_isLabelNoise(c)) c,
+  ];
+  final s = String.fromCharCodes(
+    runes.take(HlsSubtitleRendition.maxLabelLength),
+  ).trim();
+  return s.isEmpty ? null : s;
+}
+
 /// `0x` 开头、最多 32 位十六进制数，左侧补零为 16 字节；无效时为 null。
 Uint8List? _parseIv(String text) {
   final m = RegExp(r'^0[xX]([0-9a-fA-F]{1,32})$').firstMatch(text.trim());
@@ -270,7 +355,6 @@ Uri? _resolve(Uri base, String value) {
 final _uriAttribute = RegExp(r'([:,])URI="([^"]*)"');
 final _quotedUriAttribute = RegExp(r'[:,]URI="[^"]*"');
 final _anyUriAttribute = RegExp('URI\\s*=', caseSensitive: false);
-final _subtitles = RegExp(r'[:,]TYPE=SUBTITLES(,|$)');
 
 /// 保留的标签：RFC 8216 中播放器需要、且地址只出现在 `URI` 属性或下一行的标签。
 /// 不保留：`EXT-X-DATERANGE`（插播广告等用任意属性携带地址）、`EXT-X-SESSION-DATA`、

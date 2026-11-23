@@ -25,7 +25,8 @@ import 'media_signature.dart';
 ///
 /// 播放器拿不到任何上游地址：HLS 播放列表中的地址全部改写为代理地址，每个地址对应会话内的
 /// 一个编号，播放器只能请求代理见过的地址。交给播放器的内容只有三类：改写过的 HLS 播放列表、
-/// 文件头可识别的媒体容器（[looksLikeMediaContainer]）、字幕播放列表中的 WebVTT；
+/// 文件头可识别的媒体容器（[looksLikeMediaContainer]）、字幕播放列表中的 WebVTT（HLS 字幕轨不写进交给播放器的
+/// 主播放列表，见 [MediaProxySession.subtitleTracks]，其播放列表与分片由应用自己经本会话请求）；
 /// `Content-Type` 与地址中的扩展名都由代理决定，不透传上游的值，播放器不会把内容当成其他播放列表格式。
 /// 纯 Dart（dart:io），不依赖 Flutter。
 class MediaProxy {
@@ -192,6 +193,7 @@ final class MediaProxySession implements _ProxySession {
   final _inFlight = <NetCancellation>{};
   late final String _root;
   bool _closed = false;
+  final _subtitleTracks = <HlsSubtitleRendition>[];
 
   /// 会话内最多登记的地址数（直播流不断追加分片；约等于 2 s 分片的 11 小时）。
   static const maxEntries = 20000;
@@ -212,6 +214,15 @@ final class MediaProxySession implements _ProxySession {
   Uri get url => Uri.parse(_root);
 
   bool get isClosed => _closed;
+
+  /// HLS 主播放列表声明的字幕轨（按首次出现的顺序，地址相同的只留一条，最多 [maxSubtitleTracks] 条）。
+  /// 改写时从交给播放器的主播放列表中去掉，由应用经本会话自己取（architecture §6.4.7）；
+  /// 播放器取过主播放列表之后才有。
+  List<HlsSubtitleRendition> get subtitleTracks =>
+      List.unmodifiable(_subtitleTracks);
+
+  /// 最多记录的字幕轨数。
+  static const maxSubtitleTracks = 64;
 
   /// 最近一次上游请求失败的原因（白名单、人机验证、超时等），供界面给出对应提示。
   NetworkException? get lastFailure => _lastFailure;
@@ -928,11 +939,23 @@ final class MediaProxySession implements _ProxySession {
           text,
           base: base,
           map: (uri, k, [aes]) => _register(uri, kindOf(k), aes, ext),
+          onSubtitleRendition: playlist.kind == _Kind.subtitlePlaylist
+              ? null
+              : (r) => _addSubtitleTrack(_subtitleTracks, r),
         ),
       );
     } on FormatException {
       return null;
     }
+  }
+
+  static void _addSubtitleTrack(
+    List<HlsSubtitleRendition> tracks,
+    HlsSubtitleRendition r,
+  ) {
+    if (tracks.length >= maxSubtitleTracks) return;
+    if (tracks.any((t) => t.url == r.url)) return;
+    tracks.add(r);
   }
 
   static final _hlsType = ContentType('application', 'vnd.apple.mpegurl');
@@ -1158,8 +1181,13 @@ final class LocalMediaSession implements _ProxySession {
   final _indexOf = <String, int>{};
   late final String _root;
   bool _closed = false;
+  final _subtitleTracks = <HlsSubtitleRendition>[];
 
   static final _base = Uri.parse('http://local.invalid/');
+
+  /// 本地主播放列表中的字幕轨（见 [MediaProxySession.subtitleTracks]），打开时即已确定。
+  List<HlsSubtitleRendition> get subtitleTracks =>
+      List.unmodifiable(_subtitleTracks);
 
   /// 交给播放器的地址。
   Uri get url => Uri.parse(_root);
@@ -1226,6 +1254,8 @@ final class LocalMediaSession implements _ProxySession {
             if (isPlaylist == registeredAsFile) return _urlOf('');
             return _urlOf(name);
           },
+          onSubtitleRendition: (r) =>
+              MediaProxySession._addSubtitleTrack(_subtitleTracks, r),
         ),
       );
     } on FormatException {

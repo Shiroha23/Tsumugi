@@ -132,6 +132,76 @@ d.ts
     ]);
   });
 
+  group('onSubtitleRendition（#84：字幕轨不交给播放器）', () {
+    test('字幕轨整行不输出，地址照常登记并连同名称 / 语言报告；其他 EXT-X-MEDIA 不变', () {
+      final found = <HlsSubtitleRendition>[];
+      final out = rewriteHlsPlaylist(
+        '#EXTM3U\n'
+        '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="s",NAME="中文",LANGUAGE="zh",URI="s/zh.m3u8"\n'
+        '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="ja",URI="a.m3u8"\n'
+        '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="s",NAME="no uri"\n'
+        '#EXT-X-STREAM-INF:BANDWIDTH=1,AUDIO="a",SUBTITLES="s"\nv.m3u8\n',
+        base: base,
+        map: map,
+        onSubtitleRendition: found.add,
+      );
+      expect(found, hasLength(1));
+      expect(found.single.name, '中文');
+      expect(found.single.language, 'zh');
+      expect(seen.first.$2, HlsUriKind.subtitlePlaylist);
+      expect(
+        seen.first.$1,
+        Uri.parse('http://video.example.com/show/1/hls/s/zh.m3u8'),
+      );
+      expect(found.single.url, 'http://127.0.0.1:1/t/0');
+      expect(out, isNot(contains('SUBTITLES,')));
+      expect(out, contains('#EXT-X-MEDIA:TYPE=AUDIO'));
+      // 变体的 SUBTITLES 属性保留（FFmpeg 找不到组时忽略）。
+      expect(out, contains('SUBTITLES="s"'));
+    });
+
+    test('不给回调时与之前相同：字幕轨照常输出', () {
+      final out = rewriteHlsPlaylist(
+        '#EXTM3U\n'
+        '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="s",NAME="ja",URI="s.m3u8"\n',
+        base: base,
+        map: map,
+      );
+      expect(out, contains('#EXT-X-MEDIA:TYPE=SUBTITLES'));
+    });
+
+    test('TYPE 按属性解析：引号内的“TYPE=SUBTITLES”不算', () {
+      final found = <HlsSubtitleRendition>[];
+      final out = rewriteHlsPlaylist(
+        '#EXTM3U\n'
+        '#EXT-X-MEDIA:NAME="x,TYPE=SUBTITLES",TYPE=AUDIO,GROUP-ID="a",URI="a.m3u8"\n',
+        base: base,
+        map: map,
+        onSubtitleRendition: found.add,
+      );
+      expect(found, isEmpty);
+      expect(seen.single.$2, HlsUriKind.playlist);
+      expect(out, contains('TYPE=AUDIO'));
+    });
+
+    test('名称 / 语言去掉控制字符与方向控制符，最多 64 个字符，空的为 null', () {
+      final rlo = String.fromCharCode(0x202E);
+      final bell = String.fromCharCode(7);
+      final found = <HlsSubtitleRendition>[];
+      rewriteHlsPlaylist(
+        '#EXTM3U\n'
+        '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="s",NAME=" a${rlo}b$bell ",LANGUAGE="$rlo",URI="1.m3u8"\n'
+        '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="s",NAME="${'字' * 100}",URI="2.m3u8"\n',
+        base: base,
+        map: map,
+        onSubtitleRendition: found.add,
+      );
+      expect(found[0].name, 'ab');
+      expect(found[0].language, isNull);
+      expect(found[1].name, '字' * HlsSubtitleRendition.maxLabelLength);
+    });
+  });
+
   test('主播放列表：变体与 EXT-X-MEDIA 被标记为子播放列表', () {
     const text =
         '#EXTM3U\r\n'

@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../core/network/network_exception.dart';
 import '../../core/network/source_http_client.dart';
+import '../../core/subtitle/hls_subtitle_loader.dart';
 import '../../core/subtitle/subtitle_loader.dart';
 import '../../core/subtitle/subtitle_parser.dart';
 import '../../sources/model/content.dart';
@@ -72,6 +73,24 @@ final loadSubtitleProvider =
         }
       },
     );
+
+/// 取回并解析当前流的一条 HLS 字幕轨（architecture §6.4.7「HLS 字幕轨」）：经该流的代理会话（在线或本地来源）
+/// 取字幕播放列表与分片，换算到播放位置。[presentationStart] 为播放器的 `demuxer-start-time`
+/// （[presentationStartOf]），[position] 决定从哪个分片开始取；[onProgress] 收到逐步增长的时间轴。
+Future<SubtitleDocument> loadStreamSubtitleTrack(
+  HlsSubtitleRendition track, {
+  required Duration presentationStart,
+  Duration position = Duration.zero,
+  NetCancellation? cancellation,
+  void Function(SubtitleDocument document)? onProgress,
+}) => loadHlsSubtitles(
+  Uri.parse(track.url),
+  presentationStart: presentationStart,
+  position: position,
+  cancellation: cancellation,
+  onProgress: onProgress,
+  log: (m) => debugPrint('[subtitle] $m'),
+);
 
 /// 解析已下载的外挂字幕（离线回放，architecture §4.5.1）：与在线时相同的解析器、编码规则与 4 MB 上限，
 /// 不发任何请求。

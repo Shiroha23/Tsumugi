@@ -104,7 +104,12 @@ void main() {
     expect(status, 200);
     expect(headers['content-type'], contains('mpegurl'));
     final master = utf8.decode(body);
-    final [sub, variant] = uris(master);
+    // 字幕轨不交给播放器（#84）：记在会话上，由字幕层经本会话自己取。
+    expect(master, isNot(contains('EXT-X-MEDIA')));
+    final [variant] = uris(master);
+    final track = session.subtitleTracks.single;
+    expect(track.name, '中文');
+    final sub = Uri.parse(track.url);
     expect(sub.pathSegments.last, 'index.m3u8');
     final media = utf8.decode((await get(variant)).$3);
     final segs = uris(media);

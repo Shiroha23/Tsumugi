@@ -864,8 +864,11 @@ void main() {
             req.response.add(utf8.encode('WEBVTT\n'));
             return req.response.close();
           };
-        final master = await player.text(openCrafted('/m.m3u8').url);
-        final subs = await player.text(proxiedUris(master).first);
+        final session = openCrafted('/m.m3u8');
+        await player.text(session.url);
+        final subs = await player.text(
+          Uri.parse(session.subtitleTracks.single.url),
+        );
         expect(names(subs), ['sub.vtt']);
         expect(probed, 0);
       });
@@ -1197,8 +1200,15 @@ void main() {
           utf8.encode('WEBVTT\n\n00:00.000 --> 00:01.000\nhi\n'),
         )
         ..bytes('/1.vtt', utf8.encode('[playlist]\nFile1=http://x/\n'));
-      final master = await player.text(openCrafted('/master.m3u8').url);
-      final subs = await player.text(proxiedUris(master).first);
+      final session = openCrafted('/master.m3u8');
+      final master = await player.text(session.url);
+      // 字幕轨不交给播放器（#84）：主播放列表中只剩变体，字幕轨记在会话上。
+      expect(master, isNot(contains('EXT-X-MEDIA')));
+      expect(proxiedUris(master), hasLength(1));
+      final track = session.subtitleTracks.single;
+      expect(track.name, 'ja');
+      expect(track.language, isNull);
+      final subs = await player.text(Uri.parse(track.url));
       final [vtt, bad] = proxiedUris(subs);
       expect(vtt.pathSegments.last, 'sub.vtt');
       final (status, headers, body) = await player.get(vtt);

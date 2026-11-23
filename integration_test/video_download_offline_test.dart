@@ -220,12 +220,24 @@ void main() {
         final (status, master) = await _get(stream.url);
         expect(status, 200);
         final masterText = utf8.decode(master);
-        expect(masterText, contains('NAME="HLS Chinese"'));
-        final [subPlaylist, variant] = _uris(masterText);
-        final sub = utf8.decode((await _get(subPlaylist)).$2);
+        // 字幕轨不交给播放器（#84）：记在本地会话上，字幕层经本会话取本地分片。
+        expect(masterText, isNot(contains('TYPE=SUBTITLES')));
+        final [variant] = _uris(masterText);
+        final track = stream.subtitleTracks.single;
+        expect((track.name, track.language), ('HLS Chinese', 'zh'));
+        final sub = utf8.decode((await _get(Uri.parse(track.url))).$2);
         final (vttStatus, vtt) = await _get(_uris(sub).first);
         expect(vttStatus, 200);
         expect(utf8.decode(vtt), startsWith('WEBVTT'));
+        final doc = await loadStreamSubtitleTrack(
+          track,
+          presentationStart: const Duration(milliseconds: 1400),
+        );
+        expect(doc.cues.map((c) => (c.start, c.text)), [
+          (Duration.zero, 'HLS subtitle 1'),
+          (const Duration(seconds: 2), 'HLS subtitle 2'),
+          (const Duration(seconds: 4), 'HLS subtitle 3'),
+        ]);
         final media = utf8.decode((await _get(variant)).$2);
         expect(media, isNot(contains('EXT-X-KEY')));
         final seg = _uris(media).first;
@@ -243,8 +255,7 @@ void main() {
     // 真实播放只在 Windows 上：x86_64 Android 模拟器没有视频输出（§5.4），iOS 模拟器未验证 libmpv 播放。
     final canPlayVideo = Platform.isWindows;
     if (canPlayVideo) {
-      // 记住的字幕为 HLS 内嵌轨（zh）：打开时自动选上。播放中途才选内嵌轨时 libmpv 不会回头读取
-      // 已丢弃的字幕分片（在线时同样如此，与本地来源无关），所以这里经记住的选择覆盖。
+      // 记住的字幕为 HLS 字幕轨的语言（zh）：打开时按语言匹配自动选上。字幕层经本地会话取本地字幕分片（#84）。
       subtitlePrefs.values[_sourceId] = const SubtitleLabel('zh');
       router.push(VideoRoutes.player(_sourceId, _itemId, _ep1));
       bool playing() =>
@@ -260,15 +271,28 @@ void main() {
         await tester.pump();
       }
 
-      // HLS 字幕轨来自本地播放列表：菜单中有它，且按记住的选择选中。
-      // （内嵌字幕文字的显示时机与本地来源无关：在线时 mock 素材同样只显示最后一条，见 #84。）
+      // HLS 字幕轨来自本地播放列表：菜单中有它（标签为 NAME），按记住的选择选中，文字照常显示。
+      String subtitleText() {
+        final f = find.byKey(const ValueKey('video-subtitle-text'));
+        return f.evaluate().isEmpty ? '' : tester.widget<Text>(f).data ?? '';
+      }
+
+      await _pumpUntil(
+        tester,
+        () => const {
+          'HLS subtitle 1',
+          'HLS subtitle 2',
+          'HLS subtitle 3',
+        }.contains(subtitleText()),
+        reason: '离线显示 HLS 字幕轨',
+      );
       await tester.tap(find.byTooltip('字幕'));
       await tester.pumpAndSettle();
       expect(
         tester
             .widget<CheckedPopupMenuItem<Object?>>(
               find.ancestor(
-                of: find.text('zh（内嵌）'),
+                of: find.text('HLS Chinese（内嵌）'),
                 matching: find.byWidgetPredicate(
                   (w) => w is CheckedPopupMenuItem,
                 ),

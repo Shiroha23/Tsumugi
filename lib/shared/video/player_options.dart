@@ -50,6 +50,20 @@ Future<String> describeVideoDecoder(Player player) async {
   return '(not native)';
 }
 
+/// 播放器的 `demuxer-start-time`：媒体第一个时间戳，播放位置（`time-pos`）= PTS − 它（mpv 默认 `rebase-start-time=yes`）。
+/// HLS 字幕轨按它把 MPEG-TS 时间换算为播放位置（architecture §6.4.7）。取不到时为 0。
+Future<Duration> presentationStartOf(Player player) async {
+  if (player.platform case final NativePlayer native) {
+    try {
+      final v = double.tryParse(await native.getProperty('demuxer-start-time'));
+      if (v != null && v.isFinite) {
+        return Duration(microseconds: (v * 1e6).round());
+      }
+    } catch (_) {}
+  }
+  return Duration.zero;
+}
+
 /// 打开媒体前交给 libmpv 的选项（深度防御；主要的边界是代理）。
 ///
 /// 不设 `access-references=no`：media_kit 打开媒体时自己写一个临时播放列表文件再 `loadlist`，
