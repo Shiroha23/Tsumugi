@@ -125,6 +125,11 @@ class DownloadManager {
   bool _started = false;
   bool _starting = false;
   bool _disposed = false;
+
+  /// 队列被挂起（iOS 后台宽限时间将到、Android 前台服务被系统停止）：不开始新任务，
+  /// 进行中的已回到 `queued`。回到前台时 [resumeQueue]（architecture §4.5.1「后台下载」）。
+  bool get suspended => _suspended;
+  bool _suspended = false;
   Future<void>? _pumping;
   bool _pumpAgain = false;
 
@@ -229,6 +234,78 @@ class DownloadManager {
     _pump();
   }
 
+  /// 暂停全部未完成的 unit（后台下载通知中的「暂停全部」）。
+  Future<void> pauseAll() async {
+    for (final u in await repository.allUnits()) {
+      if (u.status == DownloadStatus.queued ||
+          u.status == DownloadStatus.running) {
+        await repository.setStatus(
+          u.sourceId,
+          u.itemId,
+          u.unitId,
+          DownloadStatus.paused,
+          // 快照之后已完成（done）或失败的不覆盖。
+          onlyFrom: const {DownloadStatus.queued, DownloadStatus.running},
+        );
+        _cancel(u);
+      }
+    }
+    _pump();
+  }
+
+  /// 挂起队列：进行中的任务中止并回到 `queued`（已写完的文件保留，继续时续传），不再开始新任务。
+  /// 用于系统即将挂起应用（iOS 后台宽限时间到期前）或停止前台服务（Android 15 的 `dataSync` 时限）。
+  Future<void> suspend() async {
+    if (_suspended) return;
+    _suspended = true;
+    final running = [for (final j in _jobs.values) j];
+    for (final j in running) {
+      j
+        ..cancelled = true
+        ..net.cancel();
+    }
+    // 先取消再改状态：任务结束时只在仍为 running 时写入结果，改回 queued 后不会被覆盖为 failed。
+    for (final j in running) {
+      await repository.setStatus(
+        j.unit.sourceId,
+        j.unit.itemId,
+        j.unit.unitId,
+        DownloadStatus.queued,
+        onlyFrom: const {DownloadStatus.running},
+      );
+    }
+    // 不等进行中的请求结束（漫画 / 小说的当前请求不中断）：结果会被丢弃，状态已是 queued。
+  }
+
+  /// 把没有任务在跑的 `running` unit 改回 `queued`（进程曾在挂起完成前被系统冻结），然后继续处理队列。
+  Future<void> recoverStale() async {
+    if (!_started || _disposed) return;
+    for (final u in await repository.allUnits()) {
+      if (u.status != DownloadStatus.running) continue;
+      final job = _jobs[u.sourceId];
+      if (job != null &&
+          job.unit.itemId == u.itemId &&
+          job.unit.unitId == u.unitId) {
+        continue;
+      }
+      await repository.setStatus(
+        u.sourceId,
+        u.itemId,
+        u.unitId,
+        DownloadStatus.queued,
+        onlyFrom: const {DownloadStatus.running},
+      );
+    }
+    _pump();
+  }
+
+  /// 取消 [suspend]，继续处理队列。
+  void resumeQueue() {
+    if (!_suspended) return;
+    _suspended = false;
+    _pump();
+  }
+
   /// 暂停 / 继续一个条目的全部未完成 unit。
   Future<void> pauseItem(String sourceId, String itemId) async {
     for (final u in await _unitsOf(sourceId, itemId)) {
@@ -239,6 +316,8 @@ class DownloadManager {
           itemId,
           u.unitId,
           DownloadStatus.paused,
+          // 快照之后已完成（done）或失败的不覆盖。
+          onlyFrom: const {DownloadStatus.queued, DownloadStatus.running},
         );
         _cancel(u);
       }
@@ -330,7 +409,7 @@ class DownloadManager {
   // 队列
 
   void _pump() {
-    if (!_started || _disposed) return;
+    if (!_started || _disposed || _suspended) return;
     if (_pumping != null) {
       _pumpAgain = true;
       return;
@@ -352,12 +431,25 @@ class DownloadManager {
           if (u.pausesSource) u.sourceId,
       };
       for (final u in await repository.queued()) {
-        if (_disposed || _jobs.length >= maxConcurrentUnits) break;
+        if (_disposed || _suspended || _jobs.length >= maxConcurrentUnits) {
+          break;
+        }
         if (_jobs.containsKey(u.sourceId) ||
             pausedSources.contains(u.sourceId)) {
           continue;
         }
         if (!await repository.claim(u.sourceId, u.itemId, u.unitId)) continue;
+        if (_suspended || _disposed) {
+          // 认领期间被挂起 / 退出：suspend() 的快照里没有它，放回队列。
+          await repository.setStatus(
+            u.sourceId,
+            u.itemId,
+            u.unitId,
+            DownloadStatus.queued,
+            onlyFrom: const {DownloadStatus.running},
+          );
+          break;
+        }
         final job = _jobs[u.sourceId] = _Job(u);
         unawaited(_run(job));
       }
