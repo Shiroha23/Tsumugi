@@ -52,6 +52,19 @@ void main() {
       }
       expect(slow, isEmpty);
     }, timeout: const Timeout(Duration(minutes: 5)));
+
+    test('length 只读取一次：之后变大的长度不起作用', () async {
+      final rt = QuickJsScriptRuntime(host: const {}, limits: limits);
+      addTearDown(rt.dispose);
+      await rt.load(limitsScript);
+      final quick = [for (final n in await rt.call('quickNames') as List) n];
+      expect(quick, isNotEmpty);
+      for (final name in quick) {
+        final sw = Stopwatch()..start();
+        expect(await rt.call('run', [name]), 'finished', reason: '$name');
+        expect(sw.elapsed, lessThan(const Duration(seconds: 1)), reason: '$name');
+      }
+    });
   });
 
   group('行为与原生实现一致', () {
@@ -97,7 +110,7 @@ void main() {
     test('查找一律走可中断的实现', () async {
       expectSame(
         await hardened(
-          const SandboxHardening(maxSearchWork: 0, maxArrayLength: 1 << 22),
+          const SandboxHardening(maxSearchWork: 0),
         ),
       );
     });
@@ -143,53 +156,6 @@ void main() {
         '-b-b',
         [1, 2, 3],
       ]);
-    });
-  });
-
-  group('输入上限', () {
-    const small = SandboxHardening(maxArrayLength: 10);
-
-    test('超出上限且未被捕获时以 E_LIMIT 结束，运行时之后可继续使用', () async {
-      final rt = QuickJsScriptRuntime(host: const {}, hardening: small);
-      addTearDown(rt.dispose);
-      await rt.load('''
-        export function big() { return Array.prototype.join.call({ length: 11 }); }
-        export function edge() { return Array.prototype.join.call({ length: 10 }, '-'); }
-      ''');
-      await expectLater(
-        rt.call('big'),
-        throwsA(
-          isA<ScriptException>().having(
-            (e) => e.code,
-            'code',
-            ScriptException.limit,
-          ),
-        ),
-      );
-      expect(await rt.call('edge'), '---------');
-    });
-
-    test('脚本可以捕获该异常', () async {
-      final rt = QuickJsScriptRuntime(host: const {}, hardening: small);
-      addTearDown(rt.dispose);
-      await rt.load('''
-        export function run() {
-          try { new Array(11).reverse(); return 'no'; }
-          catch (e) { return [e instanceof RangeError, e.message]; }
-        }
-      ''');
-      expect(await rt.call('run'), [true, sandboxLimitMessage]);
-    });
-
-    test('concat 按展开后的总长度判断', () async {
-      final rt = QuickJsScriptRuntime(host: const {}, hardening: small);
-      addTearDown(rt.dispose);
-      await rt.load('''
-        export function ok() { return [1, 2, 3].concat([4, 5, 6], 7, 8, 9, 10).length; }
-        export function over() { return [1, 2, 3].concat([4, 5, 6], [7, 8, 9, 10, 11]); }
-      ''');
-      expect(await rt.call('ok'), 10);
-      await expectLater(rt.call('over'), throwsA(isA<ScriptException>()));
     });
   });
 }

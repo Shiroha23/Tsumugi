@@ -4,9 +4,9 @@
 /// 不经过检查点，遇到极端输入时 CPU / 总时长限制对它们无效。这里在脚本求值之前，用受信任的 JS
 /// 替换这些内建函数：
 ///
-/// - 按 `length` 循环的数组方法：作用于 `length` 超过 [SandboxHardening.maxArrayLength] 的对象时
-///   抛出 [sandboxLimitMessage]（宿主映射为 `E_LIMIT`）；`flat` / `flatMap` 改为 JS 实现
-///   （逐项执行，可被中断）。
+/// - 按 `length` 逐项处理的数组方法（`join`、`toLocaleString`、`reverse`、`copyWithin`、`slice`、
+///   `splice`、`shift`、`unshift`、`sort`、`concat`、`flat`、`flatMap`）：改为按规范逐步执行的 JS 实现，
+///   `length` 只读一次，每一步都经过中断检查点。行为与标准一致。
 /// - 字符串子串查找（`indexOf` / `lastIndexOf` / `includes` / `split` / `replace` / `replaceAll`
 ///   的字符串参数路径）：工作量（两串长度之积）不超过 [SandboxHardening.maxSearchWork] 时
 ///   直接调用原生实现，否则改用按块比较的 JS 实现，结果与原生一致。
@@ -15,44 +15,27 @@
 /// 不新增任何全局对象或宿主 API。
 library;
 
-/// 加固后的内建函数因输入过大而拒绝执行时抛出的 `RangeError` 的 message。
-const sandboxLimitMessage = 'Input exceeds the sandbox limit.';
-
-/// 加固参数。默认值见 docs/source-spec.md §4.4。
+/// 加固参数。
 class SandboxHardening {
-  const SandboxHardening({
-    this.maxArrayLength = 1 << 22,
-    this.maxSearchWork = 1 << 24,
-  });
-
-  /// 数组方法接受的最大 `length`。
-  ///
-  /// 64 MB 堆中的稠密数组远达不到此值（每个元素至少 16 字节），超过它的只可能是稀疏数组
-  /// 或带 `length` 的普通对象，原生实现会在其上空转。
-  final int maxArrayLength;
+  const SandboxHardening({this.maxSearchWork = 1 << 24});
 
   /// 字符串查找直接走原生实现的最大工作量（被查找串剩余长度 × 模式串长度）。
   final int maxSearchWork;
 
   /// 返回在脚本之前执行的受信任 JS（一段脚本，执行结果为 `undefined`）。
-  String get script => _script
-      .replaceAll('__MAX_ARRAY_LENGTH__', '$maxArrayLength')
-      .replaceAll('__MAX_SEARCH_WORK__', '$maxSearchWork')
-      .replaceAll('__LIMIT_MESSAGE__', sandboxLimitMessage);
+  String get script =>
+      _script.replaceAll('__MAX_SEARCH_WORK__', '$maxSearchWork');
 }
 
 const _script = r'''
 (() => {
   'use strict';
-  const MAX_LEN = __MAX_ARRAY_LENGTH__;
   const MAX_WORK = __MAX_SEARCH_WORK__;
   const CHUNK = 4096;
-  const LIMIT_MESSAGE = '__LIMIT_MESSAGE__';
 
   const Obj = Object;
   const Arr = Array;
   const TypeErr = TypeError;
-  const RangeErr = RangeError;
   const apply = Reflect.apply;
   const construct = Reflect.construct;
   const ProxyCtor = Proxy;
@@ -74,7 +57,6 @@ const _script = r'''
   const nStartsWith = SP.startsWith;
   const nSlice = SP.slice;
 
-  const limit = () => new RangeErr(LIMIT_MESSAGE);
   const isObject = (v) => (typeof v === 'object' && v !== null) || typeof v === 'function';
   const toObject = (v) => {
     if (v == null) throw new TypeErr('Cannot convert undefined or null to object');
@@ -145,22 +127,236 @@ const _script = r'''
   };
 
   // --- 数组 -------------------------------------------------------------------
+  // 按 ECMA-262 §23.1.3 逐步实现：length 只读一次，逐项处理（每步都经过中断检查点）。
+  // 只在客户端私有、原型为 null 的稠密数组上调用原生 sort，其长度受内存上限约束。
 
-  const checkLength = (o) => {
-    if (toLength(o.length) > MAX_LEN) throw limit();
+  const MAX_SAFE = 9007199254740991;
+  const setPrototypeOf = Obj.setPrototypeOf;
+  const nSort = AP.sort;
+  const privateArray = () => {
+    const a = [];
+    setPrototypeOf(a, null);
+    return a;
   };
-  for (const name of [
-    'join', 'toLocaleString', 'reverse', 'copyWithin', 'slice', 'splice',
-    'shift', 'unshift', 'sort',
-  ]) {
-    const orig = AP[name];
-    install(AP, name, {
-      [name]() {
-        checkLength(toObject(this));
-        return apply(orig, this, arguments);
-      },
-    }[name], orig.length);
-  }
+  const relIndex = (v, len) => {
+    const r = toIntegerOrInfinity(v);
+    if (r < 0) return len + r > 0 ? len + r : 0;
+    return r < len ? r : len;
+  };
+  const lengthOf = (o) => toLength(o.length);
+
+  const joinItems = (o, len, sep, locale) => {
+    let r = '';
+    for (let k = 0; k < len; k++) {
+      if (k > 0) r += sep;
+      let e = o[k];
+      if (e == null) continue;
+      if (locale) {
+        const f = e.toLocaleString;
+        e = apply(f, e, []);
+      }
+      r += toStr(e);
+    }
+    return r;
+  };
+  install(AP, 'join', {
+    join(separator) {
+      const o = toObject(this);
+      const len = lengthOf(o);
+      const sep = separator === undefined ? ',' : toStr(separator);
+      return joinItems(o, len, sep, false);
+    },
+  }.join, 1);
+  install(AP, 'toLocaleString', {
+    toLocaleString() {
+      const o = toObject(this);
+      return joinItems(o, lengthOf(o), ',', true);
+    },
+  }.toLocaleString, 0);
+
+  install(AP, 'reverse', {
+    reverse() {
+      const o = toObject(this);
+      const len = lengthOf(o);
+      const middle = trunc(len / 2);
+      for (let lower = 0; lower !== middle; lower++) {
+        const upper = len - lower - 1;
+        const lowerExists = lower in o;
+        const lowerValue = lowerExists ? o[lower] : undefined;
+        const upperExists = upper in o;
+        const upperValue = upperExists ? o[upper] : undefined;
+        if (lowerExists && upperExists) {
+          o[lower] = upperValue;
+          o[upper] = lowerValue;
+        } else if (upperExists) {
+          o[lower] = upperValue;
+          delete o[upper];
+        } else if (lowerExists) {
+          delete o[lower];
+          o[upper] = lowerValue;
+        }
+      }
+      return o;
+    },
+  }.reverse, 0);
+
+  install(AP, 'copyWithin', {
+    copyWithin(target, start, end) {
+      const o = toObject(this);
+      const len = lengthOf(o);
+      let to = relIndex(target, len);
+      let from = relIndex(start, len);
+      const final = end === undefined ? len : relIndex(end, len);
+      let count = final - from < len - to ? final - from : len - to;
+      let dir = 1;
+      if (from < to && to < from + count) {
+        dir = -1;
+        from = from + count - 1;
+        to = to + count - 1;
+      }
+      for (; count > 0; count--) {
+        if (from in o) {
+          o[to] = o[from];
+        } else {
+          delete o[to];
+        }
+        from += dir;
+        to += dir;
+      }
+      return o;
+    },
+  }.copyWithin, 2);
+
+  install(AP, 'slice', {
+    slice(start, end) {
+      const o = toObject(this);
+      const len = lengthOf(o);
+      let k = relIndex(start, len);
+      const final = end === undefined ? len : relIndex(end, len);
+      const count = final - k > 0 ? final - k : 0;
+      const a = arraySpeciesCreate(o, count);
+      let n = 0;
+      for (; k < final; k++, n++) {
+        if (k in o) defineProperty(a, n, dataDesc(o[k]));
+      }
+      a.length = n;
+      return a;
+    },
+  }.slice, 2);
+
+  install(AP, 'splice', {
+    splice(start, deleteCount, ...items) {
+      const o = toObject(this);
+      const len = lengthOf(o);
+      const actualStart = relIndex(start, len);
+      const itemCount = items.length;
+      let del;
+      if (arguments.length === 0) {
+        del = 0;
+      } else if (arguments.length === 1) {
+        del = len - actualStart;
+      } else {
+        const dc = toIntegerOrInfinity(deleteCount);
+        del = dc < 0 ? 0 : dc < len - actualStart ? dc : len - actualStart;
+      }
+      if (len + itemCount - del > MAX_SAFE) throw new TypeErr('array too long');
+      const a = arraySpeciesCreate(o, del);
+      for (let k = 0; k < del; k++) {
+        const from = actualStart + k;
+        if (from in o) defineProperty(a, k, dataDesc(o[from]));
+      }
+      a.length = del;
+      if (itemCount < del) {
+        for (let k = actualStart; k < len - del; k++) {
+          const from = k + del;
+          const to = k + itemCount;
+          if (from in o) {
+            o[to] = o[from];
+          } else {
+            delete o[to];
+          }
+        }
+        for (let k = len; k > len - del + itemCount; k--) delete o[k - 1];
+      } else if (itemCount > del) {
+        for (let k = len - del; k > actualStart; k--) {
+          const from = k + del - 1;
+          const to = k + itemCount - 1;
+          if (from in o) {
+            o[to] = o[from];
+          } else {
+            delete o[to];
+          }
+        }
+      }
+      for (let i = 0; i < itemCount; i++) o[actualStart + i] = items[i];
+      o.length = len - del + itemCount;
+      return a;
+    },
+  }.splice, 2);
+
+  install(AP, 'shift', {
+    shift() {
+      const o = toObject(this);
+      const len = lengthOf(o);
+      if (len === 0) {
+        o.length = 0;
+        return undefined;
+      }
+      const first = o[0];
+      for (let k = 1; k < len; k++) {
+        if (k in o) {
+          o[k - 1] = o[k];
+        } else {
+          delete o[k - 1];
+        }
+      }
+      delete o[len - 1];
+      o.length = len - 1;
+      return first;
+    },
+  }.shift, 0);
+
+  install(AP, 'unshift', {
+    unshift(...items) {
+      const o = toObject(this);
+      const len = lengthOf(o);
+      const argCount = items.length;
+      if (argCount > 0) {
+        if (len + argCount > MAX_SAFE) throw new TypeErr('array too long');
+        for (let k = len; k > 0; k--) {
+          const from = k - 1;
+          const to = k + argCount - 1;
+          if (from in o) {
+            o[to] = o[from];
+          } else {
+            delete o[to];
+          }
+        }
+        for (let j = 0; j < argCount; j++) o[j] = items[j];
+      }
+      o.length = len + argCount;
+      return len + argCount;
+    },
+  }.unshift, 1);
+
+  install(AP, 'sort', {
+    sort(comparefn) {
+      if (comparefn !== undefined && typeof comparefn !== 'function') {
+        throw new TypeErr('comparefn must be a function');
+      }
+      const o = toObject(this);
+      const len = lengthOf(o);
+      const items = privateArray();
+      let n = 0;
+      for (let k = 0; k < len; k++) {
+        if (k in o) items[n++] = o[k];
+      }
+      apply(nSort, items, comparefn === undefined ? [] : [comparefn]);
+      for (let j = 0; j < n; j++) o[j] = items[j];
+      for (let j = n; j < len; j++) delete o[j];
+      return o;
+    },
+  }.sort, 1);
 
   const spreadable = (o) => {
     if (!isObject(o)) return false;
@@ -168,20 +364,28 @@ const _script = r'''
     if (s !== undefined) return !!s;
     return isArray(o);
   };
-  const concat = AP.concat;
   install(AP, 'concat', {
-    concat() {
+    concat(...items) {
       const o = toObject(this);
-      let total = spreadable(o) ? toLength(o.length) : 1;
-      for (let i = 0; i < arguments.length; i++) {
-        const e = arguments[i];
-        total += spreadable(e) ? toLength(e.length) : 1;
-        if (total > MAX_LEN) break;
+      const a = arraySpeciesCreate(o, 0);
+      let n = 0;
+      for (let i = -1; i < items.length; i++) {
+        const e = i < 0 ? o : items[i];
+        if (spreadable(e)) {
+          const len = lengthOf(e);
+          if (n + len > MAX_SAFE) throw new TypeErr('array too long');
+          for (let k = 0; k < len; k++, n++) {
+            if (k in e) defineProperty(a, n, dataDesc(e[k]));
+          }
+        } else {
+          if (n >= MAX_SAFE) throw new TypeErr('array too long');
+          defineProperty(a, n++, dataDesc(e));
+        }
       }
-      if (total > MAX_LEN) throw limit();
-      return apply(concat, this, arguments);
+      a.length = n;
+      return a;
     },
-  }.concat, concat.length);
+  }.concat, 1);
 
   const arraySpeciesCreate = (o, len) => {
     if (!isArray(o)) return new Arr(len);
@@ -205,7 +409,7 @@ const _script = r'''
         targetIndex = flatten(target, element, toLength(element.length), targetIndex,
           depth === Infinity ? Infinity : depth - 1);
       } else {
-        if (targetIndex >= 9007199254740991) throw new TypeErr('array too long');
+        if (targetIndex >= MAX_SAFE) throw new TypeErr('array too long');
         defineProperty(target, targetIndex, dataDesc(element));
         targetIndex++;
       }

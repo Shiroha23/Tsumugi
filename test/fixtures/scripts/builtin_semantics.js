@@ -214,6 +214,72 @@ function semanticCases() {
   record('array 16', () => AP.concat.call(1, 2));
   record('array 17', () => AP.slice.call('abc', 1));
 
+  // 经代理记录每一步的属性访问：操作序列（含 length 的读取次数）必须与原生实现相同。
+  const trace = (target, fn) => {
+    const ops = [];
+    const key = (k) => (typeof k === 'symbol' ? k.toString() : k);
+    const p = new Proxy(target, {
+      get(t, k, r) { ops.push(['get', key(k)]); return Reflect.get(t, k, r); },
+      set(t, k, v, r) { ops.push(['set', key(k), v]); return Reflect.set(t, k, v, r); },
+      has(t, k) { ops.push(['has', key(k)]); return Reflect.has(t, k); },
+      deleteProperty(t, k) { ops.push(['delete', key(k)]); return Reflect.deleteProperty(t, k); },
+      defineProperty(t, k, d) { ops.push(['define', key(k)]); return Reflect.defineProperty(t, k, d); },
+    });
+    let result;
+    try {
+      result = fn(p);
+      if (result === p) result = 'self';
+    } catch (e) {
+      result = 'throws ' + e.name;
+    }
+    return [result, ops, Array.from(target)];
+  };
+  const holeyTarget = () => [1, , 3, , 5];
+  record('trace join', () => trace(holeyTarget(), (p) => AP.join.call(p, '-')));
+  record('trace toLocaleString', () => trace([1, null, 'x'], (p) => AP.toLocaleString.call(p)));
+  record('trace reverse', () => trace(holeyTarget(), (p) => AP.reverse.call(p)));
+  record('trace reverse even', () => trace([1, , , 4], (p) => AP.reverse.call(p)));
+  record('trace copyWithin', () => trace(holeyTarget(), (p) => AP.copyWithin.call(p, 0, 2)));
+  record('trace copyWithin back', () => trace(holeyTarget(), (p) => AP.copyWithin.call(p, 2, 0, 3)));
+  record('trace copyWithin neg', () => trace(holeyTarget(), (p) => AP.copyWithin.call(p, -2, -4, -1)));
+  record('trace slice', () => trace(holeyTarget(), (p) => AP.slice.call(p, 1, -1)));
+  record('trace splice delete', () => trace(holeyTarget(), (p) => AP.splice.call(p, 1, 2)));
+  record('trace splice insert', () => trace(holeyTarget(), (p) => AP.splice.call(p, 1, 1, 'a', 'b', 'c')));
+  record('trace splice same', () => trace(holeyTarget(), (p) => AP.splice.call(p, 2, 1, 'z')));
+  record('trace splice none', () => trace(holeyTarget(), (p) => AP.splice.call(p)));
+  record('trace splice start', () => trace(holeyTarget(), (p) => AP.splice.call(p, -2)));
+  record('trace shift', () => trace(holeyTarget(), (p) => AP.shift.call(p)));
+  record('trace shift empty', () => trace([], (p) => AP.shift.call(p)));
+  record('trace unshift', () => trace(holeyTarget(), (p) => AP.unshift.call(p, 'a', 'b')));
+  record('trace unshift none', () => trace(holeyTarget(), (p) => AP.unshift.call(p)));
+  record('trace sort', () => trace([3, , 1, undefined, 2], (p) => AP.sort.call(p)));
+  record('trace sort cmp', () => trace([3, , 1, 2], (p) => AP.sort.call(p, (a, b) => a - b)));
+  record('trace concat', () => trace(holeyTarget(), (p) => AP.concat.call([0], p, 9)));
+  record('trace concat self', () => trace(holeyTarget(), (p) => AP.concat.call(p, [7])));
+  record('trace flat', () => trace([1, [2, , 3], , 4], (p) => AP.flat.call(p)));
+  record('trace flatMap', () => trace([1, , 2], (p) => AP.flatMap.call(p, (x) => [x, x])));
+  record('trace frozen', () => trace(Object.freeze([1, 2]), (p) => AP.reverse.call(p)));
+  record('length reads', () => {
+    let reads = 0;
+    const make = () => ({ get length() { reads++; return 2; }, 0: 'b', 1: 'a' });
+    const counts = [];
+    for (const name of ['join', 'toLocaleString', 'reverse', 'copyWithin', 'slice', 'splice',
+      'shift', 'unshift', 'sort', 'concat', 'flat', 'flatMap']) {
+      reads = 0;
+      const o = make();
+      if (name === 'concat') o[Symbol.isConcatSpreadable] = true;
+      try {
+        if (name === 'concat') AP.concat.call([], o);
+        else if (name === 'flatMap') AP.flatMap.call(o, (x) => x);
+        else AP[name].call(o, 0);
+      } catch (e) {
+        counts.push(name + ' ' + e.name);
+      }
+      counts.push(name + ' ' + reads);
+    }
+    return counts;
+  });
+
   // 函数对象本身的属性
   const fnInfo = (proto, name) => {
     const d = Object.getOwnPropertyDescriptor(proto, name);

@@ -30,7 +30,7 @@ import 'script_runtime.dart';
 /// 已知限制（见 docs/architecture.md §6.1）：
 /// - JS 执行期间会阻塞所在 isolate；脚本源经 `IsolateScriptRuntime` 放在 worker isolate 中运行。
 /// - QuickJS 部分原生内建函数内部的循环不检查中断；已知的几类由 [SandboxHardening] 在脚本之前
-///   替换（超大输入报 `E_LIMIT`，或改为可中断的实现）。引擎每隔一定数量的检查点才核对一次 deadline，
+///   替换为可中断的实现。引擎每隔一定数量的检查点才核对一次 deadline，
 ///   单次开销很大的内建操作在循环中反复调用时，中断可能明显晚于上限（有上界），由 worker 看门狗兜底。
 /// - 内存 / 栈超限表现为分配失败的异常，脚本可以 catch；但超限的分配本身不会成功。
 class QuickJsScriptRuntime implements ScriptRuntime {
@@ -553,15 +553,6 @@ class QuickJsScriptRuntime implements ScriptRuntime {
     final status = _readStatus(obj);
     if (code != null) {
       return ScriptException(message, code: code, status: status, stack: stack);
-    }
-
-    // 加固后的内建函数拒绝过大的输入（[SandboxHardening]）。
-    if (name == 'RangeError' && rawMessage == sandboxLimitMessage) {
-      return ScriptException(
-        'Sandbox input limit exceeded.',
-        code: ScriptException.limit,
-        stack: stack,
-      );
     }
 
     // 引擎抛出的资源超限：只认引擎的确切错误类型与消息。
