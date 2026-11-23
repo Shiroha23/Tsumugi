@@ -332,6 +332,7 @@ void main() {
         await run(withSub('/video/media/subs/en.vtt'));
         expect(server.hits('/video/media/subs/en.vtt'), 1);
         expect(manifest().subtitles.single.file, 'sub-01.vtt');
+        expect(file('sub-01.srt').existsSync(), isFalse, reason: '旧格式的文件已删除');
       },
     );
 

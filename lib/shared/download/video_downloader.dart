@@ -10,6 +10,7 @@ import '../../core/network/media/hls_playlist.dart'
     show looksLikeHlsPlaylist, looksLikeWebVtt;
 import '../../core/network/media/media_signature.dart';
 import '../../core/network/network_exception.dart';
+import '../../core/network/pausable_deadline.dart';
 import '../../core/network/source_http_client.dart';
 import '../../core/subtitle/subtitle_loader.dart';
 import '../../core/subtitle/subtitle_parser.dart';
@@ -114,6 +115,16 @@ class VideoDownloadTask {
   int _bytes = 0;
 
   Future<(int, int, int)> run() async {
+    try {
+      return await _run();
+    } on SourceException catch (e) {
+      // 任何路径上的 E_LIMIT（含播放列表 / 分片数超限）：删除该剧集已写的全部文件。
+      if (e.code == SourceErrorCode.limit) await _clear();
+      rethrow;
+    }
+  }
+
+  Future<(int, int, int)> _run() async {
     final streams = playableStreams(content);
     if (streams.isEmpty) {
       throw SourceException(
@@ -123,7 +134,7 @@ class VideoDownloadTask {
     }
     _streamIndex = pickStream(streams, preferredLabel);
     _stream = streams[_streamIndex];
-    _label = streamLabel(streams, _streamIndex);
+    _label = _fit(streamLabel(streams, _streamIndex), 256)!;
     _headers = {
       for (final e in (_stream.headers ?? const {}).entries)
         // 区间由下载器自己决定：源给的 Range / If-Range 会让整文件下载只取到一部分。
@@ -171,7 +182,20 @@ class VideoDownloadTask {
         );
         if (resumed.status == HttpStatus.partialContent) {
           final cr = _contentRange(resumed.headers['content-range']);
-          if (cr != null && cr.$1 == from && cr.$3 == f.length) {
+          // 上游忽略 If-Range 时也可能回 206：响应带的校验值与记录不同就不能接上。
+          final etag = resumed.headers['etag'];
+          final lastModified = resumed.headers['last-modified'];
+          final sameVersion =
+              (f.etag == null || etag == null || etag == f.etag) &&
+              (f.lastModified == null ||
+                  lastModified == null ||
+                  lastModified == f.lastModified);
+          if (cr != null &&
+              cr.$1 == from &&
+              cr.$2 == f.length! - 1 &&
+              cr.$3 == f.length &&
+              sameVersion &&
+              _identity(resumed)) {
             if (from < have) {
               resumed.cancel();
               return _finishFile(existing, have);
@@ -186,7 +210,13 @@ class VideoDownloadTask {
         }
       }
     }
-    up ??= await _open(root, lane: RateLimitLane.source);
+    // 根地址可能是播放列表：从发出请求起受元数据时限约束；确认是媒体文件后解除。
+    final rootDeadline = _metadataDeadline(abort);
+    up ??= await _open(
+      root,
+      lane: RateLimitLane.source,
+      deadline: rootDeadline,
+    );
     _checkStatus(up);
     if (up.status != HttpStatus.ok) {
       // 没有发区间请求却得到 206 等：不能当作完整文件。
@@ -197,12 +227,13 @@ class VideoDownloadTask {
         up.status,
       );
     }
-    final until = _metadataDeadline();
-    final (head, rest) = await _peek(up, 1024, until: until);
+    final (head, rest) = await _peek(up, 1024, until: rootDeadline);
     if (looksLikeHlsPlaylist(head)) {
-      final text = await _collectText(head, rest, up, until);
+      final text = await _collectText(head, rest, up, rootDeadline);
+      rootDeadline.stop();
       return _downloadHls(text, up.url, existing);
     }
+    rootDeadline.stop();
     if (!looksLikeMediaContainer(head)) {
       await rest.cancel();
       up.cancel();
@@ -236,8 +267,17 @@ class VideoDownloadTask {
       final state = VideoFileState(
         length: declared,
         // 弱 ETag 不能用于 If-Range（RFC 9110 §13.1.5），视为没有校验值。
-        etag: identity && etag != null && !etag.startsWith('W/') ? etag : null,
-        lastModified: identity ? up.headers['last-modified'] : null,
+        etag:
+            identity &&
+                etag != null &&
+                !etag.startsWith('W/') &&
+                etag.length <= 1024
+            ? etag
+            : null,
+        lastModified:
+            identity && (up.headers['last-modified']?.length ?? 0) <= 1024
+            ? up.headers['last-modified']
+            : null,
       );
       var manifest = VideoManifest.file(
         sourceKey: key,
@@ -400,9 +440,13 @@ class VideoDownloadTask {
       if (uri == null) {
         (text, base) = (rootText, rootUrl);
       } else {
-        final up = await _open(uri, lane: RateLimitLane.source);
+        final until = _metadataDeadline(abort);
+        final up = await _open(
+          uri,
+          lane: RateLimitLane.source,
+          deadline: until,
+        );
         _checkStatus(up);
-        final until = _metadataDeadline();
         final (head, rest) = await _peek(up, 1024, until: until);
         if (!looksLikeHlsPlaylist(head)) {
           await rest.cancel();
@@ -410,6 +454,7 @@ class VideoDownloadTask {
           throw const SourceException(SourceErrorCode.parse, '子播放列表无效');
         }
         text = await _collectText(head, rest, up, until);
+        until.stop();
         base = up.url;
       }
       try {
@@ -487,8 +532,8 @@ class VideoDownloadTask {
           dir: dir,
           mediaSequence: p.mediaSequence,
           items: items,
-          name: name,
-          language: language,
+          name: _fit(name, 256),
+          language: _fit(language, 64),
         ),
       );
     }
@@ -496,8 +541,8 @@ class VideoDownloadTask {
       sourceKey: key,
       label: _label,
       bandwidth: selection?.variant.bandwidth,
-      resolution: selection?.variant.resolution,
-      codecs: selection?.variant.codecs,
+      resolution: _fit(selection?.variant.resolution, 32, drop: true),
+      codecs: _fit(selection?.variant.codecs, 256, drop: true),
       tracks: tracks,
       subtitles: reuse?.subtitles ?? const [],
     );
@@ -757,11 +802,8 @@ class VideoDownloadTask {
 
   /// 取 AES-128 密钥（媒体配额，必须为 16 字节）；不保存。
   Future<Uint8List> _fetchKey(Uri uri) async {
-    final up = await _open(
-      uri,
-      lane: RateLimitLane.media,
-      cancellation: _localAbort,
-    );
+    final until = _metadataDeadline(_localAbort);
+    final up = await _open(uri, lane: RateLimitLane.media, deadline: until);
     if (up.status != HttpStatus.ok) {
       up.cancel();
       throw SourceException(
@@ -770,9 +812,9 @@ class VideoDownloadTask {
         up.status,
       );
     }
-    final until = _metadataDeadline();
     final (head, rest) = await _peek(up, 64, until: until);
     final key = await _collect(head, rest, up, 4096, until: until);
+    until.stop();
     if (key == null || key.length != 16) {
       throw const SourceException(SourceErrorCode.parse, '密钥无效');
     }
@@ -823,9 +865,9 @@ class VideoDownloadTask {
           : await _length(DownloadStore.fileIn(dir, kept.file));
       if (kept != null &&
           kept.source == source &&
-          kept.lang == ref.lang &&
-          kept.format == ref.format &&
-          kept.charset == ref.charset &&
+          kept.lang == _fit(ref.lang, 1024) &&
+          kept.format == _fit(ref.format, 16, drop: true) &&
+          kept.charset == _fit(ref.charset, 64, drop: true) &&
           keptLength > 0) {
         _bytes += keptLength;
         await _checkSubtitleLimit();
@@ -861,9 +903,9 @@ class VideoDownloadTask {
           VideoSubtitleEntry(
             file: name,
             source: source,
-            lang: ref.lang,
-            format: ref.format,
-            charset: ref.charset,
+            lang: _fit(ref.lang, 1024),
+            format: _fit(ref.format, 16, drop: true),
+            charset: _fit(ref.charset, 64, drop: true),
             contentType: _safeContentType(contentType),
           ),
         );
@@ -879,6 +921,22 @@ class VideoDownloadTask {
         }
         rethrow;
       }
+    }
+    // 不再引用的字幕文件（格式变了、条目没了、上次中途失败留下的）：删除，目录中只留计入配额的。
+    final keep = {for (final e in out) e.file};
+    try {
+      if (await dir.exists()) {
+        await for (final f in dir.list(followLinks: false)) {
+          final name = f.uri.pathSegments.lastWhere((s) => s.isNotEmpty);
+          if (f is File &&
+              RegExp(r'^sub-\d{2}\.').hasMatch(name) &&
+              !keep.contains(name)) {
+            await f.delete();
+          }
+        }
+      }
+    } on FileSystemException catch (e) {
+      throw DownloadStorageException(e);
     }
     return out;
   }
@@ -901,24 +959,38 @@ class VideoDownloadTask {
   // ---------------------------------------------------------------------------
   // 公共部分
 
+  /// [deadline] 不为 null 时请求受它约束（等响应头、挑战扫描、重试都计入，限速排队不计入）。
   Future<NetStreamResponse> _open(
     Uri url, {
     required RateLimitLane lane,
     NetCancellation? cancellation,
+    _Deadline? deadline,
     Map<String, String> extra = const {},
-  }) => client.openStream(
-    lane: lane,
-    NetRequest(
-      url.toString(),
-      headers: {
-        ..._headers,
-        // 按原样字节传输（区间续传、分片长度校验）；不允许被 StreamRef.headers 覆盖。
-        'accept-encoding': 'identity',
-        ...extra,
-      },
-      cancellation: cancellation ?? abort,
-    ),
-  );
+  }) async {
+    try {
+      return await client.openStream(
+        lane: lane,
+        onRateLimitWait: deadline?.onRateLimitWait,
+        NetRequest(
+          url.toString(),
+          headers: {
+            ..._headers,
+            // 按原样字节传输（区间续传、分片长度校验）；不允许被 StreamRef.headers 覆盖。
+            'accept-encoding': 'identity',
+            ...extra,
+          },
+          cancellation: deadline?.cancel ?? cancellation ?? abort,
+        ),
+      );
+    } on NetworkException {
+      if (deadline != null && deadline.isExpired) throw _timeout(url);
+      rethrow;
+    }
+  }
+
+  /// 播放列表 / 密钥取数的总时限（[VideoDownloadLimits.metadataTimeout]）。
+  _Deadline _metadataDeadline(NetCancellation parent) =>
+      _Deadline(limits.metadataTimeout, parent);
 
   static void _checkStatus(NetStreamResponse up) {
     if (up.status >= 200 && up.status < 300) {
@@ -955,7 +1027,7 @@ class VideoDownloadTask {
   Future<(Uint8List, StreamIterator<List<int>>)> _peek(
     NetStreamResponse up,
     int n, {
-    DateTime? until,
+    _Deadline? until,
   }) async {
     final it = StreamIterator(up.body);
     final head = BytesBuilder(copy: false);
@@ -975,28 +1047,18 @@ class VideoDownloadTask {
     return (head.takeBytes(), _Prefixed(rest, it));
   }
 
-  /// [StreamIterator.moveNext]，到 [until] 时抛超时（取消上游请求不一定让正在等的 moveNext 立即返回）。
+  /// [StreamIterator.moveNext]，[until] 到时抛超时（取消上游请求不一定让正在等的 moveNext 立即返回）。
   Future<bool> _next(
     StreamIterator<List<int>> it,
     NetStreamResponse up,
-    DateTime? until,
+    _Deadline? until,
   ) async {
     if (until == null) return it.moveNext();
-    final left = until.difference(DateTime.now());
-    if (left <= Duration.zero) throw _timeout(up.url);
-    final expired = Completer<bool>();
-    final timer = Timer(left, () => expired.complete(false));
-    try {
-      final more = await Future.any([it.moveNext(), expired.future]);
-      if (expired.isCompleted) throw _timeout(up.url);
-      return more;
-    } finally {
-      timer.cancel();
-    }
+    if (until.isExpired) throw _timeout(up.url);
+    final more = await Future.any([it.moveNext(), until.expired.future]);
+    if (until.isExpired) throw _timeout(up.url);
+    return more;
   }
-
-  /// 播放列表 / 密钥的读取期限（[VideoDownloadLimits.metadataTimeout]，从开始读响应体时算起）。
-  DateTime _metadataDeadline() => DateTime.now().add(limits.metadataTimeout);
 
   /// 读完响应体；超过 [limit] 时返回 null。给出 [until] 时到时中止请求并抛 [NetworkErrorKind.timeout]。
   Future<Uint8List?> _collect(
@@ -1004,7 +1066,7 @@ class VideoDownloadTask {
     StreamIterator<List<int>> rest,
     NetStreamResponse up,
     int limit, {
-    DateTime? until,
+    _Deadline? until,
   }) async {
     final out = BytesBuilder(copy: false)..add(head);
     try {
@@ -1031,7 +1093,7 @@ class VideoDownloadTask {
     Uint8List head,
     StreamIterator<List<int>> rest,
     NetStreamResponse up,
-    DateTime until,
+    _Deadline until,
   ) async {
     final body = await _collect(
       head,
@@ -1089,6 +1151,13 @@ class VideoDownloadTask {
 
   static const _sniffBytes = 1024;
 
+  /// 写入 `video.json` 的文字不超过读取时接受的长度（[VideoManifest.decode]）：显示用的截断，
+  /// 参与解析的（[drop]）超长时不保存。
+  static String? _fit(String? v, int max, {bool drop = false}) {
+    if (v == null || v.length <= max) return v;
+    return drop ? null : v.substring(0, max);
+  }
+
   static bool _isLimit(Object e) =>
       e is SourceException && e.code == SourceErrorCode.limit;
 
@@ -1097,6 +1166,30 @@ class VideoDownloadTask {
   static String _gib(int bytes) => bytes >= 1024 * 1024 * 1024
       ? '${bytes ~/ (1024 * 1024 * 1024)} GiB'
       : '${bytes ~/ (1024 * 1024)} MiB';
+}
+
+/// 播放列表 / 密钥取数的总时限：到时取消 [cancel]（请求用它）并完成 [expired]；
+/// 等待限速令牌期间暂停计时（§6.4.3 的 `prepareTimeout` 同样不计排队时间）。
+final class _Deadline {
+  _Deadline(Duration limit, NetCancellation parent) {
+    parent.whenCancelled.then((_) => cancel.cancel());
+    _timer = PausableDeadline(limit, () {
+      if (!expired.isCompleted) expired.complete(false);
+      cancel.cancel();
+    });
+  }
+
+  final cancel = NetCancellation();
+  final expired = Completer<bool>();
+  late final PausableDeadline _timer;
+
+  bool get isExpired => expired.isCompleted;
+
+  void onRateLimitWait(bool waiting) =>
+      waiting ? _timer.pause() : _timer.resume();
+
+  /// 不再计时（请求仍可继续，例如根地址确认是媒体文件之后）。
+  void stop() => _timer.cancel();
 }
 
 /// 先交出已读出的 [_pending]，再继续读 [_it]。
