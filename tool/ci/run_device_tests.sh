@@ -15,11 +15,13 @@
 # Android 模拟器上的基础设施错误，根因见 logcat：设备上 adbd 与电脑的连接偶尔断开重连
 # （`adbd: host-N: connection terminated: write failed` → `host-N+1`）。连接一重置，其上的 adb forward
 # （flutter_tools 用来连 VM Service）和 adb reverse（测试用来连 mock 服务器）全部失效，表现为：
-#   - `Connecting to the VM Service timed out.`（flutter_tools 只等 5 秒）或 `VmServiceDisappearedException`；
+#   - `Connecting to the VM Service timed out.`（flutter_tools 只等 5 秒）、`VmServiceDisappearedException`
+#     或 `Failed to start Dart Development Service`（多在 VM Service 启动后约 0.5 秒、建立 adb forward 时发生）；
 #   - flutter_tools 一直等不到测试结果，挂到时限；
 #   - `SocketException: Connection refused`（在 TestMock.start 里）：设备上 127.0.0.1:MOCK_PORT 没有监听。
 # 对策：每个文件开始前确认设备在线、清掉残留的应用进程 / 端口转发 / logcat，重新建立 adb reverse；
-# 运行中每 5 秒检查 adb reverse 规则还在不在，不在了说明连接已重置，立即结束这一次并重试，不必等到时限。
+# 运行中每 5 秒检查 adb reverse 规则还在不在，不在了说明连接已重置，立即结束这一次并重试，不必等到时限；
+# 失败结束后 reverse 规则不在了，同样按连接重置处理（不论报的是哪种错误）。
 # 失败或重试时的诊断信息（adb 状态、logcat）写入 DEVICE_LOG_DIR（默认 build/device_logs），由工作流上传。
 #
 # 注意：macOS 自带 bash 3.2 会把紧跟在 $name 后面的非 ASCII 字符当作变量名的一部分，
@@ -157,7 +159,7 @@ run_once() {
 # 输出里是否有「连不上测试程序 / 设备」的基础设施错误（而不是断言失败）。
 infra_failure() {
   local log="$1"
-  grep -qE 'Connecting to the VM Service timed out|VmServiceDisappearedException|The VM Service is not available on the test device|Unable to start the app on the device|Error: ADB exited|adb: device offline|device .* not found' "$log" && return 0
+  grep -qE 'Connecting to the VM Service timed out|VmServiceDisappearedException|Failed to start Dart Development Service|The VM Service is not available on the test device|Unable to start the app on the device|Error: ADB exited|adb: device offline|device .* not found' "$log" && return 0
   # mock 服务器连接被拒，且发生在 TestMock.start（测试开始前）：adb reverse 丢失，见文件头。
   grep -q 'SocketException: Connection refused' "$log" && grep -q 'TestMock.start' "$log"
 }
@@ -175,6 +177,9 @@ for file in "$@"; do
   if (( code == 124 )); then
     reason="超时"
   elif (( code == 125 )); then
+    reason="adb 连接已重置"
+  elif (( code != 0 )) && is_android && ! reverse_alive; then
+    # 运行结束得太快，看门狗没来得及发现，但 adb reverse 已丢失：同样是连接重置。
     reason="adb 连接已重置"
   elif (( code != 0 )) && infra_failure "$log_dir/$name.1.log"; then
     reason="连不上设备上的测试程序（基础设施错误）"
