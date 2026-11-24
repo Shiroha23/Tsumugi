@@ -1,6 +1,7 @@
 name: Upstream watch
 
-# 每周检查卡在上游的依赖（media_kit 原生库、better_player Windows 渲染、qjs、flutter_inappwebview），
+# 每周检查卡在上游的依赖（media_kit 原生库、Windows 自建 libmpv 的 mpv / FFmpeg、better_player Windows 渲染、qjs、
+# flutter_inappwebview），
 # 有新进展时在本仓库对应的 issue（#56、#49、#28、#27、#30）下评论一次。脚本见 tool/ci/upstream_watch.py。
 # 只读上游，不在上游仓库留言；评论里不放上游链接。
 

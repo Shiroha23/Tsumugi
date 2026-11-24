@@ -56,7 +56,6 @@ done <"$manifest"
 $print_hashes && exit 0
 
 cp "$manifest" "$stage/"
-cp "$here/windows_libmpv_build_config.txt" "$stage/"
 cp "$here/SOURCES_README.md" "$stage/README.md"
 
 tar -C "$out" -cf "$out/$name.tar" "$name"

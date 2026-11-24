@@ -218,6 +218,77 @@ void main() {
     }
   }
 
+  test('a worker that never responds: the call fails within wallTime + '
+      'hangGrace, the main isolate keeps running, other sources are '
+      'unaffected and the same source recovers', () async {
+    const wall = Duration(milliseconds: 300);
+    const grace = Duration(milliseconds: 200);
+    final stuck = create(
+      limits: const ScriptLimits(wallTime: wall),
+      hangGrace: grace,
+      hangCooldown: const Duration(milliseconds: 500),
+    );
+    final other = create();
+    addTearDown(stuck.dispose);
+    addTearDown(other.dispose);
+    await stuck.load(_script);
+    await other.load(_script);
+
+    // 主 isolate（界面所在）在等待期间照常处理事件。
+    var ticks = 0;
+    final ticker = Timer.periodic(
+      const Duration(milliseconds: 20),
+      (_) => ticks++,
+    );
+    addTearDown(ticker.cancel);
+
+    final watch = Stopwatch()..start();
+    // 在 worker 的 Dart 代码里忙等 3 s：引擎的中断对它无效，只能靠看门狗。
+    final hung = stuck.call('spin', [3000]);
+    // 卡住期间，其他源照常工作。
+    expect(await other.call('add', [2, 3]), 5);
+    await expectLater(
+      hung,
+      throwsA(
+        isA<ScriptException>()
+            .having((e) => e.code, 'code', ScriptException.limit)
+            .having((e) => e.message, 'message', contains('unresponsive')),
+      ),
+    );
+    final failedAfter = watch.elapsed;
+    expect(failedAfter, greaterThanOrEqualTo(wall + grace));
+    expect(failedAfter, lessThan(wall + grace + const Duration(seconds: 1)));
+    expect(ticks, greaterThan(failedAfter.inMilliseconds ~/ 20 ~/ 2));
+
+    // 冷却期内同一源立即失败并提示（E_SUSPENDED），之后恢复正常。
+    await expectLater(stuck.call('add', [1, 1]), suspended);
+    await waitUntil(() => !stuck.suspended);
+    expect(await stuck.call('add', [1, 1]), 2);
+    expect(await other.call('add', [1, 1]), 2);
+  });
+
+  test('slow-to-interrupt engine work: the call fails within the watchdog '
+      'bound and the worker is reclaimed', () async {
+    final rt = create(
+      limits: const ScriptLimits(
+        cpuTime: Duration(milliseconds: 100),
+        wallTime: Duration(milliseconds: 300),
+      ),
+      hangGrace: const Duration(milliseconds: 200),
+    );
+    addTearDown(rt.dispose);
+    await rt.load(_script);
+    final watch = Stopwatch()..start();
+    await expectLater(
+      rt.call('busyBuiltins'),
+      throwsA(isA<ScriptException>().having((e) => e.code, 'code', 'E_LIMIT')),
+    );
+    expect(watch.elapsed, lessThan(const Duration(seconds: 2)));
+    // 被放弃的 worker 在引擎终于中断后回到事件循环并退出，不再占用线程。
+    await waitUntil(() => rt.stuckWorkers == 0);
+    expect(await rt.call('add', [1, 1]), 2);
+  });
+
   test(
     'unresponsive worker suspends the runtime during the cooldown',
     () async {

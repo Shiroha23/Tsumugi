@@ -54,12 +54,12 @@ void main() {
           .text;
       const claim = '源码收在 Release';
       expect(header('mpv (libmpv)'), contains(claim));
-      expect(header('GNU libiconv'), contains(claim));
+      expect(header('libplacebo'), contains(claim));
+      expect(header('libass'), contains(claim));
       for (final name in [
         'ANGLE',
         'Microsoft Edge WebView2 SDK (WebView2Loader.dll)',
-        'uchardet',
-        'libass',
+        'mingw-w64 runtime',
       ]) {
         expect(header(name), isNot(contains(claim)), reason: name);
       }
@@ -116,7 +116,8 @@ void main() {
         bundle,
         TargetPlatform.windows,
       ).expand((e) => e.packages).toList();
-      expect(windows, containsAll(['ANGLE', 'GNU libiconv']));
+      expect(windows, containsAll(['ANGLE', 'libplacebo']));
+      expect(windows, isNot(contains('uchardet')));
       expect(windows, isNot(contains('media-kit-android-helper')));
     });
   });
