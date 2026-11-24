@@ -51,6 +51,60 @@ bool _sameBytes(List<int> a, List<int> b) {
   return true;
 }
 
+/// 主播放列表中的一条字幕轨（`EXT-X-MEDIA:TYPE=SUBTITLES`），见 [rewriteHlsPlaylist] 的 `onSubtitleRendition`。
+class HlsSubtitleRendition {
+  const HlsSubtitleRendition({
+    required this.url,
+    this.name,
+    this.language,
+    this.groupId,
+  });
+
+  /// 字幕子播放列表经 `map` 换成的地址（代理地址）。
+  final String url;
+
+  /// `NAME` / `LANGUAGE`：去掉控制字符与方向控制符、首尾空白，最多 [maxLabelLength] 个字符；为空时为 null。
+  final String? name;
+  final String? language;
+
+  /// `GROUP-ID`（原样，仅用于与变体的 `SUBTITLES` 属性比较）。
+  final String? groupId;
+
+  static const maxLabelLength = 64;
+
+  @override
+  bool operator ==(Object other) =>
+      other is HlsSubtitleRendition &&
+      other.url == url &&
+      other.name == name &&
+      other.language == language &&
+      other.groupId == groupId;
+
+  @override
+  int get hashCode => Object.hash(url, name, language, groupId);
+
+  @override
+  String toString() => 'HlsSubtitleRendition($url, $name, $language)';
+}
+
+/// 主播放列表中播放器会选的变体（`BANDWIDTH` 最高的，相同时取先出现的；mpv 默认 `hls-bitrate=max`）
+/// 引用的字幕组（`SUBTITLES` 属性）；没有变体或该变体不引用字幕组时为 null。
+String? hlsPreferredSubtitleGroup(String master) {
+  String? group;
+  var best = -1;
+  for (final raw in const LineSplitter().convert(master)) {
+    final line = raw.trim();
+    if (!line.startsWith('#EXT-X-STREAM-INF:')) continue;
+    final a = parseHlsAttributes(line.substring('#EXT-X-STREAM-INF:'.length));
+    final bandwidth = int.tryParse(a['BANDWIDTH'] ?? '') ?? 0;
+    if (bandwidth > best) {
+      best = bandwidth;
+      group = a['SUBTITLES'];
+    }
+  }
+  return group;
+}
+
 /// 把 [uri]（无法解析或不受支持时为 null）换成播放器应当请求的地址。
 /// [aes] 非 null 时该地址的内容需要由调用方按 AES-128 解密后再交给播放器。
 typedef HlsUriMapper = String Function(
@@ -62,9 +116,14 @@ typedef HlsUriMapper = String Function(
 /// 字节是否以 HLS 播放列表开头（可带 UTF-8 BOM 与前导空白）。
 bool looksLikeHlsPlaylist(List<int> head) => _startsWithText(head, '#EXTM3U');
 
-/// 字节是否以 WebVTT 文件头开头（可带 UTF-8 BOM）。
-bool looksLikeWebVtt(List<int> head) =>
-    _startsWithText(head, 'WEBVTT', skipSpace: false);
+/// 字节是否以 WebVTT 文件头开头（可带 UTF-8 BOM）：`WEBVTT` 之后必须是空格、制表符、换行或结尾
+/// （与解析器的格式识别一致，`WEBVTTX` 不算）。
+bool looksLikeWebVtt(List<int> head) {
+  if (!_startsWithText(head, 'WEBVTT', skipSpace: false)) return false;
+  final bom = head.length >= 3 && head[0] == 0xEF && head[1] == 0xBB;
+  final next = (bom ? 3 : 0) + 6;
+  return head.length <= next || _isSpace(head[next]);
+}
 
 bool _startsWithText(List<int> head, String tag, {bool skipSpace = true}) {
   var i = 0;
@@ -100,12 +159,17 @@ bool _isSpace(int b) => b == 0x20 || b == 0x09 || b == 0x0A || b == 0x0D;
 /// 于交给 [map] 之前收到该区间（起点, 长度）；`EXT-X-BYTERANGE` 省略起点时接着上一个区间（RFC 8216 §4.3.2.2），
 /// `EXT-X-MAP` 省略起点时为 0。
 ///
+/// [onSubtitleRendition] 给出时，字幕轨（`EXT-X-MEDIA:TYPE=SUBTITLES`）整行不输出：其 `URI` 照常以
+/// [HlsUriKind.subtitlePlaylist] 交给 [map]，结果连同名称 / 语言交给 [onSubtitleRendition]（没有 `URI` 的忽略）。
+/// 播放器因此看不到字幕轨，由应用自己取（architecture §6.4.7，#84）。
+///
 /// 输入不是播放列表（首个非空行不是 `#EXTM3U`）时抛出 [FormatException]。
 String rewriteHlsPlaylist(
   String text, {
   required Uri base,
   required HlsUriMapper map,
   void Function(int offset, int length)? onByteRange,
+  void Function(HlsSubtitleRendition rendition)? onSubtitleRendition,
 }) {
   final lines = const LineSplitter().convert(
     text.startsWith('﻿') ? text.substring(1) : text,
@@ -195,9 +259,25 @@ String rewriteHlsPlaylist(
       out.add(line);
       continue;
     }
+    final subtitleMedia =
+        tag == '#EXT-X-MEDIA' &&
+        parseHlsAttributes(line.substring(colon + 1))['TYPE'] == 'SUBTITLES';
+    if (subtitleMedia && onSubtitleRendition != null) {
+      final a = parseHlsAttributes(line.substring(colon + 1));
+      if (a['URI'] case final uriValue?) {
+        onSubtitleRendition(
+          HlsSubtitleRendition(
+            url: map(_resolve(base, uriValue), HlsUriKind.subtitlePlaylist),
+            name: _label(a['NAME']),
+            language: _label(a['LANGUAGE']),
+            groupId: a['GROUP-ID'],
+          ),
+        );
+      }
+      continue;
+    }
     final kind = switch (tag) {
-      '#EXT-X-MEDIA' when _subtitles.hasMatch(line) =>
-        HlsUriKind.subtitlePlaylist,
+      '#EXT-X-MEDIA' when subtitleMedia => HlsUriKind.subtitlePlaylist,
       _ => _uriKindOf[tag] ?? HlsUriKind.media,
     };
     if (tag == '#EXT-X-MAP') {
@@ -237,6 +317,72 @@ String? _attribute(String line, String name) {
   return v.startsWith('"') ? v.substring(1, v.length - 1) : v;
 }
 
+/// RFC 8216 §4.2 的属性列表：`NAME=value`（值可为带引号的字符串），以逗号分隔；带引号的值去掉引号，
+/// 引号内的逗号与等号不会被当成新的属性；同名时取第一个。名称不是 `[A-Z0-9-]+` 的、没有 `=` 的、
+/// 引号未闭合的属性忽略。逐字符扫描一遍（线性时间：播放列表来自外部，正则在畸形长串上可能耗时超平方）。
+Map<String, String> parseHlsAttributes(String list) {
+  final out = <String, String>{};
+  final n = list.length;
+  var i = 0;
+  while (i < n) {
+    final keyStart = i;
+    while (i < n && list.codeUnitAt(i) != _eq && list.codeUnitAt(i) != _comma) {
+      i++;
+    }
+    if (i >= n || list.codeUnitAt(i) == _comma) {
+      i++; // 没有 `=`：跳过这一段
+      continue;
+    }
+    final key = list.substring(keyStart, i).trim();
+    i++; // `=`
+    String? value;
+    if (i < n && list.codeUnitAt(i) == _quote) {
+      final close = list.indexOf('"', i + 1);
+      if (close < 0) break; // 引号未闭合：其后都不可信
+      value = list.substring(i + 1, close);
+      i = close + 1;
+      while (i < n && list.codeUnitAt(i) != _comma) {
+        i++;
+      }
+    } else {
+      final valueStart = i;
+      while (i < n && list.codeUnitAt(i) != _comma) {
+        i++;
+      }
+      value = list.substring(valueStart, i).trim();
+    }
+    i++; // `,`
+    if (_attributeName.hasMatch(key)) out.putIfAbsent(key, () => value!);
+  }
+  return out;
+}
+
+const _eq = 0x3D, _comma = 0x2C, _quote = 0x22;
+final _attributeName = RegExp(r'^[A-Z0-9-]+$');
+
+/// 控制字符（C0 / C1 / DEL）与方向控制符（LRM / RLM、嵌入 / 覆盖 / 隔离）。
+bool _isLabelNoise(int c) =>
+    c < 0x20 ||
+    (c >= 0x7f && c <= 0x9f) ||
+    c == 0x200e ||
+    c == 0x200f ||
+    (c >= 0x202a && c <= 0x202e) ||
+    (c >= 0x2066 && c <= 0x2069);
+
+/// 显示用的名称：去掉控制字符、方向控制符与首尾空白，最多
+/// [HlsSubtitleRendition.maxLabelLength] 个字符；为空时为 null。
+String? _label(String? value) {
+  if (value == null) return null;
+  final runes = [
+    for (final c in value.runes)
+      if (!_isLabelNoise(c)) c,
+  ];
+  final s = String.fromCharCodes(
+    runes.take(HlsSubtitleRendition.maxLabelLength),
+  ).trim();
+  return s.isEmpty ? null : s;
+}
+
 /// `0x` 开头、最多 32 位十六进制数，左侧补零为 16 字节；无效时为 null。
 Uint8List? _parseIv(String text) {
   final m = RegExp(r'^0[xX]([0-9a-fA-F]{1,32})$').firstMatch(text.trim());
@@ -270,7 +416,6 @@ Uri? _resolve(Uri base, String value) {
 final _uriAttribute = RegExp(r'([:,])URI="([^"]*)"');
 final _quotedUriAttribute = RegExp(r'[:,]URI="[^"]*"');
 final _anyUriAttribute = RegExp('URI\\s*=', caseSensitive: false);
-final _subtitles = RegExp(r'[:,]TYPE=SUBTITLES(,|$)');
 
 /// 保留的标签：RFC 8216 中播放器需要、且地址只出现在 `URI` 属性或下一行的标签。
 /// 不保留：`EXT-X-DATERANGE`（插播广告等用任意属性携带地址）、`EXT-X-SESSION-DATA`、

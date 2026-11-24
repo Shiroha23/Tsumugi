@@ -864,8 +864,11 @@ void main() {
             req.response.add(utf8.encode('WEBVTT\n'));
             return req.response.close();
           };
-        final master = await player.text(openCrafted('/m.m3u8').url);
-        final subs = await player.text(proxiedUris(master).first);
+        final session = openCrafted('/m.m3u8');
+        await player.text(session.url);
+        final subs = await player.text(
+          Uri.parse(session.subtitleTracks.single.url),
+        );
         expect(names(subs), ['sub.vtt']);
         expect(probed, 0);
       });
@@ -1178,6 +1181,46 @@ void main() {
       );
     });
 
+    test('大量字幕轨且最高变体不引用字幕组：主播放列表只扫描一遍（审查意见：不能每条重扫）', () async {
+      final master = StringBuffer('#EXTM3U\n');
+      for (var i = 0; i < 40000; i++) {
+        master.write(
+          '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="g",NAME="n$i",URI="s$i.m3u8"\n',
+        );
+      }
+      master.write('#EXT-X-STREAM-INF:BANDWIDTH=9\nv.m3u8\n');
+      up.bytes('/many.m3u8', utf8.encode('$master'));
+      final session = openCrafted('/many.m3u8');
+      final watch = Stopwatch()..start();
+      final out = await player.text(session.url);
+      expect(watch.elapsed, lessThan(const Duration(seconds: 5)));
+      expect(out, isNot(contains('TYPE=SUBTITLES')));
+      expect(
+        session.subtitleTracks,
+        hasLength(MediaProxySession.maxSubtitleTracks),
+      );
+    });
+
+    test('多个字幕组：只列播放器会选的变体（BANDWIDTH 最高）引用的那一组', () async {
+      up.bytes(
+        '/groups.m3u8',
+        utf8.encode(
+          '#EXTM3U\n'
+          '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="lo",NAME="中文",URI="lo/zh.m3u8"\n'
+          '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="hi",NAME="中文",URI="hi/zh.m3u8"\n'
+          '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="hi",NAME="English",URI="hi/en.m3u8"\n'
+          '#EXT-X-STREAM-INF:BANDWIDTH=100,SUBTITLES="lo"\nlo.m3u8\n'
+          '#EXT-X-STREAM-INF:BANDWIDTH=900,SUBTITLES="hi"\nhi.m3u8\n',
+        ),
+      );
+      final session = openCrafted('/groups.m3u8');
+      await player.text(session.url);
+      expect(
+        [for (final t in session.subtitleTracks) (t.groupId, t.name)],
+        [('hi', '中文'), ('hi', 'English')],
+      );
+    });
+
     test('字幕播放列表中的 WebVTT 可以取得，其他文本不行', () async {
       up
         ..bytes(
@@ -1197,8 +1240,15 @@ void main() {
           utf8.encode('WEBVTT\n\n00:00.000 --> 00:01.000\nhi\n'),
         )
         ..bytes('/1.vtt', utf8.encode('[playlist]\nFile1=http://x/\n'));
-      final master = await player.text(openCrafted('/master.m3u8').url);
-      final subs = await player.text(proxiedUris(master).first);
+      final session = openCrafted('/master.m3u8');
+      final master = await player.text(session.url);
+      // 字幕轨不交给播放器（#84）：主播放列表中只剩变体，字幕轨记在会话上。
+      expect(master, isNot(contains('EXT-X-MEDIA')));
+      expect(proxiedUris(master), hasLength(1));
+      final track = session.subtitleTracks.single;
+      expect(track.name, 'ja');
+      expect(track.language, isNull);
+      final subs = await player.text(Uri.parse(track.url));
       final [vtt, bad] = proxiedUris(subs);
       expect(vtt.pathSegments.last, 'sub.vtt');
       final (status, headers, body) = await player.get(vtt);

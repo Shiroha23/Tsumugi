@@ -104,7 +104,12 @@ void main() {
     expect(status, 200);
     expect(headers['content-type'], contains('mpegurl'));
     final master = utf8.decode(body);
-    final [sub, variant] = uris(master);
+    // 字幕轨不交给播放器（#84）：记在会话上，由字幕层经本会话自己取。
+    expect(master, isNot(contains('EXT-X-MEDIA')));
+    final [variant] = uris(master);
+    final track = session.subtitleTracks.single;
+    expect(track.name, '中文');
+    final sub = Uri.parse(track.url);
     expect(sub.pathSegments.last, 'index.m3u8');
     final media = utf8.decode((await get(variant)).$3);
     final segs = uris(media);
@@ -134,6 +139,24 @@ void main() {
     expect(h2['content-type'], contains('text/vtt'));
     expect(utf8.decode(b2), startsWith('WEBVTT'));
     expect(session.hadFileError, isFalse);
+  });
+
+  test('many subtitle renditions without a preferred group: one scan', () {
+    final master = StringBuffer('#EXTM3U\n');
+    for (var i = 0; i < 40000; i++) {
+      master.write(
+        '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="g",NAME="n$i",URI="s$i.m3u8"\n',
+      );
+    }
+    master.write('#EXT-X-STREAM-INF:BANDWIDTH=9\nv.m3u8\n');
+    final watch = Stopwatch()..start();
+    final session = proxy.openLocal(
+      root: 'index.m3u8',
+      playlists: {'index.m3u8': '$master'},
+    );
+    expect(watch.elapsed, lessThan(const Duration(seconds: 5)));
+    expect(session.subtitleTracks, isEmpty, reason: '名称都未登记');
+    session.close();
   });
 
   test('Range and HEAD', () async {

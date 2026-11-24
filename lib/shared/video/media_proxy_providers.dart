@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/network/media/hls_playlist.dart' show HlsSubtitleRendition;
 import '../../core/network/media/media_proxy.dart';
 import '../../core/network/network_exception.dart';
 import '../../core/network/source_http_client.dart';
@@ -11,6 +12,8 @@ import '../../sources/registry/providers.dart';
 import '../../sources/session/source_sessions.dart';
 import '../../sources/source.dart';
 import 'player_options.dart';
+
+export '../../core/network/media/hls_playlist.dart' show HlsSubtitleRendition;
 
 /// 全局本地媒体代理（architecture §6.4），第一次播放时在 127.0.0.1 的随机端口上启动。
 final mediaProxyProvider = FutureProvider<MediaProxy>((ref) async {
@@ -41,6 +44,11 @@ class ProxiedStream {
 
   /// 本地来源（已下载的剧集）。
   bool get isLocal => _local != null;
+
+  /// HLS 主播放列表声明的字幕轨（不交给播放器，由字幕层经本会话自己取，architecture §6.4.7）。
+  /// 在线播放时播放器取过主播放列表之后才有（播放开始后读取）。
+  List<HlsSubtitleRendition> get subtitleTracks =>
+      _session?.subtitleTracks ?? _local!.subtitleTracks;
 
   /// 本地来源：曾有文件缺失或内容无法识别（下载已损坏）。
   bool get localFileError => _local?.hadFileError ?? false;

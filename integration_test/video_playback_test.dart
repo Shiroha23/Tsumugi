@@ -14,7 +14,7 @@
 //
 // （profile 模式要用 flutter drive；`flutter test ... -d <设备>` 只支持 debug 模式。）
 
-import 'dart:io';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -25,6 +25,7 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:tsumugi/core/network/dio_source_http_client.dart';
 import 'package:tsumugi/core/network/media/media_proxy.dart';
 import 'package:tsumugi/core/network/source_http_client.dart';
+import 'package:tsumugi/core/subtitle/hls_subtitle_loader.dart';
 import 'package:tsumugi/core/storage/app_database.dart';
 import 'package:tsumugi/features/video/player/video_player_page.dart';
 import 'package:tsumugi/shared/history/providers.dart';
@@ -187,6 +188,64 @@ void main() {
       expect(duration.inMilliseconds, closeTo(6000, 300));
       expect(startedAt, lessThan(const Duration(seconds: 1)));
       session.close();
+    });
+
+    testWidgets('HLS 字幕轨不交给 libmpv；字幕层按 demuxer-start-time 对齐（#84）', (
+      tester,
+    ) async {
+      final session = proxy.open(
+        client: client,
+        url: Uri.parse(
+          'http://video.example.com/video/media/hls/master_sub.m3u8',
+        ),
+      );
+      final player = createVideoPlayer();
+      final controller = createVideoController(player);
+      try {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(body: Video(controller: controller)),
+          ),
+        );
+        await hardenVideoPlayer(player);
+        await openVideo(player, controller, session.url.toString());
+        final native = player.platform as NativePlayer;
+        final tracks = jsonDecode(await native.getProperty('track-list'));
+        expect(
+          [for (final t in tracks as List) t['type']],
+          isNot(contains('sub')),
+          reason: 'libmpv 看不到字幕轨',
+        );
+        expect(
+          player.state.tracks.subtitle.map((t) => t.id),
+          isNot(contains('1')),
+        );
+        final start = await presentationStartOf(player);
+        // mock 素材的分片时间戳从 1.4 s 开始（与 X-TIMESTAMP-MAP 的 MPEGTS:126000 一致）。
+        expect(start.inMilliseconds, closeTo(1400, 50));
+        final track = session.subtitleTracks.single;
+        expect((track.name, track.language), ('HLS Chinese', 'zh'));
+        final doc = (await tester.runAsync(
+          () => loadHlsSubtitles(
+            Uri.parse(track.url),
+            presentationStart: start,
+            position: player.state.position,
+          ),
+        ))!;
+        expect(doc.textAt(const Duration(milliseconds: 500)), 'HLS subtitle 1');
+        expect(
+          doc.textAt(const Duration(milliseconds: 2500)),
+          'HLS subtitle 2',
+        );
+        expect(
+          doc.textAt(const Duration(milliseconds: 4500)),
+          'HLS subtitle 3',
+        );
+      } finally {
+        await player.dispose();
+        session.close();
+        await tester.pumpWidget(const SizedBox());
+      }
     });
 
     for (final (name, file) in [
@@ -435,33 +494,55 @@ void main() {
       expect(subtitleText(tester), '');
       expect(subtitlePrefs.values[sourceId], const SubtitleLabel('简体中文（GBK）'));
 
-      // HLS 流自带的字幕轨（经代理的 WebVTT 分片）。
-      // 轨道标签：FFmpeg 8（Windows 自建 libmpv）把 EXT-X-MEDIA 的 NAME 作为轨道标题；
-      // Android / iOS 的 FFmpeg 6 不这样做，标签为 LANGUAGE。
-      final hlsTrack = Platform.isWindows ? 'HLS Chinese' : 'zh';
-      await chooseSubtitle(tester, '$hlsTrack（内嵌）');
-      await pumpUntil(
-        tester,
-        () => subtitleText(tester).startsWith('HLS subtitle'),
-        reason: 'HLS 内嵌字幕',
-      );
-      expect(
-        (await server.requests()).map((r) => r.path),
-        contains('/video/media/hls/sub.m3u8'),
-      );
-      expect(subtitlePrefs.values[sourceId], SubtitleLabel(hlsTrack));
+      // HLS 流自带的字幕轨：不交给 libmpv，由字幕层经代理会话取分片（#84）。这里是播放中途才选中：
+      // 之前 libmpv 的路径下不再出现任何字幕。标签为 EXT-X-MEDIA 的 NAME。
+      const hlsCues = {'HLS subtitle 1', 'HLS subtitle 2', 'HLS subtitle 3'};
+      final seen = <String>{};
+      bool sawHlsCue() {
+        final t = subtitleText(tester);
+        if (t.isNotEmpty) seen.add(t);
+        return hlsCues.contains(t);
+      }
 
-      // 播完自动下一集：按记住的标签自动选上新流的内嵌轨（轨道列表在新流开始播放后才确定）。
+      await chooseSubtitle(tester, 'HLS Chinese（内嵌）');
+      await pumpUntil(tester, sawHlsCue, reason: '中途选中 HLS 字幕轨后显示');
+      expect(
+        seen,
+        everyElement(isIn(hlsCues)),
+        reason: '文字不带下一分片的 WEBVTT / X-TIMESTAMP-MAP 行',
+      );
+      final paths = (await server.requests()).map((r) => r.path).toList();
+      expect(paths, contains('/video/media/hls/sub.m3u8'));
+      expect(paths, contains('/video/media/hls/sub0.vtt'));
+      expect(
+        subtitlePrefs.values[sourceId],
+        const SubtitleLabel('HLS Chinese'),
+      );
+
+      // 播完自动下一集：按记住的标签自动选上新流的字幕轨，三条按顺序、各在自己的时间出现（#84 之前只出现第 3 条）。
       await pumpUntil(
         tester,
         () => find.widgetWithText(AppBar, '第 2 集').evaluate().isNotEmpty,
         reason: '自动下一集',
       );
       await pumpUntil(tester, playing, reason: '第 2 集开始播放');
-      await pumpUntil(
-        tester,
-        () => subtitleText(tester).startsWith('HLS subtitle'),
-        reason: '下一集自动选上内嵌轨',
+      // 对齐：以开始播放的时刻为 0，第 2 条约在 2 s 出现（忽略 X-TIMESTAMP-MAP 时提前 1.4 s）。
+      final clock = Stopwatch()..start();
+      final order = <String>[];
+      final shownAt = <String, Duration>{};
+      await pumpUntil(tester, () {
+        final t = subtitleText(tester);
+        if (t.isNotEmpty && (order.isEmpty || order.last != t)) {
+          order.add(t);
+          shownAt[t] = clock.elapsed;
+        }
+        return t == 'HLS subtitle 3';
+      }, reason: '下一集依次显示三条');
+      expect(order, ['HLS subtitle 1', 'HLS subtitle 2', 'HLS subtitle 3']);
+      expect(
+        shownAt['HLS subtitle 2']!.inMilliseconds,
+        inInclusiveRange(1500, 3000),
+        reason: '$shownAt',
       );
 
       // ASS：覆盖标签与绘图指令被去掉。

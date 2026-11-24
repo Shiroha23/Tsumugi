@@ -182,7 +182,10 @@ interface MusicContent {
   识别不了的、与 `format` 不符的拒绝。只显示文字：ass 的样式、位置与特效，内嵌字体与绘图指令都被忽略。
 - 文件不超过 4 MB、须在 30 s 内取完；字符集依次取 `charset`、BOM、`Content-Type` 的 charset；都没有时，内容是合法 UTF-8 则按 UTF-8，否则按 GB18030（GBK）。
 - 声明式规则用 `content.subtitles` 声明外挂字幕（§3.1「视频外挂字幕」），脚本源由 `content()` 直接返回。
-- HLS 流在主播放列表中声明的字幕轨（`EXT-X-MEDIA:TYPE=SUBTITLES`，WebVTT）也可以选择，不需要写进 `subtitles`。
+- HLS 流在主播放列表中声明的字幕轨（`EXT-X-MEDIA:TYPE=SUBTITLES`，WebVTT）也可以选择，不需要写进 `subtitles`；
+  菜单中的标签依次取 `NAME`、`LANGUAGE`。客户端在选中时经本地媒体代理（与音视频同一套限制，见下文「音视频」）取字幕播放列表与全部分片，
+  在客户端内逐个分片解析（规则同上，只显示文字），按分片的 `X-TIMESTAMP-MAP` 对齐画面（RFC 8216 §3.5：没有该头时，cue 时间 0 对应 MPEG-TS 时间 0）。
+  每个分片不超过 1 MB，一条字幕轨合计不超过 10000 个分片、8 MB；直播流的字幕轨只取选中时播放列表中已有的分片。
 
 #### 2.2.1 小说正文（`NovelContent`）
 
@@ -648,7 +651,7 @@ export async function search(keyword, page) {
   - apiVersion 1 只支持 HLS（`type: "hls"`）与单文件（`mp4` / `auto`）。**`dash` 不支持**：客户端跳过 `type: "dash"` 的流，
     MPD 一律拒绝；只有 DASH 的站点请用脚本源返回 HLS 或单文件地址。将来是否支持见 [#42](https://github.com/Shiroha23/Tsumugi/issues/42)。
   - 分片与单文件的响应必须是可识别的媒体容器（MPEG-TS、MP4 / fMP4、Matroska / WebM、FLV、Ogg、ADTS / MP3、AC-3、FLAC、AVI / WAV），
-    字幕播放列表中的分片必须是 WebVTT；HLS 以外的播放列表 / 清单、伪装成其他格式的分片会被拒绝。
+    字幕播放列表中的分片必须是 WebVTT（字幕轨不交给播放器，由客户端自己解析，见上文「视频字幕」）；HLS 以外的播放列表 / 清单、伪装成其他格式的分片会被拒绝。
   - `EXT-X-KEY:METHOD=AES-128` 由客户端取密钥并解密；与 `EXT-X-BYTERANGE` 同时使用暂不支持。
   - 音视频不受 20 MB 响应体上限限制；`timeoutMs` 限制等待响应头的时间，以及读取响应体时相邻两块数据的间隔（而不是整个响应）。
   - **下载**（离线播放，architecture §4.5.1）：用户下载剧集时，客户端直接经本源的网络层取同样的地址（不经播放器与代理），

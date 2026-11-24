@@ -342,6 +342,67 @@ Dialogue: 0:00:00.00,0:00:01.00,visible{\\p99999999999999999999999}m 0 0 l 1 1
 
   group('病态输入', pathologicalMarkupTests);
 
+  group('HLS 字幕分片（parseWebVttSegment，#84）', () {
+    test('mock 素材：一条 cue 与 X-TIMESTAMP-MAP', () {
+      final text = File('test/fixtures/mock_site/video/hls/sub1.vtt')
+          .readAsStringSync();
+      final s = parseWebVttSegment(text);
+      expect(s.cues, [SubtitleCue(_s(2), _s(4), 'HLS subtitle 2')]);
+      expect(s.timestampMap, const WebVttTimestampMap(Duration.zero, 126000));
+    });
+
+    test('两项顺序不限、小时可省略；MPEGTS 按 2³³ 取模', () {
+      final s = parseWebVttSegment(
+        'WEBVTT\nX-TIMESTAMP-MAP=MPEGTS:${mpegTsWrap + 5},LOCAL:01:02.500\n\n'
+        '00:01.000 --> 00:02.000\nx\n',
+      );
+      expect(s.timestampMap, WebVttTimestampMap(_s(62.5), 5));
+    });
+
+    test('没有 / 无效的 X-TIMESTAMP-MAP 为 null；头部之外的同名行不算', () {
+      for (final header in [
+        'WEBVTT',
+        'WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00:00.000',
+        'WEBVTT\nX-TIMESTAMP-MAP=LOCAL:bad,MPEGTS:1',
+        'WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00.000,MPEGTS:-1',
+        'WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00.000,MPEGTS:1234567890123456789',
+        'WEBVTT\n\nX-TIMESTAMP-MAP=LOCAL:00:00.000,MPEGTS:9',
+      ]) {
+        expect(
+          parseWebVttSegment('$header\n\n00:01.000 --> 00:02.000\nx\n')
+              .timestampMap,
+          isNull,
+          reason: header,
+        );
+      }
+    });
+
+    test('没有 cue 的分片不是错误；NOTE / STYLE 照常跳过', () {
+      expect(parseWebVttSegment('WEBVTT\n\n').cues, isEmpty);
+      expect(
+        parseWebVttSegment(
+          'WEBVTT\n\nNOTE a\n\nSTYLE\n::cue {}\n\n00:01.000 --> 00:02.000\n<i>y</i>\n',
+        ).cues,
+        [SubtitleCue(_s(1), _s(2), 'y')],
+      );
+    });
+
+    test('不是 WebVTT 时拒绝', () {
+      for (final text in [
+        '',
+        '1\n00:00:01,000 --> 00:00:02,000\nsrt\n',
+        '<html>',
+        'WEBVTTX\n',
+      ]) {
+        expect(
+          () => parseWebVttSegment(text),
+          throwsA(isA<SubtitleFormatException>()),
+          reason: text,
+        );
+      }
+    });
+  });
+
   group('textAt', () {
     final doc = parseSubtitle('''
 1

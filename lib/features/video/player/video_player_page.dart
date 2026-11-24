@@ -118,8 +118,27 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
   /// 当前剧集的外挂字幕（`content.subtitles`）。
   List<SubtitleRef> _externalSubs = const [];
 
-  /// 当前流的内嵌字幕轨（HLS 字幕播放列表）。
+  /// 当前流的内嵌字幕轨：HLS 字幕轨（[_hlsSubs]，编号 `hls:<n>`）在前，libmpv 报告的容器内字幕流（[_playerSubs]）在后。
   List<EmbeddedSubtitle> _embeddedSubs = const [];
+
+  /// 当前流的 HLS 字幕轨（代理会话登记，不交给播放器，architecture §6.4.7），开始播放后读取。
+  List<HlsSubtitleRendition> _hlsSubs = const [];
+
+  /// libmpv 报告的字幕轨（单文件容器内的字幕流）。
+  List<EmbeddedSubtitle> _playerSubs = const [];
+
+  /// 当前流的 `demuxer-start-time`：HLS 字幕轨的时间换算用。
+  Duration _presentationStart = Duration.zero;
+
+  /// 当前流已取得的 HLS 字幕轨（按地址，最近用过的在后）；换流时清空，最多 [_maxHlsCache] 条
+  /// （每条轨道最多 8 MB 原文，审查意见：不能让反复切轨把所有轨道都留在内存里）。
+  final _hlsCache = <String, SubtitleDocument>{};
+  static const _maxHlsCache = 2;
+
+  /// 正在取的 HLS 字幕轨地址；换流、改选其他字幕时取消（[_hlsCancel]）。
+  String? _hlsLoading;
+  NetCancellation _hlsCancel = NetCancellation();
+  int _hlsGeneration = 0;
   SubtitleChoice _subChoice = const SubtitleChoiceOff();
 
   /// 按记住的选择自动选字幕；用户在本集手动选择后为 false。
@@ -139,8 +158,8 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
   /// 当前流已开始播放、轨道列表已确定（之前找不到记住的内嵌轨不代表它不存在）。
   bool _embeddedKnown = false;
 
-  /// 用户选了尚未取得的外挂字幕：取得成功后才记住（失败时不记住）。
-  int? _subRememberPending;
+  /// 用户选了尚未取得的外挂字幕 / HLS 字幕轨：取得成功后才记住（失败时不记住）。
+  SubtitleChoice? _subRememberPending;
 
   @override
   void initState() {
@@ -471,7 +490,12 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
     // 内嵌字幕轨属于具体的流：新流的轨道列表到达后按所选标签重新匹配，
     // 开始播放后（轨道列表已确定）才认定某条内嵌轨不存在。
     _embeddedSubs = const [];
+    _hlsSubs = const [];
+    _playerSubs = const [];
     _embeddedKnown = false;
+    _cancelHlsSubtitle();
+    _hlsCache.clear();
+    if (_subChoice is SubtitleChoiceEmbedded) _subtitles.hide();
     _stream?.close();
     _stream = null;
     _autoNextHandled = false;
@@ -521,6 +545,17 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
     );
     setState(() => _loading = false);
     _report(immediate: true);
+    // HLS 字幕轨：播放器此时已取过主播放列表，会话中已登记。
+    _presentationStart = await presentationStartOf(_player);
+    if (!_current(generation)) return;
+    _hlsSubs = proxied.subtitleTracks;
+    if (videoVerboseLogs) {
+      debugPrint(
+        '[subtitle] hls tracks: ${_hlsSubs.length} '
+        'start=$_presentationStart',
+      );
+    }
+    _rebuildEmbedded();
     _embeddedKnown = true;
     if (_subAuto) _autoPickSubtitle();
     _applyPlayerSubtitleTrack(force: true);
@@ -566,7 +601,24 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
         if (t.id != 'auto' && t.id != 'no')
           EmbeddedSubtitle(t.id, title: t.title, language: t.language),
     ];
-    if (listEquals(embedded, _embeddedSubs)) return;
+    if (listEquals(embedded, _playerSubs)) return;
+    _playerSubs = embedded;
+    if (!_rebuildEmbedded()) return;
+    if (_subAuto) {
+      _autoPickSubtitle();
+    } else {
+      _setSubtitle(_subChoice);
+    }
+  }
+
+  /// 合并 HLS 字幕轨与 libmpv 报告的字幕轨；列表有变化时返回 true。
+  bool _rebuildEmbedded() {
+    final embedded = [
+      for (final (i, t) in _hlsSubs.indexed)
+        EmbeddedSubtitle('hls:$i', title: t.name, language: t.language),
+      ..._playerSubs,
+    ];
+    if (listEquals(embedded, _embeddedSubs)) return false;
     if (videoVerboseLogs) {
       debugPrint(
         '[subtitle] tracks: '
@@ -574,11 +626,20 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
       );
     }
     setState(() => _embeddedSubs = embedded);
-    if (_subAuto) {
-      _autoPickSubtitle();
-    } else {
-      _applyPlayerSubtitleTrack();
-    }
+    return true;
+  }
+
+  /// 内嵌轨 [track] 对应的 HLS 字幕轨；是 libmpv 的轨道时为 null。
+  HlsSubtitleRendition? _hlsTrackOf(EmbeddedSubtitle track) {
+    if (!track.id.startsWith('hls:')) return null;
+    final i = int.tryParse(track.id.substring(4));
+    return i == null || i < 0 || i >= _hlsSubs.length ? null : _hlsSubs[i];
+  }
+
+  /// 标签为 [label] 的内嵌轨对应的 HLS 字幕轨（见 [_hlsTrackOf]）。
+  HlsSubtitleRendition? _hlsTrackFor(String label) {
+    final i = matchEmbeddedSubtitle(_embeddedSubs, label);
+    return i < 0 ? null : _hlsTrackOf(_embeddedSubs[i]);
   }
 
   void _autoPickSubtitle() {
@@ -598,9 +659,16 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
   void _chooseSubtitle(SubtitleChoice choice) {
     _subAuto = false;
     _subRememberPending = null;
-    if (choice case SubtitleChoiceExternal(:final index)) {
-      _subFailed.remove(index); // 手动选择时重试
-      if (!_subCache.containsKey(index)) _subRememberPending = index;
+    switch (choice) {
+      case SubtitleChoiceExternal(:final index):
+        _subFailed.remove(index); // 手动选择时重试
+        if (!_subCache.containsKey(index)) _subRememberPending = choice;
+      case SubtitleChoiceEmbedded(:final label):
+        if (_hlsTrackFor(label) case final t?
+            when !_hlsCache.containsKey(t.url)) {
+          _subRememberPending = choice;
+        }
+      case SubtitleChoiceOff():
     }
     _setSubtitle(choice);
     if (_subRememberPending == null) _rememberSubtitle(choice);
@@ -617,6 +685,11 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
   void _setSubtitle(SubtitleChoice choice) {
     final changed = choice != _subChoice;
     if (changed) setState(() => _subChoice = choice);
+    final hls = switch (choice) {
+      SubtitleChoiceEmbedded(:final label) => _hlsTrackFor(label),
+      _ => null,
+    };
+    if (hls?.url != _hlsLoading) _cancelHlsSubtitle();
     switch (choice) {
       case SubtitleChoiceOff():
         _subtitles.hide();
@@ -627,8 +700,20 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
           _subtitles.hide();
           _loadExternalSubtitle(index);
         }
-      case SubtitleChoiceEmbedded():
-        _subtitles.showEmbedded();
+      case SubtitleChoiceEmbedded(:final label):
+        if (hls != null) {
+          if (_hlsCache.remove(hls.url) case final document?) {
+            _hlsCache[hls.url] = document; // 移到最近用过
+            _subtitles.showDocument(document);
+          } else if (_hlsLoading != hls.url) {
+            _subtitles.hide();
+            _loadHlsSubtitle(hls, label);
+          }
+        } else if (matchEmbeddedSubtitle(_embeddedSubs, label) >= 0) {
+          _subtitles.showEmbedded();
+        } else {
+          _subtitles.hide(); // 轨道列表尚未到达
+        }
     }
     _applyPlayerSubtitleTrack();
   }
@@ -679,7 +764,7 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
       _subCache[index] = document;
       if (_subChoice == SubtitleChoiceExternal(index)) {
         _subtitles.showDocument(document);
-        if (_subRememberPending == index) {
+        if (_subRememberPending == SubtitleChoiceExternal(index)) {
           _subRememberPending = null;
           _rememberSubtitle(_subChoice);
         }
@@ -688,7 +773,9 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
       if (!mounted || generation != _subGeneration) return;
       debugPrint('[subtitle] load failed: $e');
       _subFailed.add(index);
-      if (_subRememberPending == index) _subRememberPending = null;
+      if (_subRememberPending == SubtitleChoiceExternal(index)) {
+        _subRememberPending = null;
+      }
       if (_subChoice != SubtitleChoiceExternal(index)) return;
       // 退回关闭（不记住），本集不再自动选择其他字幕；播放不受影响。
       _subAuto = false;
@@ -706,6 +793,64 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
     }
   }
 
+  void _cancelHlsSubtitle() {
+    if (_hlsLoading == null) return;
+    _hlsLoading = null;
+    _hlsGeneration++;
+    _hlsCancel.cancel();
+    _hlsCancel = NetCancellation();
+  }
+
+  /// 取当前流的 HLS 字幕轨 [track]（标签 [label]），边取边显示；失败时与外挂字幕相同：提示并退回关闭。
+  Future<void> _loadHlsSubtitle(
+    HlsSubtitleRendition track,
+    String label,
+  ) async {
+    final stream = _stream;
+    if (stream == null) return;
+    _cancelHlsSubtitle();
+    final generation = ++_hlsGeneration;
+    _hlsLoading = track.url;
+    bool current() => mounted && generation == _hlsGeneration;
+    bool chosen() => _subChoice == SubtitleChoiceEmbedded(label);
+    try {
+      final document = await loadStreamSubtitleTrack(
+        track,
+        presentationStart: _presentationStart,
+        position: _player.state.position,
+        cancellation: _hlsCancel,
+        onProgress: (d) {
+          if (current() && chosen()) _subtitles.showDocument(d);
+        },
+      );
+      if (!current()) return;
+      _hlsLoading = null;
+      _hlsCache[track.url] = document;
+      while (_hlsCache.length > _maxHlsCache) {
+        _hlsCache.remove(_hlsCache.keys.first);
+      }
+      if (!chosen()) return;
+      _subtitles.showDocument(document);
+      if (_subRememberPending == SubtitleChoiceEmbedded(label)) {
+        _subRememberPending = null;
+        _rememberSubtitle(_subChoice);
+      }
+    } on Object catch (e) {
+      if (!current()) return;
+      _hlsLoading = null;
+      debugPrint('[subtitle] hls load failed: $e');
+      if (_subRememberPending == SubtitleChoiceEmbedded(label)) {
+        _subRememberPending = null;
+      }
+      if (!chosen() || !mounted) return;
+      _subAuto = false;
+      _setSubtitle(const SubtitleChoiceOff());
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(content: Text('字幕“$label”加载失败：${subtitleErrorMessage(e)}')),
+      );
+    }
+  }
+
   @override
   void dispose() {
     _report(immediate: true);
@@ -716,6 +861,7 @@ class _VideoPlayerPageState extends ConsumerState<VideoPlayerPage> {
       ..restore().ignore()
       ..dispose();
     _subCancel.cancel();
+    _hlsCancel.cancel();
     _subtitles.dispose();
     _playback.dispose();
     for (final s in _subscriptions) {
