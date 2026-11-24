@@ -1266,6 +1266,8 @@ media_kit (libmpv / FFmpeg) ── http://127.0.0.1:<port>/<token>/<编号>/<文
 
 Windows 增量的构成：`libmpv-2.dll` 29.8 MB；ANGLE / SwiftShader / Vulkan（`libGLESv2`、`libEGL`、`vk_swiftshader`、`vulkan-1`）
 13.6 MB；`d3dcompiler_47.dll` 4.9 MB（M4-B 起不再打包，见 §6.4.1）；其余插件不到 0.5 MB。iOS 的对比见 PR 中 CI 产物的大小。
+换成自建 libmpv（§6.4.6 第 2 项，2026-11-24）后 `libmpv-2.dll` 为 19.3 MB（-10.5 MB，只保留播放所需的组件），下载的 zip 7.7 MB；
+当时的 Windows `Release/` 目录为 75.8 MB。
 
 **只带视频所需组件**：只引入了三个目标平台的 `*_video` 包（不含 macOS / Linux 的库）。音频专用的 `*_audio` 包更小但不能播放视频；
 M5 音乐复用同一 libmpv，不再增加体积。预编译库内部的组件无法按需裁剪，进一步瘦身只能自建 libmpv（只留需要的解码器 / 解复用器），
@@ -1321,7 +1323,8 @@ M5 音乐复用同一 libmpv，不再增加体积。预编译库内部的组件�
      - **构建仓库**：独立的公开仓库 [Shiroha23/Tsumugi-libmpv](https://github.com/Shiroha23/Tsumugi-libmpv)（GPL-3.0，用户 2026-11-24 决定；
        不放进本仓库，因为原生库的发布节奏与应用不同，也不让本仓库的 CI 与 Release 承担数十分钟的原生构建）。其改动同样走 PR、
        CI 通过后由协调者合并。
-     - **构建**：`windows/build.sh` 在 Ubuntu 24.04 上用 mingw-w64（posix 线程模型）交叉编译，组件与校验和在
+     - **构建**：`windows/build.sh` 在 Ubuntu 24.04 上用 llvm-mingw 20261104（LLVM 23.1.5，UCRT；版本与 sha256 在
+       `windows/toolchain.tsv`，不用 Ubuntu 的 mingw-w64 包——其版本随镜像变化，且 CI 上 apt 镜像极慢）交叉编译，组件与校验和在
        `windows/sources.tsv`：mpv 0.42.0（`-Dgpl=false`，`--auto-features=disabled`，只开 `gl` / `plain-gl` /
        `d3d-hwaccel` / `wasapi` / `win32-threads` / `zlib`，不带 Lua、JavaScript、libarchive、光盘等）、FFmpeg 8.1.3（**LGPL-3.0+**：
        `--enable-version3`，不加 `--enable-gpl` / `--enable-nonfree`，与 Android / iOS 一致；`--disable-autodetect --disable-everything` 后只开播放需要的
@@ -1339,11 +1342,20 @@ M5 音乐复用同一 libmpv，不再增加体积。预编译库内部的组件�
        CI 与 `release.yml` 都经同一 CMake 生效。`test/tool/libmpv_lock_test.dart` 检查清单、源码清单与许可证声明三者一致。
      - **对应源码**：`tool/release/native_sources.tsv` 收录构建仓库 Release 中的 `<TAG>-sources.tar`（sha256 与 `libmpv.lock` 一致），
        发版时进入 `*-native-sources.tar`。
-       编译器运行库（libgcc / libstdc++ 按 GCC 运行库例外、mingw-w64 CRT 与 winpthreads 为宽松许可证）随 Ubuntu 的 mingw-w64 包，
-       版本记在 `BUILD_INFO.txt`。
+       静态链接进去的工具链运行库（mingw-w64 CRT 与 winpthreads、LLVM 的 libc++ / libunwind / compiler-rt）为宽松许可证，
+       在 `THIRD_PARTY_NOTICES.md` 与「关于」页列出；工具链版本记在 `BUILD_INFO.txt`。
      - **跟进更新**：`upstream-watch.yml` 每周按 `libmpv.lock` 检查 mpv 新发布与 FFmpeg 同一发布线的补丁版本，在 #56 提醒。
        mpv / FFmpeg（8.1 补丁线）或任一依赖发布安全修复时：在构建仓库改 `sources.tsv` 与 `VERSION`（`-r<n>` 递增）、经 PR 合并后发布，
        再在本仓库更新 `libmpv.lock`、`native_sources.tsv`，并按本节第 1 项同步许可证文件。
+     - **验证（Windows 11，2026-11-24）**：`integration_test/libmpv_version_test.dart` 读出 `mpv-version=mpv v0.42.0`、
+       `ffmpeg-version=8.1.3`，并逐项读回 media_kit 与本项目设置的 mpv 选项（均生效）；`integration_test/` 全部用例通过；
+       硬解为 `d3d11va-copy`。1080p60（H.264 8 Mbps，20 s，profile 模式，与 better_player 评估相同的方法）：raster p95 0.6 ms
+       （旧版 0.8 ms，§6.4.6 better_player 对比时记为约 0.7 ms），CPU 占单核 30–32%（旧版 36–52%），丢帧 0（旧版 1）。
+     - **HLS 字幕轨的标签**：FFmpeg 8 把 `EXT-X-MEDIA` 的 `NAME` 作为轨道标题，播放页的内嵌轨标签因此在 Windows 上是 NAME
+       （如「HLS Chinese（内嵌）」），Android / iOS（FFmpeg 6）仍是 LANGUAGE；记住的选择按标签或语言匹配，两者都能选中。
+     - **#84 在 FFmpeg 8 上仍然存在**（直接让 libmpv 读 HLS 字幕轨，mock 的 `hls/master_sub.m3u8`）：打开时已选中，第 1、2 条从不出现、
+       第 3 条提前约 1.35 s 显示（旧版会显示被下一分片的 `WEBVTT` / `X-TIMESTAMP-MAP` 行污染的第 1、2 条）；播放中途选中，不显示任何字幕，
+       且 6 s 的素材在约 2 s 处提前结束（与旧版相同）。换库不能代替 #84 的修复。
      - **行为差异**：media_kit 设置的 `osc`、`ytdl` 选项只在启用 Lua 时存在，新旧两个构建都没有 Lua，设置失败无影响（`ytdl=no` 的
        目的本来就是不调用 yt-dlp）；其余 media_kit 与本项目设置的选项在 mpv 0.42 中都存在。不带 `egl-angle`：硬解为 `d3d11va-copy`
        （旧构建实测也是 copy 模式）。

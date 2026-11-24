@@ -6,6 +6,6 @@ tag	libmpv-win-0.42.0-ff8.1.3-r1
 mpv	0.42.0
 ffmpeg	8.1.3
 zip_url	https://github.com/Shiroha23/Tsumugi-libmpv/releases/download/libmpv-win-0.42.0-ff8.1.3-r1/libmpv-win-0.42.0-ff8.1.3-r1.zip
-zip_sha256	0000000000000000000000000000000000000000000000000000000000000000
+zip_sha256	198171067d31ea945ab59a2d178ea45be27829961518ac5f93c500d0dfc96868
 sources_url	https://github.com/Shiroha23/Tsumugi-libmpv/releases/download/libmpv-win-0.42.0-ff8.1.3-r1/libmpv-win-0.42.0-ff8.1.3-r1-sources.tar
 sources_sha256	0000000000000000000000000000000000000000000000000000000000000000

@@ -14,6 +14,8 @@
 //
 // （profile 模式要用 flutter drive；`flutter test ... -d <设备>` 只支持 debug 模式。）
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -434,8 +436,10 @@ void main() {
       expect(subtitlePrefs.values[sourceId], const SubtitleLabel('简体中文（GBK）'));
 
       // HLS 流自带的字幕轨（经代理的 WebVTT 分片）。
-      // FFmpeg 不把 EXT-X-MEDIA 的 NAME 作为轨道标题，标签为 LANGUAGE。
-      await chooseSubtitle(tester, 'zh（内嵌）');
+      // 轨道标签：FFmpeg 8（Windows 自建 libmpv）把 EXT-X-MEDIA 的 NAME 作为轨道标题；
+      // Android / iOS 的 FFmpeg 6 不这样做，标签为 LANGUAGE。
+      final hlsTrack = Platform.isWindows ? 'HLS Chinese' : 'zh';
+      await chooseSubtitle(tester, '$hlsTrack（内嵌）');
       await pumpUntil(
         tester,
         () => subtitleText(tester).startsWith('HLS subtitle'),
@@ -445,7 +449,7 @@ void main() {
         (await server.requests()).map((r) => r.path),
         contains('/video/media/hls/sub.m3u8'),
       );
-      expect(subtitlePrefs.values[sourceId], const SubtitleLabel('zh'));
+      expect(subtitlePrefs.values[sourceId], SubtitleLabel(hlsTrack));
 
       // 播完自动下一集：按记住的标签自动选上新流的内嵌轨（轨道列表在新流开始播放后才确定）。
       await pumpUntil(

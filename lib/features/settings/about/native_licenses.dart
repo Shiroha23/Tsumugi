@@ -209,9 +209,18 @@ const nativeComponents = <NativeComponent>[
   NativeComponent(
     name: 'mingw-w64 runtime',
     license: 'ZPL-2.1 AND MIT AND BSD-3-Clause',
-    versions: {_w: 'Ubuntu 24.04 的 mingw-w64 包（版本见源码包中的 BUILD_INFO.txt）'},
+    versions: {_w: 'llvm-mingw 20261104'},
     source: 'https://www.mingw-w64.org/',
     licenseFiles: ['mingw-w64.txt', 'winpthreads.txt'],
+    note: '随交叉编译工具链 llvm-mingw 20261104 提供，静态链接进 libmpv-2.dll。',
+  ),
+  NativeComponent(
+    name: 'LLVM runtime (libc++ / libunwind / compiler-rt)',
+    license: 'Apache-2.0 WITH LLVM-exception',
+    versions: {_w: 'LLVM 23.1.5（llvm-mingw 20261104）'},
+    source: 'https://github.com/llvm/llvm-project',
+    licenseFiles: ['llvm-runtime.txt'],
+    note: '工具链运行库，静态链接进 libmpv-2.dll（libplacebo / HarfBuzz 的 C++ 代码需要）。',
   ),
   // ---- Windows：ANGLE 包（libEGL / libGLESv2 / vk_swiftshader / vulkan-1 / zlib） ----
   NativeComponent(

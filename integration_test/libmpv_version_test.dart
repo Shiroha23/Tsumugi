@@ -66,7 +66,8 @@ void main() {
       };
       expect(actual, expected);
       final lavf = await native.getProperty('demuxer-lavf-o');
-      expect(lavf, contains('protocol_whitelist=[http,tcp]'));
+      // media_kit 写的是 protocol_whitelist=[http,tcp]（[] 为 mpv 的引用语法），读回时不带引用。
+      expect(lavf, contains('protocol_whitelist=http,tcp'));
       expect(lavf, contains('seg_max_retry=5'));
       expect(
         int.parse(await native.getProperty('demuxer-max-bytes')),

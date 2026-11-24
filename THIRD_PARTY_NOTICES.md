@@ -59,10 +59,12 @@ Windows 的版本取自 Tsumugi-libmpv 的 `windows/sources.tsv`（发布包 + s
 | glad (OpenGL loader in libplacebo) | (WTFPL OR CC0-1.0) AND Apache-2.0（生成的代码；生成器为 MIT，不随包） | git `73db193f853e` | https://github.com/Dav1dde/glad |
 | fast_float | MIT OR Apache-2.0 OR BSL-1.0（按 MIT） | git `97b54ca9e75f` | https://github.com/fastfloat/fast_float |
 | zlib (libmpv-2.dll) | Zlib | 1.4 | https://zlib.net/ |
-| mingw-w64 runtime（含 winpthreads） | ZPL-2.1 AND MIT AND BSD-3-Clause | Ubuntu 24.04 的 mingw-w64 包（版本见 `BUILD_INFO.txt`） | https://www.mingw-w64.org/ |
+| mingw-w64 runtime（含 winpthreads，UCRT） | ZPL-2.1 AND MIT AND BSD-3-Clause | llvm-mingw 20261104 | https://www.mingw-w64.org/ |
+| LLVM runtime (libc++ / libunwind / compiler-rt) | Apache-2.0 WITH LLVM-exception | LLVM 23.1.5（llvm-mingw 20261104） | https://github.com/llvm/llvm-project |
 
-另有 GCC 运行库（libgcc / libstdc++，GPL-3.0 附 GCC Runtime Library Exception），无署名要求。
-libplacebo 构建时用到的 Jinja / MarkupSafe（BSD-3-Clause）只在构建时运行，不随包分发，源码同样在源码包中。
+以上两项是交叉编译工具链 llvm-mingw（版本与 sha256 见 Tsumugi-libmpv 的 `windows/toolchain.tsv`）自带的运行库。
+libplacebo 构建时用到的 Jinja / MarkupSafe（BSD-3-Clause，构建时运行的代码生成器）与 Vulkan-Headers（Apache-2.0 OR MIT，
+只用于编译不启用的 Vulkan 桩代码）不随包分发，源码同样在源码包中。mpv 带一个本项目的构建补丁（见源码包 `build-scripts/patches/`）。
 
 ## Windows：ANGLE 包与其他原生库
 
