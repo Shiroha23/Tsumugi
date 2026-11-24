@@ -268,7 +268,10 @@ void main() {
         tester
             .widget<CheckedPopupMenuItem<Object?>>(
               find.ancestor(
-                of: find.text('zh（内嵌）'),
+                // FFmpeg 8（Windows）以 NAME 为轨道标题，FFmpeg 6（Android / iOS）只有 LANGUAGE。
+                of: find.text(
+                  Platform.isWindows ? 'HLS Chinese（内嵌）' : 'zh（内嵌）',
+                ),
                 matching: find.byWidgetPredicate(
                   (w) => w is CheckedPopupMenuItem,
                 ),
