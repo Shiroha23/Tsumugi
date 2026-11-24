@@ -11,8 +11,9 @@ Tsumugi 自身的源码见 https://github.com/Shiroha23/Tsumugi （与本 Releas
 `windows/libmpv-win-<版本>-sources.tar` 是它的完整对应源码：`tarballs/`（全部源码发布包）、`build-scripts/`
 （构建脚本 `build.sh` 与带 sha256 的清单 `sources.tsv`，即 https://github.com/Shiroha23/Tsumugi-libmpv 的 `windows/`）与 `BUILD_INFO.txt`
 （工具链版本、FFmpeg 配置、mpv 特性、导入的系统 DLL）。在 Ubuntu 24.04 上运行
-`build-scripts/build.sh <工作目录> <输出目录>` 即可重新构建（需要的软件包见脚本开头；先把 `tarballs/` 复制为
-`<工作目录>/dl` 则不再联网下载）。
+`build-scripts/build.sh <工作目录> <输出目录>` 即可重新构建（需要的软件包见脚本开头）。脚本优先使用包内的 `tarballs/`；
+交叉编译工具链 llvm-mingw 不在包内（它不随产物分发，只有静态链接的运行库随包，其许可证在 `licenses/`），按
+`build-scripts/toolchain.tsv` 下载并校验 sha256，离线构建时请预先放入 `<工作目录>/dl/`。
 
 Windows 的 ANGLE 包（`libEGL.dll` 等，来自 media_kit 插件）与版本未知的宽松许可证组件只在仓库的 `THIRD_PARTY_NOTICES.md` 中给出上游地址。
 如需其他源码，请在 https://github.com/Shiroha23/Tsumugi/issues 提出。

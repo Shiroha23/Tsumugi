@@ -82,6 +82,7 @@ const nativeComponents = <NativeComponent>[
     bundledSources: _wai,
     note:
         '以 --enable-version3 构建，不含 GPL / nonfree 组件。'
+        'Windows 版带本项目的补丁（http 协议不读取环境变量 http_proxy），见源码包。'
         'LGPL-3.0 引用的 GPL-3.0 全文见「Tsumugi」条目。',
   ),
   // ---- libmpv 的依赖（三平台） ----

@@ -40,6 +40,8 @@ void main() {
     expect(lock['sources_url'], '$releases$tag/$tag-sources.tar');
     for (final key in ['zip_sha256', 'sources_sha256']) {
       expect(lock[key], matches(RegExp(r'^[0-9a-f]{64}$')), reason: key);
+      // 占位值（全零）不能合并：发版时源码包校验会失败（Codex 审查第 1 条）。
+      expect(lock[key], isNot('0' * 64), reason: key);
     }
   });
 

@@ -93,9 +93,9 @@ def http_json(url: str) -> dict:
     return json.loads(http_bytes(url, timeout=30))
 
 
-def gh(*args: str) -> str:
+def gh(*args: str, timeout: int = 120) -> str:
     return _retry(lambda: subprocess.run(
-        ["gh", *args], check=True, capture_output=True, text=True
+        ["gh", *args], check=True, capture_output=True, text=True, timeout=timeout
     ).stdout)
 
 
@@ -252,11 +252,15 @@ def check_libmpv_windows(report: Report) -> None:
     except Exception as e:  # noqa: BLE001
         report.errors.append(f"mpv 最新发布：{e}")
     try:
-        tags = gh("api", "--paginate", "repos/FFmpeg/FFmpeg/tags", "--jq", ".[].name").split()
+        cur = _version_tuple(ffmpeg)
+        # 只查同一主版本与下一个主版本的标签（每次一页，不翻全部历史）。
+        tags = []
+        for major in (cur[0], cur[0] + 1):
+            tags += gh("api", f"repos/FFmpeg/FFmpeg/git/matching-refs/tags/n{major}.",
+                       "--jq", '.[].ref | sub("^refs/tags/"; "")').split()
         releases = sorted(
             (_version_tuple(t), t) for t in tags if re.fullmatch(r"n\d+(\.\d+)+", t)
         )
-        cur = _version_tuple(ffmpeg)
         same_line = [t for v, t in releases if v[:2] == cur[:2] and v > cur]
         newer_lines = [t for v, t in releases if v[:2] > cur[:2]]
         report.checked.append(f"FFmpeg 发布标签（Windows 自建 {ffmpeg}）")

@@ -64,7 +64,7 @@ Windows 的版本取自 Tsumugi-libmpv 的 `windows/sources.tsv`（发布包 + s
 
 以上两项是交叉编译工具链 llvm-mingw（版本与 sha256 见 Tsumugi-libmpv 的 `windows/toolchain.tsv`）自带的运行库。
 libplacebo 构建时用到的 Jinja / MarkupSafe（BSD-3-Clause，构建时运行的代码生成器）与 Vulkan-Headers（Apache-2.0 OR MIT，
-只用于编译不启用的 Vulkan 桩代码）不随包分发，源码同样在源码包中。mpv 带一个本项目的构建补丁（见源码包 `build-scripts/patches/`）。
+只用于编译不启用的 Vulkan 桩代码）不随包分发，源码同样在源码包中。mpv 与 FFmpeg 各带一个本项目的补丁（见源码包 `build-scripts/patches/`：mpv 的构建修正；FFmpeg 的 http 协议不读取环境变量 `http_proxy`）。
 
 ## Windows：ANGLE 包与其他原生库
 

@@ -28,8 +28,14 @@ void main() {
       debugPrint('mpv-version=$mpv ffmpeg-version=$ffmpeg');
       if (!Platform.isWindows) return;
 
-      expect(mpv, startsWith('mpv v0.42.'));
-      expect(ffmpeg, startsWith('8.1.'));
+      // 与 windows/libmpv.lock 固定的版本完全一致（Windows 上测试的工作目录是项目根目录）。
+      final lock = {
+        for (final line in File('windows/libmpv.lock').readAsLinesSync())
+          if (line.isNotEmpty && !line.startsWith('#'))
+            line.split('	')[0]: line.split('	')[1],
+      };
+      expect(mpv, 'mpv v${lock['mpv']}');
+      expect(ffmpeg, lock['ffmpeg']);
 
       // media_kit 在创建播放器时设置的选项（media_kit 1.2.6 real.dart）与本项目的 videoPlayerMpvOptions。
       // 选项在新版中被改名 / 删除时，mpv 拒绝设置，读回的就不是这里的值。
@@ -67,12 +73,19 @@ void main() {
       expect(actual, expected);
       final lavf = await native.getProperty('demuxer-lavf-o');
       // media_kit 写的是 protocol_whitelist=[http,tcp]（[] 为 mpv 的引用语法），读回时不带引用。
-      expect(lavf, contains('protocol_whitelist=http,tcp'));
-      expect(lavf, contains('seg_max_retry=5'));
       expect(
-        int.parse(await native.getProperty('demuxer-max-bytes')),
-        greaterThan(0),
+        lavf,
+        'seg_max_retry=5,strict=experimental,allowed_extensions=ALL,'
+        'protocol_whitelist=http,tcp',
       );
+      // 解复用缓存：media_kit 的 bufferSize（默认 32 MiB），向前 / 向后相同（architecture §6.4.3）。
+      for (final name in ['demuxer-max-bytes', 'demuxer-max-back-bytes']) {
+        expect(
+          int.parse(await native.getProperty(name)),
+          32 * 1024 * 1024,
+          reason: name,
+        );
+      }
     } finally {
       await player.dispose();
     }

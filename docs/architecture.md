@@ -533,7 +533,7 @@ detail(id) → 章节/剧集/曲目列表 → content(itemId)
   （包括后台播完自动打开下一集）。桌面沿用 media_kit 的默认行为（只在 `paused` 时暂停）。后台播放留给 M5。
 - **字幕**（M4，方案与安全边界见 §6.4.7）：标题栏（移动端全屏时在顶栏）的字幕菜单列出「关闭」、`content.subtitles` 中的
   外挂字幕（标签为 `lang`，缺省为“字幕 n”）与 HLS 流自带的字幕轨（字幕播放列表，标签为 libmpv 报告的轨道标题 / 语言，带“（内嵌）”；
-  FFmpeg 不把 `EXT-X-MEDIA` 的 `NAME` 作为标题，实际为 `LANGUAGE`，都没有时为“内嵌字幕 n”；与前面的轨道同名时附上序号，如 `zh 2`）。
+  Windows 的 FFmpeg 8.1 把 `EXT-X-MEDIA` 的 `NAME` 作为标题，Android / iOS 的 FFmpeg 6.0 不这样做、实际为 `LANGUAGE`，都没有时为“内嵌字幕 n”；与前面的轨道同名时附上序号，如 `zh 2`）。
   两者都由页面自己的字幕层（`VideoSubtitleOverlay`）显示，media_kit 的 `SubtitleView` 与 libmpv 自己的字幕渲染都不用；
   字幕层放在 `Video` 的控件构造器里，因此桌面的窗口全屏路由中同样显示，位于控件之下。
   - 外挂字幕只在选中时才取（每条每集最多一次，结果缓存到换集；换集、离开页面时取消仍在进行的请求），取回后在 Dart 中解析为纯文本的时间轴。
@@ -1188,6 +1188,8 @@ media_kit (libmpv / FFmpeg) ── http://127.0.0.1:<port>/<token>/<编号>/<文
     扩展名（n7.1.1 / n8.0.1 `wavdec.c`），这两种分片在新版上无论叫什么都会被拒（HLS 中本不常见）。n7.1.1 的允许列表没有 `vtt`，
     HLS 字幕分片在 7.1.x 上会被拒（与本项目的命名无关，升级时应直接用 8.0+）。FFmpeg 6.0 只对 `file` 协议检查扩展名（n6.0 `hls.c`
     中没有 `test_segment()`），按内容命名对它没有影响（探测时扩展名只是加分项，与内容一致）。
+    **平台现状（2026-11-24）**：Windows 随包的自建 libmpv 为 FFmpeg 8.1.3（§6.4.6 第 2 项），上述检查已生效（`integration_test/` 的 HLS 用例通过）；
+    Android / iOS 仍为 FFmpeg 6.0。
 - **Range / HEAD**：媒体的 `Range` 原样转发（根地址的 `bytes=0-` 不转发，以便识别是否为播放列表；播放列表、密钥、加密分片不转发给上游）。
   HEAD 按 GET 取上游后只返回代理自己的响应头（播放列表为改写后的长度）。加密分片的 `Range` 由代理按明文处理（见上）。上游请求固定 `Accept-Encoding: identity`（`StreamRef.headers`
   不能覆盖）；上游仍压缩时只接受整段的 gzip（由 dart:io 解压，不带长度），其他编码 502。只透传 `Content-Length` / `Content-Range` /
@@ -1347,6 +1349,12 @@ M5 音乐复用同一 libmpv，不再增加体积。预编译库内部的组件�
      - **跟进更新**：`upstream-watch.yml` 每周按 `libmpv.lock` 检查 mpv 新发布与 FFmpeg 同一发布线的补丁版本，在 #56 提醒。
        mpv / FFmpeg（8.1 补丁线）或任一依赖发布安全修复时：在构建仓库改 `sources.tsv` 与 `VERSION`（`-r<n>` 递增）、经 PR 合并后发布，
        再在本仓库更新 `libmpv.lock`、`native_sources.tsv`，并按本节第 1 项同步许可证文件。
+     - **补丁**（构建仓库 `windows/patches/`，随源码包分发）：① mpv 只开 `d3d-hwaccel` 时漏编 `d3d11_helpers.c`（一行 meson 改动）；
+       ② **FFmpeg 的 http 协议不再读取进程环境变量 `http_proxy`**。FFmpeg 在没有显式 `http_proxy` 选项时会取环境变量，`no_proxy` 未排除
+       回环地址时，播放器对本地媒体代理的请求（地址中带会话令牌）会被发给该代理（实测：MP4 与 HLS 的首个请求都发给了假代理）。
+       这与 §6.4.3「播放器只连接本地代理」的边界相悖；FFmpeg 6.0 的代码相同，Android / iOS 在第 2 步换库前仍受影响（[#95](https://github.com/Shiroha23/Tsumugi/issues/95)）。
+       `integration_test/libmpv_env_proxy_test.dart`（Windows）在进程内设置 `http_proxy` 指向一个假代理，断言播放完成且假代理收到 0 个连接；
+       对未打补丁的构建该测试失败。
      - **验证（Windows 11，2026-11-24）**：`integration_test/libmpv_version_test.dart` 读出 `mpv-version=mpv v0.42.0`、
        `ffmpeg-version=8.1.3`，并逐项读回 media_kit 与本项目设置的 mpv 选项（均生效）；`integration_test/` 全部用例通过；
        硬解为 `d3d11va-copy`。1080p60（H.264 8 Mbps，20 s，profile 模式，与 better_player 评估相同的方法）：raster p95 0.6 ms
@@ -1360,7 +1368,8 @@ M5 音乐复用同一 libmpv，不再增加体积。预编译库内部的组件�
        目的本来就是不调用 yt-dlp）；其余 media_kit 与本项目设置的选项在 mpv 0.42 中都存在。不带 `egl-angle`：硬解为 `d3d11va-copy`
        （旧构建实测也是 copy 模式）。
    - **Android / iOS（第 2 步，未做）**：另开 PR。Android 以 `media-kit/libmpv-android-video-build` 的脚本为起点（需保留
-     `mpv_lavc_set_java_vm` 补丁），iOS 以 `libmpv-darwin-build` 的 nix 脚本为起点（补丁需对新版 FFmpeg 重新确认），产物同样固定版本 + sha256，
+     `mpv_lavc_set_java_vm` 补丁），iOS 以 `libmpv-darwin-build` 的 nix 脚本为起点（补丁需对新版 FFmpeg 重新确认），同样应用不读取环境代理的 FFmpeg 补丁（#95），
+     产物同样固定版本 + sha256，
      经仓库内的本地插件包或构建脚本替换。在此之前 Android / iOS 仍是 FFmpeg 6.0，风险同上。
    - better_player 的观察保持不变：其 Windows 实现是 libmpv 软件渲染，1080p60 时 raster p95 约 16.5 ms（media_kit 约 0.7 ms），
      等它改用 mpv 0.42 起提供的 D3D11 渲染接口后再评估。
